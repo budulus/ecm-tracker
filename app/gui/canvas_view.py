@@ -34,6 +34,11 @@ class CanvasView(QWidget):
         self._img_h = 0
         self._transform = QTransform()
         self._preview_keep_mask = None  # set by cleanup preview: bool (P,) over active points
+        # Plugin extension points (see app/plugins/api.py). Overlays are callables
+        # fn(painter, canvas) drawn in screen space after the built-in overlays; the optional
+        # interaction handler receives image-space mouse events while installed.
+        self._overlays: list = []
+        self._interaction = None
         self._zoom = 1.0  # user zoom on top of the fit scale
         self._pan = QPointF(0.0, 0.0)  # screen-space pan offset
         self._panning = False
@@ -84,6 +89,55 @@ class CanvasView(QWidget):
         self._preview_keep_mask = mask
         self.update()
 
+    # ---- plugin extension points ---------------------------------------
+    def add_overlay(self, fn) -> None:
+        """Register a custom overlay painter ``fn(painter, canvas)`` (drawn in screen space,
+        after the built-in overlays). Idempotent. Call ``update()`` / ``request_redraw`` to show."""
+        if fn not in self._overlays:
+            self._overlays.append(fn)
+            self.update()
+
+    def remove_overlay(self, fn) -> None:
+        """Unregister a previously added overlay painter (no-op if not registered)."""
+        if fn in self._overlays:
+            self._overlays.remove(fn)
+            self.update()
+
+    def set_interaction(self, handler) -> None:
+        """Install a mouse-interaction handler. While set, left-button press/move/release are
+        delivered to it (in image coordinates) instead of the default ROI click. Replacing an
+        existing handler calls its ``on_cancel`` first."""
+        if self._interaction is handler:
+            return
+        self.clear_interaction()
+        self._interaction = handler
+
+    def clear_interaction(self) -> None:
+        """Remove the active interaction handler, calling its ``on_cancel`` if present."""
+        handler, self._interaction = self._interaction, None
+        if handler is not None:
+            cancel = getattr(handler, "on_cancel", None)
+            if cancel is not None:
+                try:
+                    cancel()
+                except Exception:  # a broken handler must not wedge the canvas
+                    pass
+
+    def _dispatch_interaction(self, name: str, event) -> bool:
+        """Send an image-space mouse event to the active interaction handler. Returns True if a
+        handler consumed it. Exceptions are swallowed so a buggy plugin can't crash the canvas."""
+        handler = self._interaction
+        if handler is None:
+            return False
+        method = getattr(handler, name, None)
+        if method is None:
+            return True  # handler is active but doesn't care about this event
+        try:
+            method(self.screen_to_image(QPointF(event.pos())), event)
+        except Exception:
+            pass
+        return True
+
     def refresh(self) -> None:
         """Rebuild the cached frame image from the current state and repaint."""
         seq = self._state.sequence
@@ -132,7 +186,7 @@ class CanvasView(QWidget):
                 self._panning = True
                 self._last_pan_pos = QPointF(event.pos())
                 self.setCursor(Qt.ClosedHandCursor)
-            else:
+            elif not self._dispatch_interaction("on_press", event):
                 self.imageClicked.emit(self.screen_to_image(QPointF(event.pos())))
         elif event.button() in (Qt.MiddleButton, Qt.RightButton):
             self._panning = True
@@ -146,6 +200,8 @@ class CanvasView(QWidget):
             self._pan += pos - self._last_pan_pos
             self._last_pan_pos = pos
             self.update()
+        elif not self._qimage.isNull():
+            self._dispatch_interaction("on_move", event)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -156,6 +212,8 @@ class CanvasView(QWidget):
         ):
             self._panning = False
             self._apply_nav_cursor()
+        elif event.button() == Qt.LeftButton:
+            self._dispatch_interaction("on_release", event)
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -217,6 +275,19 @@ class CanvasView(QWidget):
         self._draw_roi(painter)
         self._draw_features(painter)
         self._draw_tracked(painter)
+        self._draw_overlays(painter)
+
+    def _draw_overlays(self, painter: QPainter) -> None:
+        """Paint each registered plugin overlay in screen space. A failing overlay is removed so
+        one buggy plugin can't break every subsequent paint."""
+        for fn in list(self._overlays):
+            painter.save()
+            try:
+                fn(painter, self)
+            except Exception:
+                self._overlays.remove(fn)
+            finally:
+                painter.restore()
 
     def _draw_roi(self, painter: QPainter) -> None:
         roi = self._state.roi

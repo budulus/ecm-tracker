@@ -22,11 +22,12 @@ uv run python -m app.main                 # launch the GUI (run from project roo
 
 # Headless regression tests — runs every test_* function as a script:
 $env:QT_QPA_PLATFORM = "offscreen"; uv run python -m tests.test_pipeline
+$env:QT_QPA_PLATFORM = "offscreen"; uv run python -m tests.test_plugins
 ```
 
 - **Always run from the project root.** Imports are absolute and rooted at the `app` package (`from app.core...`, `from app.gui...`); there is no installed package (`tool.uv.package = false`), so the root must be on `sys.path`.
-- Tests live in `tests/test_pipeline.py` and run as a plain script (the `__main__` block calls each `test_*` in turn). They are also pytest-compatible. `tests/synthetic.py` generates a synthetic sequence with known per-frame translation, giving ground-truth motion to validate tracking against.
-- `QT_QPA_PLATFORM=offscreen` is only needed for the one GUI test (`test_gui_pipeline`); the core tests are Qt-free.
+- Tests live in `tests/test_pipeline.py` (core + GUI pipeline) and `tests/test_plugins.py` (plugin SDK/manager/context/canvas hooks) and run as plain scripts (the `__main__` block calls each `test_*` in turn). They are also pytest-compatible. `tests/synthetic.py` generates a synthetic sequence with known per-frame translation, giving ground-truth motion to validate tracking against.
+- `QT_QPA_PLATFORM=offscreen` is needed for the GUI test (`test_gui_pipeline`) and for all of `test_plugins` (it builds a real `MainWindow`); the core pipeline tests are Qt-free. Note: a headless `QApplication` must be kept referenced (an unreferenced one is GC'd, after which constructing any `QWidget` aborts) — see `_app()` in `test_plugins.py`.
 
 ### Dropbox / multi-machine note (important)
 
@@ -82,6 +83,47 @@ The app ships a light visual theme. `theme.apply_theme(app)` is called once in `
 Toolbar icons come from MIT-licensed Lucide SVGs in `gui/icons/` (plain XML, safe to Dropbox-sync, one file per action). `icon_loader.load_icon(name, color, size)` renders an SVG via `QSvgRenderer` and recolors it with a `SourceIn` composite, returning a `QIcon` that carries an auto-faded Disabled variant; results are memoized and rendered at the device pixel ratio for crisp HiDPI. `QtSvg` ships with the PyQt5 wheel, so this adds no dependency.
 
 The toolbar (`MainWindow._build_toolbar`) is grouped into captioned clusters (ROI · DETECT · TRACK · VIEW) built by `_toolbar_group(title, actions, primary=...)`. Each cluster hosts `QToolButton`s whose `setDefaultAction` proxies the **existing** `QAction`s — so all enable/disable/checked logic in `_update_tool_states` is unchanged; the buttons just follow their actions. The `primary` action (Run Tracking) gets `objectName("primaryAction")` for the accent QSS rule.
+
+### Plugin system (`app/plugins/`, root `plugins/`)
+
+The app is extensible via plugins for **post-processing / export / visualization**. There are
+two locations, deliberately separate:
+
+- **`app/plugins/` — the SDK** (GUI layer; may import PyQt5). `api.py` is the canonical, fully
+  docstring'd reference a plugin author reads; `manager.py` discovers/loads plugins and owns the
+  menu + window lifecycle. The dependency direction stays `gui → plugins → models → core`; the
+  Qt-free rule for `app/core/` is untouched.
+- **`plugins/` (repo root) — installed plugins**, one package per folder, imported as
+  `plugins.<name>` (root is already on `sys.path`). Plain Python, safe to Dropbox-sync.
+  `plugins/README.md` is the author's guide; the three bundled examples (`custom_exporter`,
+  `displacement_overlay`, `affine_zones`) are the copy-paste scaffolds and cover all three
+  capabilities (data access, canvas overlay, mouse capture).
+
+**The façade (`PluginContext`)** is the whole point: a plugin only ever learns this one object
+(handed to it as `self.ctx`). It wraps `MainWindow`/`ProjectState`/`CanvasView` and **hides the
+dual global/cut index system** — all `ctx` indices are global, while `ctx.coords()` is
+cut-indexed (`coords[0]` = reference), with `ctx.global_to_cut`/`cut_to_global` to convert.
+Plugins get read access to coords/images/ROI/mask/metrics, plus overlays, mouse capture, settings,
+and exactly one mutation: `ctx.apply_keep_mask()`.
+
+Key integration points in the core (all small + additive):
+- **Canvas hooks** (`canvas_view.py`): `add_overlay/remove_overlay` (painters called in screen
+  space each `paintEvent`, each wrapped in try/except so a buggy overlay self-removes) and
+  `set_interaction/clear_interaction` (a `CanvasInteraction` that receives image-space mouse
+  events, taking priority over the ROI click; middle/right-drag still pans). The canvas does
+  **not** import the SDK — overlays are plain callables and the interaction handler is duck-typed.
+- **Signal hub** (`PluginSignals`, owned by `MainWindow` as `self.signals`): `sequence_changed`,
+  `frame_changed(int)`, `result_changed`, `mask_changed`, `roi_changed`, emitted at the existing
+  state transitions so plugins refresh reactively instead of polling.
+- **`MainWindow.apply_keep_mask(keep)`**: the single undoable mask-mutation path, shared by the
+  Cleanup dialog (`_cleanup_apply`) and `PluginContext.apply_keep_mask` — snapshots onto the undo
+  stack, ANDs in `keep` (points only ever leave the active set), refreshes, emits `mask_changed`.
+
+`scipy` is a dependency because the bundled example plugins use it (`Delaunay`, `savemat`); the
+core pipeline itself does not.
+
+Starting point for a plugin author: read `app/plugins/api.py` + `plugins/README.md`, then copy
+the closest example.
 
 ### Settings persistence (`core/settings.py`)
 

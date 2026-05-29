@@ -30,6 +30,8 @@ from app.gui.canvas_view import CanvasView
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, GridDialog, TrackerDialog
 from app.models.project_state import ProjectState
+from app.plugins.api import PluginSignals
+from app.plugins.manager import PluginManager
 
 
 class LabeledSlider(QWidget):
@@ -95,6 +97,7 @@ class MainWindow(QMainWindow):
         self.state = ProjectState()
         self.canvas = CanvasView(self.state)
         self.canvas.imageClicked.connect(self._on_image_clicked)
+        self.signals = PluginSignals()  # state-change hub broadcast to plugins
         self._status_label = QLabel()
         self.statusBar().addPermanentWidget(self._status_label)
 
@@ -125,6 +128,12 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._build_toolbar()
+
+        # Discover installed plugins and populate the Plugins menu.
+        self.plugin_manager = PluginManager(self)
+        self.plugin_manager.discover()
+        self.plugin_manager.build_menu(self._plugins_menu)
+
         self._update_status()
         self._update_tool_states()
 
@@ -154,6 +163,9 @@ class MainWindow(QMainWindow):
 
         cleanup_menu = self.menuBar().addMenu("&Cleanup")
         cleanup_menu.addAction("Open Cleanup...").triggered.connect(self._open_cleanup)
+
+        # Populated by the PluginManager after construction.
+        self._plugins_menu = self.menuBar().addMenu("&Plugins")
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Tools")
@@ -319,6 +331,7 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
+        self.signals.sequence_changed.emit()
 
     def _configure_sliders(self) -> None:
         total = self.state.total_images
@@ -342,11 +355,13 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
+        self.signals.frame_changed.emit(self.state.current_index)
 
     def _on_reference_changed(self, value: int) -> None:
         self.state.set_reference(value)
         self._sync_range_constraints()
-        if self.state.roi is not None:
+        roi_cleared = self.state.roi is not None
+        if roi_cleared:
             self.state.roi = None
             self.state.features = None
             self.define_roi_action.setChecked(False)
@@ -354,6 +369,8 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
+        if roi_cleared:
+            self.signals.roi_changed.emit()
 
     def _on_last_changed(self, value: int) -> None:
         self.state.set_last(value)
@@ -392,6 +409,7 @@ class MainWindow(QMainWindow):
             self.define_roi_action.setChecked(False)
         self.canvas.refresh()
         self._update_tool_states()
+        self.signals.roi_changed.emit()
 
     def _on_image_clicked(self, image_pt) -> None:
         if not (self.define_roi_action.isChecked() and self.state.on_reference_frame):
@@ -403,6 +421,7 @@ class MainWindow(QMainWindow):
         if roi.is_complete:
             self.define_roi_action.setChecked(False)
             self.statusBar().showMessage("ROI complete.", 4000)
+            self.signals.roi_changed.emit()
         self.canvas.refresh()
         self._update_tool_states()
 
@@ -489,6 +508,7 @@ class MainWindow(QMainWindow):
         )
         self.canvas.refresh()
         self._update_tool_states()
+        self.signals.result_changed.emit()
 
     def _on_clear_tracking_clicked(self) -> None:
         self._confirm_discard_tracking()
@@ -518,6 +538,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_preview_mask(None)
         self.canvas.refresh()
         self._update_tool_states()
+        self.signals.result_changed.emit()
 
     # ---- cleanup --------------------------------------------------------
     def _open_cleanup(self) -> None:
@@ -550,12 +571,24 @@ class MainWindow(QMainWindow):
         kept = int((active & keep).sum())
         self._cleanup_dialog.set_counts(kept, int(active.sum()))
 
+    def apply_keep_mask(self, keep) -> None:
+        """Filter the active point set by a full-length ``(P,)`` bool keep-mask, undoably.
+
+        Shared by the Cleanup dialog and the plugin API (``PluginContext.apply_keep_mask``):
+        snapshots the current mask onto the undo stack, ANDs in ``keep`` (so points only ever
+        leave the active set), refreshes, and emits ``mask_changed``. No-op without a result."""
+        if self.state.active_mask is None:
+            return
+        self.state.undo_stack.append(self.state.active_mask.copy())
+        self.state.active_mask = self.state.active_mask & keep
+        self.canvas.refresh()
+        self._update_tool_states()
+        self.signals.mask_changed.emit()
+
     def _cleanup_apply(self) -> None:
         if self._preview_keep is None:
             return
-        self.state.undo_stack.append(self.state.active_mask.copy())
-        self.state.active_mask = self.state.active_mask & self._preview_keep
-        self.canvas.refresh()
+        self.apply_keep_mask(self._preview_keep)
         self._cleanup_preview()
 
     def _cleanup_undo(self) -> None:
@@ -563,6 +596,8 @@ class MainWindow(QMainWindow):
             return
         self.state.active_mask = self.state.undo_stack.pop()
         self.canvas.refresh()
+        self._update_tool_states()
+        self.signals.mask_changed.emit()
         self._cleanup_preview()
 
     def _cleanup_closed(self, _result=None) -> None:

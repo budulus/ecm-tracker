@@ -1,0 +1,587 @@
+import os
+
+import numpy as np
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QAction,
+    QApplication,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressDialog,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.core import settings
+from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
+from app.core.export import export
+from app.core.feature_detection import regular_grid, shi_tomasi
+from app.core.image_sequence import ImageSequence, discover
+from app.core.roi import ROI
+from app.core.tracking import track
+from app.gui.canvas_view import CanvasView
+from app.gui.cleanup_dialog import CleanupDialog
+from app.gui.dialogs import CornerDetectionDialog, GridDialog, TrackerDialog
+from app.models.project_state import ProjectState
+
+
+class LabeledSlider(QWidget):
+    """A label + horizontal slider + spinbox kept in sync.
+
+    `valueChanged` fires only on user interaction; `setValue`/`setRange` are programmatic and
+    do not emit, which avoids reentrant update loops between interdependent sliders.
+    """
+
+    valueChanged = pyqtSignal(int)
+
+    def __init__(self, label: str, parent=None):
+        super().__init__(parent)
+        self._label = QLabel(label)
+        self._label.setMinimumWidth(90)
+        self.slider = QSlider(Qt.Horizontal)
+        self.spin = QSpinBox()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._label)
+        layout.addWidget(self.slider, stretch=1)
+        layout.addWidget(self.spin)
+
+        self.slider.valueChanged.connect(self._on_slider)
+        self.spin.valueChanged.connect(self._on_spin)
+        self.setEnabled(False)
+
+    def _on_slider(self, value: int) -> None:
+        self.spin.blockSignals(True)
+        self.spin.setValue(value)
+        self.spin.blockSignals(False)
+        self.valueChanged.emit(value)
+
+    def _on_spin(self, value: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(value)
+        self.slider.blockSignals(False)
+        self.valueChanged.emit(value)
+
+    def setRange(self, low: int, high: int) -> None:
+        for widget in (self.slider, self.spin):
+            widget.blockSignals(True)
+            widget.setRange(low, high)
+            widget.blockSignals(False)
+
+    def setValue(self, value: int) -> None:
+        for widget in (self.slider, self.spin):
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+
+    def value(self) -> int:
+        return self.slider.value()
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Feature Tracker")
+        self.resize(1100, 800)
+
+        self.state = ProjectState()
+        self.canvas = CanvasView(self.state)
+        self.canvas.imageClicked.connect(self._on_image_clicked)
+        self._status_label = QLabel()
+        self.statusBar().addPermanentWidget(self._status_label)
+
+        self._cleanup_dialog = None
+        self._cleanup_metrics = None
+        self._preview_keep = None
+
+        self.current_slider = LabeledSlider("Current")
+        self.reference_slider = LabeledSlider("Reference")
+        self.last_slider = LabeledSlider("Last")
+        self.current_slider.valueChanged.connect(self._on_current_changed)
+        self.reference_slider.valueChanged.connect(self._on_reference_changed)
+        self.last_slider.valueChanged.connect(self._on_last_changed)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(8, 4, 8, 8)
+        controls_layout.addWidget(self.current_slider)
+        controls_layout.addWidget(self.reference_slider)
+        controls_layout.addWidget(self.last_slider)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.canvas, stretch=1)
+        layout.addWidget(controls)
+        self.setCentralWidget(container)
+
+        self._build_menus()
+        self._build_toolbar()
+        self._update_status()
+        self._update_tool_states()
+
+    # ---- menus ----------------------------------------------------------
+    def _build_menus(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+        open_dir = file_menu.addAction("Open &Directory...")
+        open_dir.setShortcut("Ctrl+O")
+        open_dir.triggered.connect(self._open_directory)
+        open_files = file_menu.addAction("Open &Files...")
+        open_files.triggered.connect(self._open_files)
+        file_menu.addSeparator()
+        self.export_action = file_menu.addAction("&Export...")
+        self.export_action.setShortcut("Ctrl+E")
+        self.export_action.triggered.connect(self._export)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("&Quit")
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+
+        params_menu = self.menuBar().addMenu("&Parameters")
+        params_menu.addAction("Corner Detection...").triggered.connect(
+            self._open_corner_dialog
+        )
+        params_menu.addAction("Grid...").triggered.connect(self._open_grid_dialog)
+        params_menu.addAction("Tracker...").triggered.connect(self._open_tracker_dialog)
+
+        cleanup_menu = self.menuBar().addMenu("&Cleanup")
+        cleanup_menu.addAction("Open Cleanup...").triggered.connect(self._open_cleanup)
+
+    def _build_toolbar(self) -> None:
+        toolbar = self.addToolBar("Tools")
+        toolbar.setMovable(False)
+
+        self.define_roi_action = QAction("Define ROI", self)
+        self.define_roi_action.setCheckable(True)
+        self.define_roi_action.setToolTip(
+            "Click 4 corners on the reference frame to define the ROI"
+        )
+        self.define_roi_action.toggled.connect(self._on_define_roi_toggled)
+        toolbar.addAction(self.define_roi_action)
+
+        self.clear_roi_action = QAction("Clear ROI", self)
+        self.clear_roi_action.triggered.connect(self._clear_roi)
+        toolbar.addAction(self.clear_roi_action)
+
+        toolbar.addSeparator()
+        self.detect_corners_action = QAction("Detect Corners", self)
+        self.detect_corners_action.setToolTip("Shi-Tomasi corners inside the ROI")
+        self.detect_corners_action.triggered.connect(self._detect_shi_tomasi)
+        toolbar.addAction(self.detect_corners_action)
+
+        self.detect_grid_action = QAction("Detect Grid", self)
+        self.detect_grid_action.setToolTip("Regular grid of points inside the ROI")
+        self.detect_grid_action.triggered.connect(self._detect_grid)
+        toolbar.addAction(self.detect_grid_action)
+
+        toolbar.addSeparator()
+        self.run_tracking_action = QAction("Run Tracking", self)
+        self.run_tracking_action.setToolTip("Track features forward and backward")
+        self.run_tracking_action.triggered.connect(self._run_tracking)
+        toolbar.addAction(self.run_tracking_action)
+
+        self.clear_tracking_action = QAction("Clear Tracking", self)
+        self.clear_tracking_action.triggered.connect(self._on_clear_tracking_clicked)
+        toolbar.addAction(self.clear_tracking_action)
+
+        toolbar.addSeparator()
+        self.cleanup_action = QAction("Cleanup", self)
+        self.cleanup_action.triggered.connect(self._open_cleanup)
+        toolbar.addAction(self.cleanup_action)
+
+        self.export_toolbar_action = QAction("Export", self)
+        self.export_toolbar_action.triggered.connect(self._export)
+        toolbar.addAction(self.export_toolbar_action)
+
+        toolbar.addSeparator()
+        self.zoom_in_action = QAction("Zoom In", self)
+        self.zoom_in_action.setShortcut("Ctrl++")
+        self.zoom_in_action.setToolTip("Zoom in (Cmd+=)")
+        self.zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        toolbar.addAction(self.zoom_in_action)
+
+        self.zoom_out_action = QAction("Zoom Out", self)
+        self.zoom_out_action.setShortcut("Ctrl+-")
+        self.zoom_out_action.setToolTip("Zoom out (Cmd+-)")
+        self.zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        toolbar.addAction(self.zoom_out_action)
+
+        self.reset_view_action = QAction("Reset View", self)
+        self.reset_view_action.setShortcut("Ctrl+0")
+        self.reset_view_action.setToolTip("Fit the image to the window (Cmd+0)")
+        self.reset_view_action.triggered.connect(self.canvas.reset_view)
+        toolbar.addAction(self.reset_view_action)
+
+        self.pan_tool_action = QAction("Pan", self)
+        self.pan_tool_action.setCheckable(True)
+        self.pan_tool_action.setToolTip(
+            "Hand tool: drag to pan. Or hold Spacebar and drag at any time."
+        )
+        self.pan_tool_action.toggled.connect(self._on_pan_tool_toggled)
+        toolbar.addAction(self.pan_tool_action)
+
+    # ---- sequence loading ----------------------------------------------
+    def _open_directory(self) -> None:
+        start = self.state.source_dir or ""
+        directory = QFileDialog.getExistingDirectory(self, "Open Image Directory", start)
+        if directory:
+            self._load_paths(discover(directory), directory)
+
+    def _open_files(self) -> None:
+        start = self.state.source_dir or ""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Open Images",
+            start,
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+        )
+        if files:
+            self._load_paths(discover(files), os.path.dirname(files[0]))
+
+    def _load_paths(self, paths, source_dir) -> None:
+        if not paths:
+            QMessageBox.warning(self, "No images", "No supported images were found.")
+            return
+        try:
+            sequence = ImageSequence(paths)
+            self.state.load_sequence(sequence, source_dir)
+            sequence.load_bgr(0)  # surface decode errors early
+        except (IOError, ValueError) as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
+        self._configure_sliders()
+        self.canvas.reset_view()
+        self.canvas.refresh()
+        self._update_status()
+        self._update_tool_states()
+
+    def _configure_sliders(self) -> None:
+        total = self.state.total_images
+        for slider in (self.current_slider, self.reference_slider, self.last_slider):
+            slider.setEnabled(True)
+            slider.setRange(0, total - 1)
+        self.current_slider.setValue(self.state.current_index)
+        self.reference_slider.setValue(self.state.reference_index)
+        self.last_slider.setValue(self.state.last_index)
+        self._sync_range_constraints()
+
+    def _sync_range_constraints(self) -> None:
+        """Enforce 0 <= reference <= last < total at the widget level."""
+        total = self.state.total_images
+        self.reference_slider.setRange(0, self.state.last_index)
+        self.last_slider.setRange(self.state.reference_index, total - 1)
+
+    # ---- slider handlers ------------------------------------------------
+    def _on_current_changed(self, value: int) -> None:
+        self.state.set_current(value)
+        self.canvas.refresh()
+        self._update_status()
+        self._update_tool_states()
+
+    def _on_reference_changed(self, value: int) -> None:
+        self.state.set_reference(value)
+        self._sync_range_constraints()
+        if self.state.roi is not None:
+            self.state.roi = None
+            self.state.features = None
+            self.define_roi_action.setChecked(False)
+            self.statusBar().showMessage("ROI cleared (reference frame changed).", 4000)
+        self.canvas.refresh()
+        self._update_status()
+        self._update_tool_states()
+
+    def _on_last_changed(self, value: int) -> None:
+        self.state.set_last(value)
+        self._sync_range_constraints()
+        self._update_status()
+        self._update_tool_states()
+
+    # ---- ROI ------------------------------------------------------------
+    def _on_pan_tool_toggled(self, checked: bool) -> None:
+        self.canvas.set_pan_tool(checked)
+        if checked and self.define_roi_action.isChecked():
+            self.define_roi_action.setChecked(False)
+
+    def _on_define_roi_toggled(self, checked: bool) -> None:
+        if checked:
+            if self.pan_tool_action.isChecked():
+                self.pan_tool_action.setChecked(False)
+            if not self._confirm_discard_tracking():
+                self.define_roi_action.blockSignals(True)
+                self.define_roi_action.setChecked(False)
+                self.define_roi_action.blockSignals(False)
+                return
+            self.state.roi = ROI()
+            self.statusBar().showMessage(
+                "Click 4 ROI corners on the reference frame.", 4000
+            )
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    def _clear_roi(self) -> None:
+        if not self._confirm_discard_tracking():
+            return
+        self.state.roi = None
+        self.state.features = None
+        if self.define_roi_action.isChecked():
+            self.define_roi_action.setChecked(False)
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    def _on_image_clicked(self, image_pt) -> None:
+        if not (self.define_roi_action.isChecked() and self.state.on_reference_frame):
+            return
+        roi = self.state.roi
+        if roi is None:
+            return
+        roi.add_corner(image_pt.x(), image_pt.y())
+        if roi.is_complete:
+            self.define_roi_action.setChecked(False)
+            self.statusBar().showMessage("ROI complete.", 4000)
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    # ---- feature detection ---------------------------------------------
+    def _open_corner_dialog(self) -> None:
+        dialog = CornerDetectionDialog(self.state.shi_tomasi_params, self)
+        if dialog.exec_():
+            self.state.shi_tomasi_params = dialog.values()
+
+    def _open_grid_dialog(self) -> None:
+        dialog = GridDialog(self.state.grid_params, self)
+        if dialog.exec_():
+            self.state.grid_params = dialog.values()
+
+    def _open_tracker_dialog(self) -> None:
+        dialog = TrackerDialog(self.state.lk_params, self)
+        if dialog.exec_():
+            self.state.lk_params = dialog.values()
+
+    def _detect_shi_tomasi(self) -> None:
+        if not self._roi_ready() or not self._confirm_discard_tracking():
+            return
+        gray = self.state.sequence.load_gray(self.state.reference_index)
+        h, w = gray.shape[:2]
+        mask = self.state.roi.mask(h, w)
+        self.state.features = shi_tomasi(gray, mask, self.state.shi_tomasi_params)
+        self._after_detection()
+
+    def _detect_grid(self) -> None:
+        if not self._roi_ready() or not self._confirm_discard_tracking():
+            return
+        self.state.features = regular_grid(self.state.roi, **self.state.grid_params)
+        self._after_detection()
+
+    def _after_detection(self) -> None:
+        n = 0 if self.state.features is None else len(self.state.features)
+        self.statusBar().showMessage(f"Detected {n} feature points.", 4000)
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    def _roi_ready(self) -> bool:
+        return (
+            self.state.has_sequence
+            and self.state.roi is not None
+            and self.state.roi.is_complete
+        )
+
+    # ---- tracking -------------------------------------------------------
+    def _run_tracking(self) -> None:
+        feats = self.state.features
+        if feats is None or len(feats) == 0:
+            return
+        n = self.state.n_cut
+        total = max(1, 2 * (n - 1))
+        dialog = QProgressDialog("Tracking...", "Cancel", 0, total, self)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+
+        def progress(done, _total):
+            dialog.setValue(done)
+            QApplication.processEvents()
+            return dialog.wasCanceled()
+
+        try:
+            result = track(
+                self.state.sequence,
+                self.state.reference_index,
+                self.state.last_index,
+                feats,
+                self.state.lk_params,
+                progress,
+            )
+        finally:
+            dialog.close()
+
+        if result is None:
+            self.statusBar().showMessage("Tracking cancelled.", 4000)
+            return
+        self.state.result = result
+        self.state.active_mask = np.ones(result.n_points, dtype=bool)
+        self.statusBar().showMessage(
+            f"Tracked {result.n_points} points over {result.n_frames} frames.", 4000
+        )
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    def _on_clear_tracking_clicked(self) -> None:
+        self._confirm_discard_tracking()
+
+    def _confirm_discard_tracking(self) -> bool:
+        """True if there is no result, or the user agrees to discard it (which clears it)."""
+        if self.state.result is None:
+            return True
+        resp = QMessageBox.question(
+            self,
+            "Discard tracking?",
+            "This will discard the existing tracking result. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if resp == QMessageBox.Yes:
+            self._clear_tracking()
+            return True
+        return False
+
+    def _clear_tracking(self) -> None:
+        if self._cleanup_dialog is not None:
+            self._cleanup_dialog.close()
+        self.state.result = None
+        self.state.active_mask = None
+        self.state.undo_stack = []
+        self.canvas.set_preview_mask(None)
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    # ---- cleanup --------------------------------------------------------
+    def _open_cleanup(self) -> None:
+        if self.state.result is None:
+            return
+        if self._cleanup_dialog is not None:
+            self._cleanup_dialog.raise_()
+            self._cleanup_dialog.activateWindow()
+            return
+        h, w = self.state.image_size()
+        self._cleanup_metrics = compute_metrics(self.state.result, self.state.roi, (h, w))
+        saved = settings.get_section("cleanup")
+        defaults = thresholds_from_dict(saved) if saved else None
+        dialog = CleanupDialog(self._cleanup_metrics, defaults, self)
+        dialog.thresholdsChanged.connect(self._cleanup_preview)
+        dialog.applyRequested.connect(self._cleanup_apply)
+        dialog.undoRequested.connect(self._cleanup_undo)
+        dialog.finished.connect(self._cleanup_closed)
+        self._cleanup_dialog = dialog
+        self._cleanup_preview()
+        dialog.show()
+
+    def _cleanup_preview(self) -> None:
+        if self._cleanup_dialog is None:
+            return
+        keep = build_mask(self._cleanup_metrics, self._cleanup_dialog.thresholds())
+        self._preview_keep = keep
+        self.canvas.set_preview_mask(keep)
+        active = self.state.active_mask
+        kept = int((active & keep).sum())
+        self._cleanup_dialog.set_counts(kept, int(active.sum()))
+
+    def _cleanup_apply(self) -> None:
+        if self._preview_keep is None:
+            return
+        self.state.undo_stack.append(self.state.active_mask.copy())
+        self.state.active_mask = self.state.active_mask & self._preview_keep
+        self.canvas.refresh()
+        self._cleanup_preview()
+
+    def _cleanup_undo(self) -> None:
+        if not self.state.undo_stack:
+            return
+        self.state.active_mask = self.state.undo_stack.pop()
+        self.canvas.refresh()
+        self._cleanup_preview()
+
+    def _cleanup_closed(self, _result=None) -> None:
+        self._cleanup_dialog = None
+        self._cleanup_metrics = None
+        self._preview_keep = None
+        self.canvas.set_preview_mask(None)
+        self.canvas.refresh()
+        self._update_tool_states()
+
+    # ---- export ---------------------------------------------------------
+    def _export(self) -> None:
+        result = self.state.result
+        if result is None or self.state.active_mask is None:
+            return
+        if not self.state.active_mask.any():
+            QMessageBox.warning(self, "Nothing to export", "No points remain to export.")
+            return
+        default_path = os.path.join(self.state.source_dir or "", "coords.npy")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export coordinates", default_path, "NumPy array (*.npy)"
+        )
+        if not path:
+            return
+        coords_path, seq_path, shape = export(
+            result.coords_fw,
+            self.state.active_mask,
+            result.reference_index,
+            result.last_index,
+            os.path.dirname(path),
+            os.path.basename(path),
+        )
+        self.statusBar().showMessage(
+            f"Exported {shape[1]} points x {shape[0]} frames to "
+            f"{os.path.basename(coords_path)} + sequence.txt",
+            6000,
+        )
+
+    # ---- tool enablement ------------------------------------------------
+    def _update_tool_states(self) -> None:
+        has = self.state.has_sequence
+        on_ref = self.state.on_reference_frame
+        roi_ready = self._roi_ready()
+        has_features = self.state.features is not None and len(self.state.features) > 0
+        has_result = self.state.result is not None
+
+        self.define_roi_action.setEnabled(has and on_ref)
+        self.clear_roi_action.setEnabled(has and self.state.roi is not None)
+        self.detect_corners_action.setEnabled(roi_ready)
+        self.detect_grid_action.setEnabled(roi_ready)
+        self.run_tracking_action.setEnabled(has_features)
+        self.clear_tracking_action.setEnabled(has_result)
+        self.cleanup_action.setEnabled(has_result)
+        can_export = has_result and bool(self.state.active_mask.any())
+        self.export_action.setEnabled(can_export)
+        self.export_toolbar_action.setEnabled(can_export)
+
+        # The result is tied to a fixed reference..last range; lock those sliders until the
+        # user explicitly discards the tracking (current stays free for browsing frames).
+        self.current_slider.setEnabled(has)
+        self.reference_slider.setEnabled(has and not has_result)
+        self.last_slider.setEnabled(has and not has_result)
+
+        if self.define_roi_action.isChecked() and not on_ref:
+            self.define_roi_action.setChecked(False)
+
+    # ---- status ---------------------------------------------------------
+    def _update_status(self) -> None:
+        if not self.state.has_sequence:
+            self._status_label.setText("No sequence loaded — File → Open Directory.")
+            return
+        s = self.state
+        if s.current_in_range:
+            cut = f"cut {s.global_to_cut(s.current_index)}"
+        else:
+            cut = "out of range"
+        self._status_label.setText(
+            f"Frame {s.current_index + 1}/{s.total_images} ({cut})  |  "
+            f"reference {s.reference_index}  last {s.last_index}  "
+            f"({s.n_cut} frames in range)"
+        )

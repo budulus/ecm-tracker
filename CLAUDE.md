@@ -50,7 +50,7 @@ Three layers under `app/`, with a strict dependency direction `gui → models �
 
 - **`app/core/`** — pure logic: `image_sequence` (path discovery + on-demand decode with an LRU cache, normalizes everything to BGR uint8), `roi` (4-corner polygon, masks, point-in-polygon), `feature_detection` (Shi-Tomasi corners, regular grid), `tracking` (the LK pipeline), `cleanup` (quality metrics + filtering), `export`, `settings` (JSON persistence).
 - **`app/models/`** — `tracker_result.TrackerResult` (immutable tracking output) and `project_state.ProjectState` (mutable per-session state: loaded sequence, indices, ROI, params, result, active mask, undo stack).
-- **`app/gui/`** — PyQt5 widgets: `main_window` (orchestrates everything, owns `ProjectState`), `canvas_view` (frame display + overlays), `dialogs` (parameter editors), `cleanup_dialog` (filter UI).
+- **`app/gui/`** — PyQt5 widgets: `main_window` (orchestrates everything, owns `ProjectState`), `canvas_view` (frame display + overlays), `dialogs` (parameter editors), `cleanup_dialog` (filter UI). Presentation-only helpers: `theme` (app-wide light stylesheet), `icon_loader` (tinted SVG → `QIcon`), and the bundled `icons/` SVGs.
 
 ### The dual index system (most important concept)
 
@@ -74,6 +74,14 @@ Every per-frame array and frame reference is in one of two coordinate systems �
 ### Canvas coordinate model (`gui/canvas_view.py`)
 
 All overlay geometry is stored in **image coordinates**. A single image→screen `QTransform` (fit-to-widget scale, then user zoom/pan) is rebuilt on every `paintEvent` so it tracks resizing. The frame image is drawn under that transform; overlays (ROI, feature points, tracks) are drawn in **screen space** after resetting the transform, so marker sizes and line widths stay constant regardless of zoom.
+
+### Theming & toolbar icons (`gui/theme.py`, `gui/icon_loader.py`, `gui/icons/`)
+
+The app ships a light visual theme. `theme.apply_theme(app)` is called once in `app/main.py` right after the `QApplication` is created — it sets the `"Fusion"` base style and a single `LIGHT_QSS` stylesheet on the application, so styling reaches the main window **and** every dialog. Palette/accent (`#2563eb`) live at the top of `LIGHT_QSS`; the icon glyph colors in `icon_loader` (`NORMAL`/`ACCENT`/`DISABLED`) are kept visually in sync with it. **Sliders are intentionally left unstyled** (native/Fusion look) — don't re-add `QSlider` QSS.
+
+Toolbar icons come from MIT-licensed Lucide SVGs in `gui/icons/` (plain XML, safe to Dropbox-sync, one file per action). `icon_loader.load_icon(name, color, size)` renders an SVG via `QSvgRenderer` and recolors it with a `SourceIn` composite, returning a `QIcon` that carries an auto-faded Disabled variant; results are memoized and rendered at the device pixel ratio for crisp HiDPI. `QtSvg` ships with the PyQt5 wheel, so this adds no dependency.
+
+The toolbar (`MainWindow._build_toolbar`) is grouped into captioned clusters (ROI · DETECT · TRACK · VIEW) built by `_toolbar_group(title, actions, primary=...)`. Each cluster hosts `QToolButton`s whose `setDefaultAction` proxies the **existing** `QAction`s — so all enable/disable/checked logic in `_update_tool_states` is unchanged; the buttons just follow their actions. The `primary` action (Run Tracking) gets `objectName("primaryAction")` for the accent QSS rule.
 
 ### Settings persistence (`core/settings.py`)
 

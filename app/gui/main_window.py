@@ -13,11 +13,13 @@ from PyQt5.QtWidgets import (
     QProgressDialog,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core import settings
+from app.gui.icon_loader import ACCENT, load_icon
 from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
 from app.core.export import export
 from app.core.feature_detection import regular_grid, shi_tomasi
@@ -157,74 +159,131 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar("Tools")
         toolbar.setMovable(False)
 
-        self.define_roi_action = QAction("Define ROI", self)
+        # Each action keeps its original slot / enable-disable wiring; we only attach
+        # an icon and host it inside a QToolButton, so _update_tool_states is unchanged.
+        # Button labels are kept short because the group caption carries the context.
+        self.define_roi_action = QAction(load_icon("frame"), "Define", self)
         self.define_roi_action.setCheckable(True)
         self.define_roi_action.setToolTip(
             "Click 4 corners on the reference frame to define the ROI"
         )
         self.define_roi_action.toggled.connect(self._on_define_roi_toggled)
-        toolbar.addAction(self.define_roi_action)
 
-        self.clear_roi_action = QAction("Clear ROI", self)
+        self.clear_roi_action = QAction(load_icon("square-x"), "Clear", self)
+        self.clear_roi_action.setToolTip("Remove the current ROI")
         self.clear_roi_action.triggered.connect(self._clear_roi)
-        toolbar.addAction(self.clear_roi_action)
 
-        toolbar.addSeparator()
-        self.detect_corners_action = QAction("Detect Corners", self)
+        self.detect_corners_action = QAction(load_icon("scan"), "Corners", self)
         self.detect_corners_action.setToolTip("Shi-Tomasi corners inside the ROI")
         self.detect_corners_action.triggered.connect(self._detect_shi_tomasi)
-        toolbar.addAction(self.detect_corners_action)
 
-        self.detect_grid_action = QAction("Detect Grid", self)
+        self.detect_grid_action = QAction(load_icon("grid"), "Grid", self)
         self.detect_grid_action.setToolTip("Regular grid of points inside the ROI")
         self.detect_grid_action.triggered.connect(self._detect_grid)
-        toolbar.addAction(self.detect_grid_action)
 
-        toolbar.addSeparator()
-        self.run_tracking_action = QAction("Run Tracking", self)
+        self.run_tracking_action = QAction(load_icon("play", ACCENT), "Run", self)
         self.run_tracking_action.setToolTip("Track features forward and backward")
         self.run_tracking_action.triggered.connect(self._run_tracking)
-        toolbar.addAction(self.run_tracking_action)
 
-        self.clear_tracking_action = QAction("Clear Tracking", self)
+        self.clear_tracking_action = QAction(load_icon("trash"), "Clear", self)
+        self.clear_tracking_action.setToolTip("Discard the tracking result")
         self.clear_tracking_action.triggered.connect(self._on_clear_tracking_clicked)
-        toolbar.addAction(self.clear_tracking_action)
 
-        toolbar.addSeparator()
-        self.cleanup_action = QAction("Cleanup", self)
+        self.cleanup_action = QAction(load_icon("sliders"), "Cleanup", self)
+        self.cleanup_action.setToolTip("Filter out low-quality tracks")
         self.cleanup_action.triggered.connect(self._open_cleanup)
-        toolbar.addAction(self.cleanup_action)
 
-        self.export_toolbar_action = QAction("Export", self)
+        self.export_toolbar_action = QAction(load_icon("download"), "Export", self)
+        self.export_toolbar_action.setToolTip("Export surviving coordinates to .npy")
         self.export_toolbar_action.triggered.connect(self._export)
-        toolbar.addAction(self.export_toolbar_action)
 
-        toolbar.addSeparator()
-        self.zoom_in_action = QAction("Zoom In", self)
+        self.zoom_in_action = QAction(load_icon("zoom-in"), "Zoom In", self)
         self.zoom_in_action.setShortcut("Ctrl++")
         self.zoom_in_action.setToolTip("Zoom in (Cmd+=)")
         self.zoom_in_action.triggered.connect(self.canvas.zoom_in)
-        toolbar.addAction(self.zoom_in_action)
 
-        self.zoom_out_action = QAction("Zoom Out", self)
+        self.zoom_out_action = QAction(load_icon("zoom-out"), "Zoom Out", self)
         self.zoom_out_action.setShortcut("Ctrl+-")
         self.zoom_out_action.setToolTip("Zoom out (Cmd+-)")
         self.zoom_out_action.triggered.connect(self.canvas.zoom_out)
-        toolbar.addAction(self.zoom_out_action)
 
-        self.reset_view_action = QAction("Reset View", self)
+        self.reset_view_action = QAction(load_icon("maximize"), "Fit", self)
         self.reset_view_action.setShortcut("Ctrl+0")
         self.reset_view_action.setToolTip("Fit the image to the window (Cmd+0)")
         self.reset_view_action.triggered.connect(self.canvas.reset_view)
-        toolbar.addAction(self.reset_view_action)
 
-        self.pan_tool_action = QAction("Pan", self)
+        self.pan_tool_action = QAction(load_icon("hand"), "Pan", self)
         self.pan_tool_action.setCheckable(True)
         self.pan_tool_action.setToolTip(
             "Hand tool: drag to pan. Or hold Spacebar and drag at any time."
         )
         self.pan_tool_action.toggled.connect(self._on_pan_tool_toggled)
-        toolbar.addAction(self.pan_tool_action)
+
+        toolbar.addWidget(
+            self._toolbar_group("ROI", [self.define_roi_action, self.clear_roi_action])
+        )
+        toolbar.addSeparator()
+        toolbar.addWidget(
+            self._toolbar_group(
+                "DETECT", [self.detect_corners_action, self.detect_grid_action]
+            )
+        )
+        toolbar.addSeparator()
+        toolbar.addWidget(
+            self._toolbar_group(
+                "TRACK",
+                [
+                    self.run_tracking_action,
+                    self.clear_tracking_action,
+                    self.cleanup_action,
+                    self.export_toolbar_action,
+                ],
+                primary=self.run_tracking_action,
+            )
+        )
+        toolbar.addSeparator()
+        toolbar.addWidget(
+            self._toolbar_group(
+                "VIEW",
+                [
+                    self.zoom_in_action,
+                    self.zoom_out_action,
+                    self.reset_view_action,
+                    self.pan_tool_action,
+                ],
+            )
+        )
+
+    def _toolbar_group(self, title: str, actions, primary=None) -> QWidget:
+        """A captioned cluster of QToolButtons hosting the given actions.
+
+        Each button proxies its QAction via setDefaultAction, so the action's
+        existing enabled/checked state drives the button automatically. ``primary``
+        marks one action's button as the accent button (objectName for QSS).
+        """
+        box = QWidget()
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(4, 2, 4, 2)
+        outer.setSpacing(0)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        for action in actions:
+            button = QToolButton()
+            button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setAutoRaise(True)
+            if action is primary:
+                button.setObjectName("primaryAction")
+            row.addWidget(button)
+        outer.addLayout(row)
+
+        caption = QLabel(title)
+        caption.setObjectName("toolGroupCaption")
+        caption.setAlignment(Qt.AlignHCenter)
+        outer.addWidget(caption)
+        return box
 
     # ---- sequence loading ----------------------------------------------
     def _open_directory(self) -> None:

@@ -12,8 +12,8 @@ A desktop GUI tool for tracking image features through a sequence of frames. Wor
 
 The project uses **uv** with a dedicated, self-contained `.venv` and a uv-managed Python
 interpreter (pinned to 3.12 in `.python-version` — `numpy<2` only ships Windows wheels up to
-3.12), so it is independent of any system Python. `pyproject.toml` is the source of truth for
-deps; `requirements.txt` is kept for non-uv users (keep the two in sync if deps change).
+3.12), so it is independent of any system Python. `pyproject.toml` (with `uv.lock`) is the
+single source of truth for deps.
 
 ```powershell
 uv sync                                   # create .venv (managed Python 3.12) + install deps
@@ -42,7 +42,7 @@ attr  -s com.dropbox.ignored -V 1 .venv   # Linux
 Set-Content -Path '.venv:com.dropbox.ignored' -Value 1
 ```
 
-If you ever hit the `encodings` crash, the venv has been re-synced: `rm -rf .venv && uv sync`, then re-apply the ignore marker. `pyproject.toml`, `uv.lock`, `.python-version`, and `requirements.txt` are platform-independent and are fine to sync.
+If you ever hit the `encodings` crash, the venv has been re-synced: `rm -rf .venv && uv sync`, then re-apply the ignore marker. `pyproject.toml`, `uv.lock`, and `.python-version` are platform-independent and are fine to sync.
 
 ## Architecture
 

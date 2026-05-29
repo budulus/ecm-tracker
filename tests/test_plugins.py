@@ -44,7 +44,7 @@ def _tracked_window():
     w.resize(900, 600)
     w.show()
     w._load_paths(discover(d), d)
-    w.define_roi_action.setChecked(True)
+    w._begin_roi_definition("ngon", n=4)
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
         w._on_image_clicked(QPointF(*c))
     w._detect_shi_tomasi()
@@ -178,12 +178,57 @@ def test_example_plugins_launch():
         window.close()
 
 
+def test_affine_zones_overlay_survives_reopen():
+    w = _tracked_window()
+    rec = w.plugin_manager._records["affine_zones"]
+    plugin = rec.cls(PluginContext(w, "affine_zones"))
+    before = len(w.canvas._overlays)
+    win = plugin.launch()                       # first open registers the overlay
+    assert len(w.canvas._overlays) == before + 1
+    win.close()                                 # close removes it
+    assert len(w.canvas._overlays) == before
+    plugin.launch()                             # reopen must re-register it
+    assert len(w.canvas._overlays) == before + 1
+    plugin.on_unload()
+
+
 def test_settings_round_trip():
     w = _tracked_window()
     ctx = PluginContext(w, "roundtrip")
     assert ctx.get_settings() == {}
     ctx.save_settings({"hello": 1, "mode": "x"})
     assert ctx.get_settings() == {"hello": 1, "mode": "x"}
+
+
+def test_principal_stretches_known():
+    """Qt-free math: deformation gradient → principal stretches & directions."""
+    from plugins.affine_zones.zones import fit_zone_deformation, principal_stretches
+
+    # Identity → both stretches 1.
+    lam1, lam2, _v1, _v2 = principal_stretches(np.eye(2))
+    assert abs(lam1 - 1.0) < 1e-9 and abs(lam2 - 1.0) < 1e-9
+
+    # Pure stretch diag(2, 0.5) → λ = (2, 0.5) along the axes.
+    F = np.diag([2.0, 0.5])
+    lam1, lam2, v1, v2 = principal_stretches(F)
+    assert abs(lam1 - 2.0) < 1e-9 and abs(lam2 - 0.5) < 1e-9
+    assert abs(np.linalg.norm(v1) - 1.0) < 1e-9 and abs(np.linalg.norm(v2) - 1.0) < 1e-9
+    assert abs(np.dot(v1, v2)) < 1e-9  # orthogonal directions
+    assert abs(abs(v1[0]) - 1.0) < 1e-9  # λ1 direction is the x-axis
+
+    # A rotation is rigid → both stretches 1.
+    th = 0.7
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    lam1, lam2, _v1, _v2 = principal_stretches(R)
+    assert abs(lam1 - 1.0) < 1e-9 and abs(lam2 - 1.0) < 1e-9
+
+    # Round-trip through the LS fit: build points, apply F, recover it.
+    polygon = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    ref = np.array([[1, 1], [9, 2], [3, 8], [6, 6], [5, 4]], dtype=np.float32)
+    cur = (ref @ F.T).astype(np.float32)
+    local_idx, F_fit, _b = fit_zone_deformation(polygon, ref, cur)
+    assert local_idx.size == ref.shape[0]
+    assert np.allclose(F_fit, F, atol=1e-4)
 
 
 if __name__ == "__main__":

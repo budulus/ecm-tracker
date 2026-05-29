@@ -11,7 +11,13 @@ The icon glyph colors live in ``icon_loader`` (NORMAL/ACCENT/DISABLED) and are
 kept visually in sync with this sheet.
 """
 
+import os
+
 from PyQt5.QtWidgets import QApplication
+
+# Absolute path to the bundled icons, with forward slashes so it is valid inside
+# QSS ``url(...)`` on Windows too. Mirrors ``icon_loader._ICON_DIR``.
+_ICON_DIR = os.path.join(os.path.dirname(__file__), "icons").replace("\\", "/")
 
 LIGHT_QSS = """
 * { font-size: 13px; }
@@ -49,6 +55,17 @@ QToolButton:checked {
 }
 QToolButton:disabled { color: #b3b9c0; }
 
+/* Dropdown menu buttons: reuse the spinbox chevron as the menu indicator */
+QToolButton#menuButton::menu-indicator {
+    image: url(@ICON_DIR@/chevron-down.svg);
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    width: 10px;
+    height: 10px;
+    right: 4px;
+    bottom: 4px;
+}
+
 /* Accent primary action (Run Tracking) */
 QToolButton#primaryAction {
     background: #2563eb;
@@ -85,6 +102,38 @@ QSpinBox, QDoubleSpinBox, QLineEdit {
     selection-color: #ffffff;
 }
 QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border-color: #2563eb; }
+
+/* Spin button sub-controls: once the box has a custom border, Qt stops
+   drawing the native buttons/arrows, so they must be styled explicitly. The
+   left divider + matching corner radii keep them inside the rounded border. */
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    background: #f4f5f7;
+    border-left: 1px solid #d6dade;
+    border-top-right-radius: 6px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    background: #f4f5f7;
+    border-left: 1px solid #d6dade;
+    border-bottom-right-radius: 6px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #e9edf2; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(@ICON_DIR@/chevron-up.svg);
+    width: 9px;
+    height: 9px;
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(@ICON_DIR@/chevron-down.svg);
+    width: 9px;
+    height: 9px;
+}
 
 /* ---- Buttons (dialogs) ------------------------------------------------ */
 QPushButton {
@@ -151,4 +200,4 @@ QStatusBar QLabel { color: #6b727a; }
 def apply_theme(app: QApplication) -> None:
     """Apply the Fusion base style + light stylesheet to the whole application."""
     app.setStyle("Fusion")
-    app.setStyleSheet(LIGHT_QSS)
+    app.setStyleSheet(LIGHT_QSS.replace("@ICON_DIR@", _ICON_DIR))

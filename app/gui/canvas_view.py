@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from PyQt5.QtCore import QEvent, QPointF, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
 from PyQt5.QtWidgets import QWidget
 
@@ -304,10 +304,12 @@ class CanvasView(QWidget):
             if len(screen_pts) >= 2:
                 painter.drawPolyline(QPolygonF(screen_pts))
 
-        painter.setBrush(QBrush(QColor(255, 0, 255)))
-        painter.setPen(QPen(QColor(255, 0, 255), 1))
-        for pt in screen_pts:
-            painter.drawEllipse(pt, 4, 4)
+        # Vertex handles only for low-vertex shapes; a circle (64-gon) reads as its outline.
+        if len(screen_pts) <= 16:
+            painter.setBrush(QBrush(QColor(255, 0, 255)))
+            painter.setPen(QPen(QColor(255, 0, 255), 1))
+            for pt in screen_pts:
+                painter.drawEllipse(pt, 4, 4)
 
     def _draw_features(self, painter: QPainter) -> None:
         """Draw the raw reference-frame seed points (only before tracking exists)."""
@@ -316,10 +318,16 @@ class CanvasView(QWidget):
             return
         if self._state.current_index != self._state.reference_index:
             return
-        painter.setPen(QPen(QColor(0, 255, 255), 1))
-        painter.setBrush(QBrush(QColor(0, 255, 255)))
+        display = self._state.display_params
+        if not display["show_markers"]:
+            return
+        radius = display["marker_size"]
+        cyan = QColor(0, 255, 255)
+        cyan.setAlpha(round(255 * display["marker_opacity"] / 100))
+        painter.setPen(QPen(cyan, 1))
+        painter.setBrush(QBrush(cyan))
         for x, y in feats:
-            painter.drawEllipse(self.image_to_screen(x, y), 2.5, 2.5)
+            painter.drawEllipse(self.image_to_screen(x, y), radius, radius)
 
     def _draw_tracked(self, painter: QPainter) -> None:
         """Draw tracked positions for the current frame, with a motion trail from the previous
@@ -329,6 +337,15 @@ class CanvasView(QWidget):
         result = state.result
         if result is None or not state.current_in_range:
             return
+        display = state.display_params
+        if not display["show_markers"]:
+            return
+        radius = display["marker_size"]
+        alpha = round(255 * display["marker_opacity"] / 100)
+        trail_alpha = round(140 * display["marker_opacity"] / 100)
+        show_box = display["show_window_box"]
+        half = state.lk_params["win_size"] / 2.0
+
         cut = state.global_to_cut(state.current_index)
         coords = result.coords_fw[cut]
         prev = result.coords_fw[cut - 1] if cut > 0 else None
@@ -341,15 +358,26 @@ class CanvasView(QWidget):
             if active is not None and not active[p]:
                 continue
             keep = True if preview is None else bool(preview[p])
-            color = green if keep else red
+            color = QColor(green if keep else red)
+            color.setAlpha(alpha)
             here = self.image_to_screen(coords[p][0], coords[p][1])
+            if show_box:
+                # The window box is an image-space region, so map its corners through the
+                # transform: it scales with zoom (unlike the constant-size markers).
+                tl = self.image_to_screen(coords[p][0] - half, coords[p][1] - half)
+                br = self.image_to_screen(coords[p][0] + half, coords[p][1] + half)
+                box_color = QColor(0, 220, 0)
+                box_color.setAlpha(alpha)
+                painter.setPen(QPen(box_color, 1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(tl, br))
             if prev is not None:
                 trail = QColor(color)
-                trail.setAlpha(140)
+                trail.setAlpha(trail_alpha)
                 painter.setPen(QPen(trail, 1))
                 painter.drawLine(
                     self.image_to_screen(prev[p][0], prev[p][1]), here
                 )
             painter.setPen(QPen(color, 1))
             painter.setBrush(QBrush(color))
-            painter.drawEllipse(here, 2.5, 2.5)
+            painter.drawEllipse(here, radius, radius)

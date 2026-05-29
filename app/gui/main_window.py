@@ -2,15 +2,19 @@ import os
 
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
+    QShortcut,
     QSlider,
     QSpinBox,
     QToolButton,
@@ -21,14 +25,15 @@ from PyQt5.QtWidgets import (
 from app.core import settings
 from app.gui.icon_loader import ACCENT, load_icon
 from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
-from app.core.export import export
+from app.core.export import export, export_csv
 from app.core.feature_detection import regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover
 from app.core.roi import ROI
 from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
+from app.gui.roi_tools import CircleTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
-from app.gui.dialogs import CornerDetectionDialog, GridDialog, TrackerDialog
+from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
 from app.models.project_state import ProjectState
 from app.plugins.api import PluginSignals
 from app.plugins.manager import PluginManager
@@ -104,6 +109,8 @@ class MainWindow(QMainWindow):
         self._cleanup_dialog = None
         self._cleanup_metrics = None
         self._preview_keep = None
+        self._roi_target_corners = 4  # number of clicks an N-Gon definition collects
+        self._last_ngon_sides = 4  # remembered N for the N-Gon prompt default
 
         self.current_slider = LabeledSlider("Current")
         self.reference_slider = LabeledSlider("Reference")
@@ -128,6 +135,11 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._build_toolbar()
+
+        # Esc cancels an in-progress ROI definition (the menu-only Define button has no
+        # toggle-off affordance).
+        self._roi_escape = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._roi_escape.activated.connect(self._cancel_roi_definition)
 
         # Discover installed plugins and populate the Plugins menu.
         self.plugin_manager = PluginManager(self)
@@ -174,12 +186,16 @@ class MainWindow(QMainWindow):
         # Each action keeps its original slot / enable-disable wiring; we only attach
         # an icon and host it inside a QToolButton, so _update_tool_states is unchanged.
         # Button labels are kept short because the group caption carries the context.
+        # Checkable only for the active-while-defining highlight; the button is an
+        # instant-popup menu (below), so it is never toggled by a click.
         self.define_roi_action = QAction(load_icon("frame"), "Define", self)
         self.define_roi_action.setCheckable(True)
-        self.define_roi_action.setToolTip(
-            "Click 4 corners on the reference frame to define the ROI"
-        )
-        self.define_roi_action.toggled.connect(self._on_define_roi_toggled)
+        self.define_roi_action.setToolTip("Define an ROI — Rectangle, Circle, or N-Gon")
+
+        self._roi_menu = QMenu(self)
+        self._roi_menu.addAction("Rectangle", self._begin_rect)
+        self._roi_menu.addAction("Circle", self._begin_circle)
+        self._roi_menu.addAction("N-Gon…", self._begin_ngon)
 
         self.clear_roi_action = QAction(load_icon("square-x"), "Clear", self)
         self.clear_roi_action.setToolTip("Remove the current ROI")
@@ -206,8 +222,11 @@ class MainWindow(QMainWindow):
         self.cleanup_action.triggered.connect(self._open_cleanup)
 
         self.export_toolbar_action = QAction(load_icon("download"), "Export", self)
-        self.export_toolbar_action.setToolTip("Export surviving coordinates to .npy")
-        self.export_toolbar_action.triggered.connect(self._export)
+        self.export_toolbar_action.setToolTip("Export surviving coordinates")
+
+        self._export_menu = QMenu(self)
+        self._export_menu.addAction("Save as NumPy array (.npy)", self._export)
+        self._export_menu.addAction("Save as CSV (.csv)", self._export_csv)
 
         self.zoom_in_action = QAction(load_icon("zoom-in"), "Zoom In", self)
         self.zoom_in_action.setShortcut("Ctrl++")
@@ -231,8 +250,18 @@ class MainWindow(QMainWindow):
         )
         self.pan_tool_action.toggled.connect(self._on_pan_tool_toggled)
 
+        self.display_action = QAction(load_icon("eye"), "Display", self)
+        self.display_action.setToolTip(
+            "Marker size, opacity, visibility, and the window-size box"
+        )
+        self.display_action.triggered.connect(self._open_display_dialog)
+
         toolbar.addWidget(
-            self._toolbar_group("ROI", [self.define_roi_action, self.clear_roi_action])
+            self._toolbar_group(
+                "ROI",
+                [self.define_roi_action, self.clear_roi_action],
+                menus={self.define_roi_action: self._roi_menu},
+            )
         )
         toolbar.addSeparator()
         toolbar.addWidget(
@@ -251,6 +280,7 @@ class MainWindow(QMainWindow):
                     self.export_toolbar_action,
                 ],
                 primary=self.run_tracking_action,
+                menus={self.export_toolbar_action: self._export_menu},
             )
         )
         toolbar.addSeparator()
@@ -262,16 +292,19 @@ class MainWindow(QMainWindow):
                     self.zoom_out_action,
                     self.reset_view_action,
                     self.pan_tool_action,
+                    self.display_action,
                 ],
             )
         )
 
-    def _toolbar_group(self, title: str, actions, primary=None) -> QWidget:
+    def _toolbar_group(self, title: str, actions, primary=None, menus=None) -> QWidget:
         """A captioned cluster of QToolButtons hosting the given actions.
 
         Each button proxies its QAction via setDefaultAction, so the action's
         existing enabled/checked state drives the button automatically. ``primary``
         marks one action's button as the accent button (objectName for QSS).
+        ``menus`` maps an action to a QMenu, turning that button into an
+        instant-popup dropdown (objectName for the chevron QSS).
         """
         box = QWidget()
         outer = QVBoxLayout(box)
@@ -288,6 +321,10 @@ class MainWindow(QMainWindow):
             button.setAutoRaise(True)
             if action is primary:
                 button.setObjectName("primaryAction")
+            if menus and action in menus:
+                button.setMenu(menus[action])
+                button.setPopupMode(QToolButton.InstantPopup)
+                button.setObjectName("menuButton")
             row.addWidget(button)
         outer.addLayout(row)
 
@@ -381,28 +418,74 @@ class MainWindow(QMainWindow):
     # ---- ROI ------------------------------------------------------------
     def _on_pan_tool_toggled(self, checked: bool) -> None:
         self.canvas.set_pan_tool(checked)
-        if checked and self.define_roi_action.isChecked():
-            self.define_roi_action.setChecked(False)
-
-    def _on_define_roi_toggled(self, checked: bool) -> None:
         if checked:
-            if self.pan_tool_action.isChecked():
-                self.pan_tool_action.setChecked(False)
-            if not self._confirm_discard_tracking():
-                self.define_roi_action.blockSignals(True)
-                self.define_roi_action.setChecked(False)
-                self.define_roi_action.blockSignals(False)
-                return
-            self.state.roi = ROI()
-            self.statusBar().showMessage(
-                "Click 4 ROI corners on the reference frame.", 4000
-            )
+            self._cancel_roi_definition()
+
+    def _begin_rect(self) -> None:
+        self._begin_roi_definition("rectangle")
+
+    def _begin_circle(self) -> None:
+        self._begin_roi_definition("circle")
+
+    def _begin_ngon(self) -> None:
+        n, ok = QInputDialog.getInt(
+            self, "N-Gon ROI", "Number of points:", self._last_ngon_sides, 3, 50
+        )
+        if not ok:
+            return
+        self._last_ngon_sides = n
+        self._begin_roi_definition("ngon", n=n)
+
+    def _begin_roi_definition(self, shape: str, n: int = None) -> None:
+        """Start defining an ROI of the given shape on the reference frame."""
+        if not (self.state.has_sequence and self.state.on_reference_frame):
+            return
+        if self.pan_tool_action.isChecked():
+            self.pan_tool_action.setChecked(False)
+        if not self._confirm_discard_tracking():
+            return
+        self._cancel_roi_definition(silent=True)
+        self.state.roi = ROI()
+        self.define_roi_action.setChecked(True)
+        if shape == "ngon":
+            self._roi_target_corners = n
+            self.canvas.clear_interaction()  # collect clicks via the imageClicked path
+            message = f"Click {n} points to define the ROI (Esc to cancel)."
+        elif shape == "rectangle":
+            self.canvas.set_interaction(RectangleTool(self))
+            message = "Drag a rectangle from corner to corner (Esc to cancel)."
+        else:  # circle
+            self.canvas.set_interaction(CircleTool(self))
+            message = "Press the center and drag out the radius (Esc to cancel)."
+        self.statusBar().showMessage(message, 6000)
+        self.canvas.update()
+        self._update_tool_states()
+
+    def _commit_interactive_roi(self, corners) -> None:
+        """Finalize an ROI built by a drag tool (Rectangle / Circle)."""
+        self.state.roi = ROI(corners)
+        self.define_roi_action.setChecked(False)
+        self.canvas.clear_interaction()
+        self.statusBar().showMessage("ROI complete.", 4000)
+        self.signals.roi_changed.emit()
         self.canvas.refresh()
         self._update_tool_states()
+
+    def _cancel_roi_definition(self, silent: bool = False) -> None:
+        """Abort any in-progress ROI definition (Esc, pan tool, or starting a new shape)."""
+        self.canvas.clear_interaction()
+        if self.define_roi_action.isChecked():
+            self.define_roi_action.setChecked(False)
+        if self.state.roi is not None and not self.state.roi.is_complete:
+            self.state.roi = None
+        if not silent:
+            self.canvas.refresh()
+            self._update_tool_states()
 
     def _clear_roi(self) -> None:
         if not self._confirm_discard_tracking():
             return
+        self.canvas.clear_interaction()
         self.state.roi = None
         self.state.features = None
         if self.define_roi_action.isChecked():
@@ -418,7 +501,8 @@ class MainWindow(QMainWindow):
         if roi is None:
             return
         roi.add_corner(image_pt.x(), image_pt.y())
-        if roi.is_complete:
+        if len(roi.corners) >= self._roi_target_corners:
+            roi.close()
             self.define_roi_action.setChecked(False)
             self.statusBar().showMessage("ROI complete.", 4000)
             self.signals.roi_changed.emit()
@@ -440,6 +524,20 @@ class MainWindow(QMainWindow):
         dialog = TrackerDialog(self.state.lk_params, self)
         if dialog.exec_():
             self.state.lk_params = dialog.values()
+
+    def _open_display_dialog(self) -> None:
+        snapshot = dict(self.state.display_params)
+
+        def _apply(values: dict) -> None:
+            self.state.display_params = values
+            self.canvas.update()
+
+        dialog = DisplayDialog(snapshot, _apply, self)
+        if dialog.exec_():
+            self.state.display_params = dialog.values()
+        else:
+            self.state.display_params = snapshot
+        self.canvas.update()
 
     def _detect_shi_tomasi(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():
@@ -636,6 +734,36 @@ class MainWindow(QMainWindow):
             6000,
         )
 
+    def _export_csv(self) -> None:
+        result = self.state.result
+        if result is None or self.state.active_mask is None:
+            return
+        if not self.state.active_mask.any():
+            QMessageBox.warning(self, "Nothing to export", "No points remain to export.")
+            return
+        default_path = os.path.join(self.state.source_dir or "", "coords.csv")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export coordinates as CSV", default_path, "CSV file (*.csv)"
+        )
+        if not path:
+            return
+        frame_names = [
+            os.path.basename(self.state.sequence.paths[g])
+            for g in range(result.reference_index, result.last_index + 1)
+        ]
+        csv_path, shape = export_csv(
+            result.coords_fw,
+            self.state.active_mask,
+            frame_names,
+            os.path.dirname(path),
+            os.path.basename(path),
+        )
+        self.statusBar().showMessage(
+            f"Exported {shape[1]} points x {shape[0]} frames to "
+            f"{os.path.basename(csv_path)}",
+            6000,
+        )
+
     # ---- tool enablement ------------------------------------------------
     def _update_tool_states(self) -> None:
         has = self.state.has_sequence
@@ -662,6 +790,7 @@ class MainWindow(QMainWindow):
         self.last_slider.setEnabled(has and not has_result)
 
         if self.define_roi_action.isChecked() and not on_ref:
+            self.canvas.clear_interaction()
             self.define_roi_action.setChecked(False)
 
     # ---- status ---------------------------------------------------------

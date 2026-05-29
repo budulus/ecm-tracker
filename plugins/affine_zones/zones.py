@@ -1,4 +1,13 @@
-"""Zone drawing interaction, per-zone RANSAC affine fit, and the control window."""
+"""Zone drawing, per-zone homogeneous-motion (principal-stretch) analysis, RANSAC cleaning.
+
+For each polygon zone the tracked points inside it are fit (least squares, reference → current
+frame) with an affine map ``x' = F x + b``. The linear part ``F`` is the homogenized
+**deformation gradient** of the zone; its right Cauchy–Green tensor ``C = Fᵀ F`` yields the two
+**principal stretches** ``λ1 ≥ λ2`` (square roots of the eigenvalues) and their normalized
+eigenvectors (principal directions). The translation ``b`` is irrelevant for motion analysis and
+is discarded. A separate RANSAC tool cleans a zone's points; a plot window shows the stretches
+over frames.
+"""
 import csv
 
 import cv2
@@ -6,12 +15,19 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QBrush, QColor, QPen, QPolygonF
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QColorDialog,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -21,6 +37,34 @@ from PyQt5.QtWidgets import (
 from app.plugins import CanvasInteraction
 
 MIN_ZONE_POINTS = 3  # an affine fit needs at least 3 correspondences
+
+# Distinct, non-red palette — red is reserved for RANSAC-preview outliers.
+PALETTE = [
+    QColor("#2563eb"),  # blue
+    QColor("#16a34a"),  # green
+    QColor("#f59e0b"),  # amber
+    QColor("#9333ea"),  # purple
+    QColor("#0891b2"),  # teal
+    QColor("#db2777"),  # magenta
+    QColor("#65a30d"),  # olive
+    QColor("#92400e"),  # brown
+    QColor("#0ea5e9"),  # sky
+    QColor("#7c3aed"),  # violet
+]
+OUTLIER_COLOR = QColor(255, 60, 60)
+
+
+def default_zone_color(index):
+    """A distinct, non-red color for the zone at ``index`` (cycles through ``PALETTE``)."""
+    return QColor(PALETTE[index % len(PALETTE)])
+
+
+class Zone:
+    """A drawn polygon zone plus its display color."""
+
+    def __init__(self, polygon, color):
+        self.polygon = list(polygon)  # list of (x, y) in image coords
+        self.color = QColor(color)
 
 
 def points_in_polygon(polygon, pts):
@@ -32,12 +76,47 @@ def points_in_polygon(polygon, pts):
     )
 
 
-def fit_zone_affine(polygon, ref_pts, cur_pts):
-    """Fit a RANSAC affine for the points inside ``polygon``.
+def fit_zone_deformation(polygon, ref_pts, cur_pts):
+    """Least-squares affine fit for the points inside ``polygon``.
 
-    Returns ``(local_idx, M, inliers)`` where ``local_idx`` indexes into the active-point arrays,
-    ``M`` is the 2×3 affine (or None), and ``inliers`` is a bool array aligned to ``local_idx``.
-    Returns None if the zone holds too few points.
+    Returns ``(local_idx, F, b)`` where ``local_idx`` indexes into the active-point arrays, ``F``
+    is the 2×2 deformation gradient (linear part of ``x' = F x + b``) and ``b`` is the translation
+    (discarded by callers). Returns ``None`` if the zone holds too few points.
+    """
+    inside = points_in_polygon(polygon, ref_pts)
+    local_idx = np.where(inside)[0]
+    if local_idx.size < MIN_ZONE_POINTS:
+        return None
+    src = ref_pts[local_idx].astype(np.float64)
+    dst = cur_pts[local_idx].astype(np.float64)
+    # Solve [x y 1] @ sol = [x' y'] in the least-squares sense; sol is 3×2.
+    P = np.column_stack([src, np.ones(src.shape[0])])
+    sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
+    F = np.array([[sol[0, 0], sol[1, 0]], [sol[0, 1], sol[1, 1]]])
+    b = sol[2, :].copy()
+    return local_idx, F, b
+
+
+def principal_stretches(F):
+    """Principal stretches and directions of deformation gradient ``F``.
+
+    Returns ``(lam1, lam2, v1, v2)`` with ``lam1 >= lam2`` the square roots of the eigenvalues of
+    ``C = Fᵀ F`` and ``v1, v2`` the matching unit eigenvectors. ``F = I`` ⇒ ``lam1 = lam2 = 1``.
+    """
+    C = F.T @ F
+    vals, vecs = np.linalg.eigh(C)  # ascending eigenvalues, orthonormal columns
+    lam = np.sqrt(np.maximum(vals, 0.0))
+    order = np.argsort(lam)[::-1]  # descending → lam1 first
+    lam = lam[order]
+    vecs = vecs[:, order]
+    return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
+
+
+def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, max_iters=2000, confidence=0.99):
+    """RANSAC affine fit for the points inside ``polygon`` (used by the cleaning dialog).
+
+    Returns ``(local_idx, M, inliers)`` where ``M`` is the 2×3 affine (or None) and ``inliers`` is
+    a bool array aligned to ``local_idx``. Returns ``None`` if the zone holds too few points.
     """
     inside = points_in_polygon(polygon, ref_pts)
     local_idx = np.where(inside)[0]
@@ -45,7 +124,10 @@ def fit_zone_affine(polygon, ref_pts, cur_pts):
         return None
     src = ref_pts[local_idx].astype(np.float32)
     dst = cur_pts[local_idx].astype(np.float32)
-    M, inlier_col = cv2.estimateAffine2D(src, dst, method=cv2.RANSAC)
+    M, inlier_col = cv2.estimateAffine2D(
+        src, dst, method=cv2.RANSAC,
+        ransacReprojThreshold=float(reproj), maxIters=int(max_iters), confidence=float(confidence),
+    )
     inliers = (
         inlier_col.ravel().astype(bool)
         if inlier_col is not None
@@ -66,36 +148,49 @@ class ZoneDrawTool(CanvasInteraction):
         self.window.on_draw_progress()
 
 
+# Table columns
+COL_ZONE, COL_COLOR, COL_PTS, COL_L1, COL_L2, COL_V1, COL_V2 = range(7)
+
+
 class AffineZonesWindow(QWidget):
     def __init__(self, ctx):
         super().__init__(ctx.window)
         self.ctx = ctx
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("Affine Zone Tool")
-        self.setMinimumWidth(560)
-        self.zones = []  # list of polygons (each a list of (x, y) in image coords)
+        self.setMinimumWidth(640)
+        self.zones = []  # list of Zone
         self._tool = None
+        self._ransac_dialog = None
+        self._ransac_preview = None  # (zone_idx, local_idx, inliers) while previewing
+        self._plot_window = None
 
         self.new_btn = QPushButton("New Zone")
         self.finish_btn = QPushButton("Finish Zone")
         self.clear_btn = QPushButton("Clear Zones")
+        self.ransac_btn = QPushButton("RANSAC…")
+        self.plot_btn = QPushButton("Plot Curves")
         self.export_btn = QPushButton("Export CSV…")
-        self.drop_btn = QPushButton("Drop Outliers")
         self.new_btn.clicked.connect(self._start_zone)
         self.finish_btn.clicked.connect(self._finish_zone)
         self.clear_btn.clicked.connect(self._clear_zones)
+        self.ransac_btn.clicked.connect(self._open_ransac)
+        self.plot_btn.clicked.connect(self._open_plot)
         self.export_btn.clicked.connect(self._export)
-        self.drop_btn.clicked.connect(self._drop_outliers)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["Zone", "Pts", "Inliers", "a11", "a12", "tx", "a21", "a22", "ty"]
+            ["Zone", "Color", "Pts", "λ1", "λ2", "v1 (x,y)", "v2 (x,y)"]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.itemSelectionChanged.connect(self._update_buttons)
         self.hint = QLabel()
 
         top = QHBoxLayout()
-        for b in (self.new_btn, self.finish_btn, self.clear_btn, self.export_btn, self.drop_btn):
+        for b in (self.new_btn, self.finish_btn, self.clear_btn,
+                  self.ransac_btn, self.plot_btn, self.export_btn):
             top.addWidget(b)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
@@ -105,15 +200,29 @@ class AffineZonesWindow(QWidget):
         ctx.signals.frame_changed.connect(self._refresh)
         ctx.signals.result_changed.connect(self._refresh)
         ctx.signals.mask_changed.connect(self._refresh)
-        ctx.add_overlay(self._paint)
         self._update_buttons()
         self._refresh()
 
     # ---- lifecycle ------------------------------------------------------
+    def showEvent(self, event):
+        # Re-register the overlay on every show (not just construction): closeEvent removes
+        # it, and the window is reused — relaunching only calls show(), so __init__ won't run
+        # again. add_overlay is idempotent, so the initial show is harmless.
+        super().showEvent(event)
+        self.ctx.add_overlay(self._paint)
+        self.ctx.request_redraw()
+
     def closeEvent(self, event):
         if self._tool is not None:
             self.ctx.end_canvas_interaction()
             self._tool = None
+        if self._ransac_dialog is not None:
+            self._ransac_dialog.close()
+            self._ransac_dialog = None
+        if self._plot_window is not None:
+            self._plot_window.close()
+            self._plot_window = None
+        self._ransac_preview = None
         self.ctx.remove_overlay(self._paint)
         super().closeEvent(event)
 
@@ -129,7 +238,7 @@ class AffineZonesWindow(QWidget):
 
     def _finish_zone(self):
         if self._tool is not None and len(self._tool.vertices) >= MIN_ZONE_POINTS:
-            self.zones.append(list(self._tool.vertices))
+            self.zones.append(Zone(self._tool.vertices, default_zone_color(len(self.zones))))
         self.ctx.end_canvas_interaction()
         self._tool = None
         self._update_buttons()
@@ -137,7 +246,11 @@ class AffineZonesWindow(QWidget):
 
     def _clear_zones(self):
         self.zones.clear()
+        self._ransac_preview = None
+        if self._ransac_dialog is not None:
+            self._ransac_dialog.close()
         self._refresh()
+        self._refresh_plot()
 
     def _update_buttons(self):
         drawing = self._tool is not None
@@ -145,66 +258,132 @@ class AffineZonesWindow(QWidget):
         self.finish_btn.setEnabled(drawing)
         has = bool(self.zones)
         self.clear_btn.setEnabled(has)
-        self.export_btn.setEnabled(has)
-        self.drop_btn.setEnabled(has)
+        self.export_btn.setEnabled(has and self.ctx.has_result)
+        self.plot_btn.setEnabled(has and self.ctx.has_result)
+        self.ransac_btn.setEnabled(
+            not drawing and self.ctx.has_result and self.table.currentRow() >= 0
+        )
 
     # ---- compute --------------------------------------------------------
     def _current_fits(self):
-        """Return a list aligned to self.zones of (local_idx, M, inliers) or None per zone."""
+        """Return a list aligned to self.zones of (local_idx, F) or None per zone."""
         ctx = self.ctx
         cut = ctx.current_cut
         coords = ctx.coords(active_only=True)
         if cut is None or coords is None or coords.shape[1] == 0:
             return [None] * len(self.zones)
         ref_pts, cur_pts = coords[0], coords[cut]
-        return [fit_zone_affine(poly, ref_pts, cur_pts) for poly in self.zones]
+        out = []
+        for zone in self.zones:
+            fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts)
+            out.append((fit[0], fit[1]) if fit is not None else None)
+        return out
 
     def _refresh(self):
         fits = self._current_fits()
         self.table.setRowCount(len(self.zones))
         for z, fit in enumerate(fits):
-            self._set_cell(z, 0, str(z + 1))
-            if fit is None or fit[1] is None:
-                for col in range(1, 9):
+            self._set_cell(z, COL_ZONE, str(z + 1))
+            self._install_color_button(z)
+            if fit is None:
+                for col in (COL_PTS, COL_L1, COL_L2, COL_V1, COL_V2):
                     self._set_cell(z, col, "—")
                 continue
-            local_idx, M, inliers = fit
-            self._set_cell(z, 1, str(local_idx.size))
-            self._set_cell(z, 2, str(int(inliers.sum())))
-            for col, val in zip(range(3, 9), (M[0, 0], M[0, 1], M[0, 2], M[1, 0], M[1, 1], M[1, 2])):
-                self._set_cell(z, col, f"{val:.4f}")
+            local_idx, F = fit
+            lam1, lam2, v1, v2 = principal_stretches(F)
+            self._set_cell(z, COL_PTS, str(local_idx.size))
+            self._set_cell(z, COL_L1, f"{lam1:.4f}")
+            self._set_cell(z, COL_L2, f"{lam2:.4f}")
+            self._set_cell(z, COL_V1, f"{v1[0]:.3f}, {v1[1]:.3f}")
+            self._set_cell(z, COL_V2, f"{v2[0]:.3f}, {v2[1]:.3f}")
         if not self.ctx.has_result:
             self.hint.setText("No tracking result yet — run tracking first.")
         elif self.ctx.current_cut == 0:
-            self.hint.setText("On the reference frame the affine is identity; move the slider.")
+            self.hint.setText("On the reference frame F = I (λ1 = λ2 = 1); move the slider.")
         else:
-            self.hint.setText(f"{len(self.zones)} zone(s). Affine maps reference → current frame.")
+            self.hint.setText(
+                f"{len(self.zones)} zone(s). Stretches map reference → current frame."
+            )
+        self._update_buttons()
         self.ctx.request_redraw()
 
     def _set_cell(self, row, col, text):
         self.table.setItem(row, col, QTableWidgetItem(text))
 
-    # ---- actions --------------------------------------------------------
-    def _drop_outliers(self):
-        """Drop RANSAC outliers (in every zone) from the active set, at the current frame."""
-        fits = self._current_fits()
-        keep = np.ones(self.ctx.n_active, dtype=bool)
-        dropped = 0
-        for fit in fits:
-            if fit is None or fit[1] is None:
-                continue
-            local_idx, _M, inliers = fit
-            keep[local_idx[~inliers]] = False
-            dropped += int((~inliers).sum())
-        if dropped == 0:
-            QMessageBox.information(self, "No outliers", "No RANSAC outliers to drop.")
-            return
-        self.ctx.apply_keep_mask(keep)
-        self.ctx.status(f"Dropped {dropped} outlier point(s). Undo in the Cleanup dialog.")
+    def _install_color_button(self, row):
+        btn = QPushButton()
+        btn.setFixedHeight(20)
+        self._style_color_button(btn, self.zones[row].color)
+        btn.clicked.connect(lambda _=False, r=row: self._pick_color(r))
+        self.table.setCellWidget(row, COL_COLOR, btn)
 
+    @staticmethod
+    def _style_color_button(btn, color):
+        btn.setStyleSheet(
+            f"background-color: {color.name()}; border: 1px solid #888; border-radius: 3px;"
+        )
+
+    def _pick_color(self, row):
+        if not (0 <= row < len(self.zones)):
+            return
+        color = QColorDialog.getColor(self.zones[row].color, self, "Zone color")
+        if color.isValid():
+            self.zones[row].color = color
+            self._style_color_button(self.table.cellWidget(row, COL_COLOR), color)
+            self.ctx.request_redraw()
+            self._refresh_plot()
+
+    # ---- RANSAC ---------------------------------------------------------
+    def selected_zone_index(self):
+        row = self.table.currentRow()
+        return row if 0 <= row < len(self.zones) else None
+
+    def _open_ransac(self):
+        if self.selected_zone_index() is None:
+            return
+        if self._ransac_dialog is None:
+            self._ransac_dialog = RansacDialog(self)
+        self._ransac_dialog.show()
+        self._ransac_dialog.raise_()
+        self._ransac_dialog.preview()
+
+    def set_ransac_preview(self, preview):
+        self._ransac_preview = preview
+        self.ctx.request_redraw()
+
+    def on_ransac_closed(self):
+        self._ransac_dialog = None
+        self._ransac_preview = None
+        self.ctx.request_redraw()
+
+    # ---- plotting -------------------------------------------------------
+    def _open_plot(self):
+        if not (self.zones and self.ctx.has_result):
+            return
+        if self._plot_window is None:
+            try:
+                self._plot_window = StretchPlotWindow(self)
+            except ImportError:
+                QMessageBox.critical(
+                    self, "matplotlib missing",
+                    "matplotlib is required for plotting. Run `uv sync` and try again.",
+                )
+                return
+        self._plot_window.show()
+        self._plot_window.raise_()
+        self._plot_window.replot()
+
+    def _refresh_plot(self):
+        if self._plot_window is not None and self._plot_window.isVisible():
+            self._plot_window.replot()
+
+    def on_plot_closed(self):
+        self._plot_window = None
+
+    # ---- export ---------------------------------------------------------
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export per-frame affines", "zone_affines.csv", "CSV (*.csv)"
+            self, "Export per-frame stretches", "zone_stretches.csv", "CSV (*.csv)"
         )
         if not path:
             return
@@ -218,42 +397,51 @@ class AffineZonesWindow(QWidget):
         try:
             with open(path, "w", newline="") as f:
                 w = csv.writer(f)
-                w.writerow(["zone", "frame_global", "n_points", "n_inliers",
-                            "a11", "a12", "tx", "a21", "a22", "ty"])
+                w.writerow(["zone", "frame_global", "n_points",
+                            "lambda1", "lambda2", "v1x", "v1y", "v2x", "v2y"])
                 for cut in range(self.ctx.frame_count):
                     cur_pts = coords[cut]
-                    for z, poly in enumerate(self.zones):
-                        fit = fit_zone_affine(poly, ref_pts, cur_pts)
-                        if fit is None or fit[1] is None:
+                    for z, zone in enumerate(self.zones):
+                        fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts)
+                        if fit is None:
                             continue
-                        local_idx, M, inliers = fit
-                        w.writerow([z + 1, ref_global + cut, local_idx.size, int(inliers.sum()),
-                                    *[f"{v:.6f}" for v in
-                                      (M[0, 0], M[0, 1], M[0, 2], M[1, 0], M[1, 1], M[1, 2])]])
+                        local_idx, F, _b = fit
+                        lam1, lam2, v1, v2 = principal_stretches(F)
+                        w.writerow([z + 1, ref_global + cut, local_idx.size,
+                                    f"{lam1:.6f}", f"{lam2:.6f}",
+                                    f"{v1[0]:.6f}", f"{v1[1]:.6f}",
+                                    f"{v2[0]:.6f}", f"{v2[1]:.6f}"])
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
-        self.ctx.status(f"Exported zone affines to {path}")
+        self.ctx.status(f"Exported zone stretches to {path}")
 
     # ---- overlay --------------------------------------------------------
     def _paint(self, painter, ctx):
-        # finished zones + their inlier/outlier points at the current frame
         fits = self._current_fits()
-        for poly, fit in zip(self.zones, fits):
-            screen = QPolygonF([ctx.image_to_screen(x, y) for x, y in poly])
-            painter.setPen(QPen(QColor(0, 200, 255), 2))
-            painter.setBrush(QBrush(QColor(0, 200, 255, 30)))
+        coords = ctx.coords(active_only=True)
+        cut = ctx.current_cut
+        cur_pts = coords[cut] if (coords is not None and cut is not None) else None
+        for z, (zone, fit) in enumerate(zip(self.zones, fits)):
+            color = zone.color
+            screen = QPolygonF([ctx.image_to_screen(x, y) for x, y in zone.polygon])
+            painter.setPen(QPen(color, 2))
+            fill = QColor(color)
+            fill.setAlpha(30)
+            painter.setBrush(QBrush(fill))
             painter.drawPolygon(screen)
-            if fit is None or fit[1] is None:
+            if fit is None or cur_pts is None:
                 continue
-            local_idx, _M, inliers = fit
-            coords = ctx.coords(active_only=True)
-            cut = ctx.current_cut
-            cur_pts = coords[cut]
-            for k, j in enumerate(local_idx):
-                color = QColor(0, 220, 0) if inliers[k] else QColor(255, 60, 60)
-                painter.setPen(QPen(color, 1))
-                painter.setBrush(QBrush(color))
+            local_idx, _F = fit
+            # RANSAC outliers (red) for the zone being previewed; everything else in zone color.
+            outlier_set = set()
+            if self._ransac_preview is not None and self._ransac_preview[0] == z:
+                _zi, prev_idx, prev_inliers = self._ransac_preview
+                outlier_set = set(int(i) for i in prev_idx[~prev_inliers])
+            for j in local_idx:
+                pt_color = OUTLIER_COLOR if int(j) in outlier_set else color
+                painter.setPen(QPen(pt_color, 1))
+                painter.setBrush(QBrush(pt_color))
                 painter.drawEllipse(ctx.image_to_screen(*cur_pts[j]), 3, 3)
 
         # in-progress polygon being drawn
@@ -265,3 +453,165 @@ class AffineZonesWindow(QWidget):
                 painter.drawPolyline(QPolygonF(pts))
             for p in pts:
                 painter.drawEllipse(p, 4, 4)
+
+
+class RansacDialog(QDialog):
+    """Tune RANSAC parameters and clean the selected zone's points (current frame)."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self.ctx = owner.ctx
+        self.setWindowTitle("RANSAC zone cleaning")
+        self.setWindowFlags(Qt.Window)
+
+        self.reproj = QDoubleSpinBox()
+        self.reproj.setRange(0.1, 50.0)
+        self.reproj.setSingleStep(0.5)
+        self.reproj.setValue(3.0)
+        self.reproj.setDecimals(2)
+        self.max_iters = QSpinBox()
+        self.max_iters.setRange(10, 100000)
+        self.max_iters.setValue(2000)
+        self.confidence = QDoubleSpinBox()
+        self.confidence.setRange(0.50, 0.99999)
+        self.confidence.setDecimals(5)
+        self.confidence.setSingleStep(0.001)
+        self.confidence.setValue(0.99)
+
+        form = QFormLayout()
+        form.addRow("Reproj threshold (px)", self.reproj)
+        form.addRow("Max iterations", self.max_iters)
+        form.addRow("Confidence", self.confidence)
+
+        self.count_label = QLabel("—")
+        self.apply_btn = QPushButton("Apply Cleaning")
+        self.apply_btn.clicked.connect(self._apply)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.close)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.count_label)
+        layout.addWidget(self.apply_btn)
+        layout.addWidget(buttons)
+
+        for w in (self.reproj, self.confidence):
+            w.valueChanged.connect(self.preview)
+        self.max_iters.valueChanged.connect(self.preview)
+        self.ctx.signals.frame_changed.connect(self.preview)
+        self.ctx.signals.mask_changed.connect(self.preview)
+
+    def _fit(self):
+        z = self.owner.selected_zone_index()
+        coords = self.ctx.coords(active_only=True)
+        cut = self.ctx.current_cut
+        if z is None or coords is None or cut is None or coords.shape[1] == 0:
+            return None, None
+        fit = fit_zone_affine(
+            self.owner.zones[z].polygon, coords[0], coords[cut],
+            reproj=self.reproj.value(), max_iters=self.max_iters.value(),
+            confidence=self.confidence.value(),
+        )
+        return z, fit
+
+    def preview(self):
+        z, fit = self._fit()
+        if fit is None or fit[1] is None:
+            self.count_label.setText("Selected zone has no valid fit at this frame.")
+            self.apply_btn.setEnabled(False)
+            self.owner.set_ransac_preview(None)
+            return
+        local_idx, _M, inliers = fit
+        n_out = int((~inliers).sum())
+        self.count_label.setText(
+            f"Zone {z + 1}: {int(inliers.sum())} inliers / {n_out} outliers (red)."
+        )
+        self.apply_btn.setEnabled(n_out > 0)
+        self.owner.set_ransac_preview((z, local_idx, inliers))
+
+    def _apply(self):
+        z, fit = self._fit()
+        if fit is None or fit[1] is None:
+            return
+        local_idx, _M, inliers = fit
+        keep = np.ones(self.ctx.n_active, dtype=bool)
+        keep[local_idx[~inliers]] = False
+        dropped = int((~inliers).sum())
+        if dropped == 0:
+            return
+        self.ctx.apply_keep_mask(keep)
+        self.ctx.status(f"Zone {z + 1}: dropped {dropped} outlier(s). Undo in the Cleanup dialog.")
+        self.preview()
+
+    def closeEvent(self, event):
+        try:
+            self.ctx.signals.frame_changed.disconnect(self.preview)
+            self.ctx.signals.mask_changed.disconnect(self.preview)
+        except (TypeError, RuntimeError):
+            pass
+        self.owner.on_ransac_closed()
+        super().closeEvent(event)
+
+
+class StretchPlotWindow(QWidget):
+    """Embedded matplotlib plot of λ1 (solid) / λ2 (dashed) over frames, per zone color."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self.ctx = owner.ctx
+        self.setWindowFlags(Qt.Window)
+        self.setWindowTitle("Principal stretches over frames")
+        self.resize(720, 480)
+
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
+        from matplotlib.figure import Figure
+
+        self.figure = Figure(tight_layout=True)
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.ax = self.figure.add_subplot(111)
+        toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.replot)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self.canvas)
+        layout.addWidget(self.refresh_btn)
+
+        self.ctx.signals.result_changed.connect(self.replot)
+        self.ctx.signals.mask_changed.connect(self.replot)
+
+    def replot(self):
+        self.ax.clear()
+        coords = self.ctx.coords(active_only=True)
+        if coords is not None and coords.shape[1] > 0:
+            ref_pts = coords[0]
+            frames = np.array([self.ctx.cut_to_global(t) for t in range(self.ctx.frame_count)])
+            for z, zone in enumerate(self.owner.zones):
+                lam1 = np.full(self.ctx.frame_count, np.nan)
+                lam2 = np.full(self.ctx.frame_count, np.nan)
+                for t in range(self.ctx.frame_count):
+                    fit = fit_zone_deformation(zone.polygon, ref_pts, coords[t])
+                    if fit is None:
+                        continue
+                    lam1[t], lam2[t], _v1, _v2 = principal_stretches(fit[1])
+                rgb = zone.color.getRgbF()[:3]
+                self.ax.plot(frames, lam1, "-", color=rgb, label=f"Zone {z + 1} λ1")
+                self.ax.plot(frames, lam2, "--", color=rgb, label=f"Zone {z + 1} λ2")
+        self.ax.set_xlabel("frame (global index)")
+        self.ax.set_ylabel("principal stretch λ")
+        self.ax.grid(True, alpha=0.3)
+        if self.owner.zones:
+            self.ax.legend(fontsize="small", ncol=2)
+        self.canvas.draw_idle()
+
+    def closeEvent(self, event):
+        try:
+            self.ctx.signals.result_changed.disconnect(self.replot)
+            self.ctx.signals.mask_changed.disconnect(self.replot)
+        except (TypeError, RuntimeError):
+            pass
+        self.owner.on_plot_closed()
+        super().closeEvent(event)

@@ -20,7 +20,7 @@ from app.core.cleanup import (
     thresholds_from_dict,
     thresholds_to_dict,
 )
-from app.core.export import export
+from app.core.export import export, export_csv
 from app.core.feature_detection import DEFAULT_SHI_TOMASI, regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover, natural_sort_key
 from app.core.roi import ROI
@@ -52,6 +52,37 @@ def test_detection_inside_roi():
     assert len(pts) > 20 and all(roi.contains(x, y) for x, y in pts)
     grid = regular_grid(roi, 20, 20)
     assert len(grid) > 0 and all(roi.contains(x, y) for x, y in grid)
+
+
+def test_roi_general():
+    # Empty ROI: not complete, empty mask, contains nothing.
+    roi = ROI()
+    assert not roi.is_complete
+    assert roi.mask(50, 50).sum() == 0
+    assert not roi.contains(10, 10)
+
+    # N-Gon flow: add an arbitrary polyline, finalize with close() (any N >= 3).
+    for p in [(10, 10), (40, 10), (25, 40)]:
+        roi.add_corner(*p)
+    assert not roi.is_complete  # not closed yet
+    roi.close()
+    assert roi.is_complete and len(roi.corners) == 3
+    assert roi.mask(50, 50).sum() > 0 and roi.contains(25, 20)  # inside the triangle
+
+    # Constructing with corners yields an already-closed ROI (the drag-tool/test path).
+    rect = ROI([(10, 10), (40, 10), (40, 30), (10, 30)])
+    assert rect.is_complete and rect.contains(25, 20) and not rect.contains(100, 100)
+
+    # A many-vertex circle polygon behaves like any other polygon.
+    cx, cy, r = 50.0, 50.0, 20.0
+    circle = ROI(
+        [
+            (cx + r * np.cos(a), cy + r * np.sin(a))
+            for a in np.linspace(0, 2 * np.pi, 32, endpoint=False)
+        ]
+    )
+    assert circle.is_complete and len(circle.corners) == 32
+    assert circle.contains(cx, cy) and not circle.contains(cx + r + 10, cy)
 
 
 def test_tracking_recovers_motion_and_fb():
@@ -140,6 +171,26 @@ def test_export(tmp=None):
     assert open(spath).read().strip() == "12 83"
 
 
+def test_export_csv(tmp=None):
+    cf = np.arange(3 * 5 * 2, dtype=np.float32).reshape(3, 5, 2)
+    mask = np.array([True, False, True, False, True])
+    names = ["a.png", "b.png", "c.png"]
+    d = tempfile.mkdtemp(prefix="expcsv_")
+    cpath, shape = export_csv(cf, mask, names, d, "coords")
+    assert shape == (3, 3, 2)
+    assert cpath.endswith("coords.csv")
+
+    lines = open(cpath).read().splitlines()
+    assert lines[0] == "filename,p1x,p1y,p2x,p2y,p3x,p3y"
+    assert len(lines) == 4  # header + 3 frames
+
+    expected = cf[:, mask, :].reshape(3, 6)
+    for i, name in enumerate(names):
+        cells = lines[i + 1].split(",")
+        assert cells[0] == name
+        assert np.allclose(np.array(cells[1:], dtype=np.float32), expected[i])
+
+
 def test_gui_pipeline():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
@@ -154,7 +205,7 @@ def test_gui_pipeline():
     w.resize(1000, 700)
     w.show()
     w._load_paths(discover(src), src)
-    w.define_roi_action.setChecked(True)
+    w._begin_roi_definition("ngon", n=4)
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
         w._on_image_clicked(QPointF(*c))
     w._detect_shi_tomasi()
@@ -191,6 +242,118 @@ def test_gui_pipeline():
     assert os.path.exists(out) and os.path.exists(
         os.path.join(os.path.dirname(out), "sequence.txt")
     )
+
+    out_csv = os.path.join(tempfile.mkdtemp(prefix="outcsv_"), "coords.csv")
+    QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out_csv, ""))
+    w._export_csv()
+    assert os.path.exists(out_csv)
+    assert open(out_csv).readline().startswith("filename,p1x,p1y")
+
+
+def test_roi_shape_tools():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    src, _ = _sequence()
+    from app.gui.main_window import MainWindow
+    from app.gui.roi_tools import CIRCLE_SEGMENTS
+
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    w._load_paths(discover(src), src)
+
+    # Rectangle: full menu -> begin -> drag -> commit path.
+    w._begin_roi_definition("rectangle")
+    assert w.define_roi_action.isChecked()
+    rect = w.canvas._interaction
+    rect.on_press(QPointF(60, 50), None)
+    rect.on_move(QPointF(240, 180), None)
+    assert w.state.roi is not None and w.state.roi.is_complete  # live preview
+    rect.on_release(QPointF(240, 180), None)
+    assert w.state.roi.is_complete and len(w.state.roi.corners) == 4
+    assert not w.define_roi_action.isChecked()
+
+    # Circle: press center, drag out a radius -> a CIRCLE_SEGMENTS-gon.
+    w._begin_roi_definition("circle")
+    circ = w.canvas._interaction
+    circ.on_press(QPointF(150, 110), None)
+    circ.on_release(QPointF(150, 160), None)  # radius 50
+    assert w.state.roi.is_complete and len(w.state.roi.corners) == CIRCLE_SEGMENTS
+    assert w.state.roi.contains(150, 110)  # center inside
+
+    # A degenerate (no-drag) gesture cancels the in-progress definition.
+    w._begin_roi_definition("rectangle")
+    tool = w.canvas._interaction
+    tool.on_press(QPointF(10, 10), None)
+    tool.on_release(QPointF(11, 11), None)
+    assert w.state.roi is None and not w.define_roi_action.isChecked()
+
+    # N-Gon: pick N, then click N arbitrary points; the Nth click closes it.
+    w._begin_roi_definition("ngon", n=5)
+    assert w.define_roi_action.isChecked()
+    for c in [(60, 50), (240, 50), (240, 180), (150, 220), (60, 180)]:
+        w._on_image_clicked(QPointF(*c))
+    assert w.state.roi.is_complete and len(w.state.roi.corners) == 5
+    assert not w.define_roi_action.isChecked()
+
+
+def test_display_settings():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    src, _ = _sequence()
+    from app.gui.main_window import MainWindow
+    from app.models.project_state import DEFAULT_DISPLAY, ProjectState
+
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    # defaults merged onto fresh state
+    assert set(w.state.display_params) == set(DEFAULT_DISPLAY)
+
+    w._load_paths(discover(src), src)
+    w._begin_roi_definition("ngon", n=4)
+    for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
+        w._on_image_clicked(QPointF(*c))
+    w._detect_shi_tomasi()
+    w._run_tracking()
+    assert w.state.result is not None
+
+    # Each display config must paint without raising (render into an off-screen pixmap).
+    def _paint():
+        w.canvas.render(QPixmap(w.canvas.size()))
+
+    for cfg in (
+        dict(show_markers=True, marker_size=10, marker_opacity=50, show_window_box=True),
+        dict(show_markers=False, marker_size=1, marker_opacity=0, show_window_box=False),
+        dict(show_markers=True, marker_size=3, marker_opacity=100, show_window_box=True),
+    ):
+        w.state.display_params = cfg
+        _paint()
+
+    # Live callback applies; cancel restores the pre-dialog snapshot.
+    w.state.display_params = dict(DEFAULT_DISPLAY)
+    from app.gui.dialogs import DisplayDialog
+
+    seen = {}
+    dlg = DisplayDialog(w.state.display_params, lambda v: seen.update(v), w)
+    dlg.marker_size.setValue(12)
+    assert seen["marker_size"] == 12
+    assert dlg.values()["marker_size"] == 12
+    dlg.reject()
+
+    # The opened-dialog path saves on accept and restores on reject.
+    w.state.display_params = dict(DEFAULT_DISPLAY, marker_size=7)
+    settings.update_section("display", {"marker_opacity": 33})
+    assert ProjectState().display_params["marker_opacity"] == 33
 
 
 if __name__ == "__main__":

@@ -9,6 +9,14 @@ from app.core.image_sequence import ImageSequence
 from app.core.roi import ROI
 from app.core.tracking import DEFAULT_LK
 
+# Marker-rendering preferences (display-only, persisted under the "display" settings section).
+DEFAULT_DISPLAY = dict(
+    show_markers=True,
+    marker_size=3,        # marker radius in screen px (~ the previous hardcoded 2.5)
+    marker_opacity=100,   # percent, 0-100 (100 preserves the original look)
+    show_window_box=False,
+)
+
 
 class ProjectState:
     """Mutable per-session state. Holds the loaded sequence and the global frame indices.
@@ -31,6 +39,7 @@ class ProjectState:
         self.shi_tomasi_params: dict = {**DEFAULT_SHI_TOMASI, **(settings.get_section("shi_tomasi") or {})}
         self.grid_params: dict = {**DEFAULT_GRID, **(settings.get_section("grid") or {})}
         self.lk_params: dict = {**DEFAULT_LK, **(settings.get_section("lk") or {})}
+        self.display_params: dict = {**DEFAULT_DISPLAY, **(settings.get_section("display") or {})}
         self.features: Optional[np.ndarray] = None  # (N, 2) reference-frame seed points
         self.result = None  # TrackerResult, set after tracking
         self.active_mask: Optional[np.ndarray] = None  # (P,) bool, aligned to result points

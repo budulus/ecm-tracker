@@ -1,11 +1,15 @@
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
     QSpinBox,
+    QWidget,
 )
 
 from app.core import settings
@@ -138,6 +142,70 @@ class TrackerDialog(QDialog):
             epsilon=self.epsilon.value(),
             flags=self.flags.value(),
             min_eig_threshold=self.min_eig.value(),
+        )
+
+
+class DisplayDialog(QDialog):
+    """Adjust how tracker markers are drawn: visibility, size, opacity, and an optional
+    green box showing the Lucas-Kanade window size around each tracked point.
+
+    Changes are applied live via the ``on_change`` callback (called with ``values()`` on every
+    edit); the caller restores its snapshot if the dialog is cancelled.
+    """
+
+    def __init__(self, params: dict, on_change, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Display")
+        self._on_change = on_change
+
+        self.show_markers = QCheckBox()
+        self.show_markers.setChecked(bool(params["show_markers"]))
+
+        self.marker_size = QSlider(Qt.Horizontal)
+        self.marker_size.setRange(1, 15)
+        self.marker_size.setValue(int(params["marker_size"]))
+
+        self.marker_opacity = QSlider(Qt.Horizontal)
+        self.marker_opacity.setRange(0, 100)
+        self.marker_opacity.setValue(int(params["marker_opacity"]))
+
+        self.show_window_box = QCheckBox()
+        self.show_window_box.setChecked(bool(params["show_window_box"]))
+
+        form = QFormLayout(self)
+        form.addRow("Show trackers", self.show_markers)
+        form.addRow("Marker size", self._with_value_label(self.marker_size, "px"))
+        form.addRow("Opacity", self._with_value_label(self.marker_opacity, "%"))
+        form.addRow("Show window-size box", self.show_window_box)
+
+        for widget in (self.show_markers, self.show_window_box):
+            widget.toggled.connect(self._emit)
+        for slider in (self.marker_size, self.marker_opacity):
+            slider.valueChanged.connect(self._emit)
+
+        _add_buttons(self, form, self.values, "display")
+
+    def _with_value_label(self, slider: QSlider, suffix: str) -> QWidget:
+        """Wrap a slider with a live numeric read-out so the current value is visible."""
+        box = QWidget()
+        layout = QHBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel(f"{slider.value()}{suffix}")
+        label.setMinimumWidth(36)
+        slider.valueChanged.connect(lambda v: label.setText(f"{v}{suffix}"))
+        layout.addWidget(slider, stretch=1)
+        layout.addWidget(label)
+        return box
+
+    def _emit(self) -> None:
+        self._on_change(self.values())
+
+    def values(self) -> dict:
+        return dict(
+            show_markers=self.show_markers.isChecked(),
+            marker_size=self.marker_size.value(),
+            marker_opacity=self.marker_opacity.value(),
+            show_window_box=self.show_window_box.isChecked(),
         )
 
 

@@ -1,0 +1,4 @@
+# Parity fixtures: re-include the .npy reference arrays that the repo-root *.npy
+# rule (meant for user export output) would otherwise exclude. These are committed
+# so `cargo test` is reproducible without regenerating via gen_fixture.py.
+!*.npy

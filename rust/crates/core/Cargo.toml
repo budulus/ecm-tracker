@@ -7,6 +7,10 @@ rust-version.workspace = true
 # Qt-free core: ports app/core/ + app/models/ (CV pipeline, dual-index model,
 # TrackerResult, ProjectState). No GUI, no Python — exercisable headlessly.
 [dependencies]
+ndarray = "0.16"  # pinned to match ndarray-npy so their ArrayBase types unify
+ndarray-npy = "0.9.1"  # export writes .npy; tests read .npy fixtures
 # clang-runtime: load libclang.dll dynamically (the PyPI libclang wheel ships
 # only the .dll, no import .lib), so clang-sys doesn't need a build-time link lib.
 opencv = { version = "0.95.1", default-features = false, features = ["imgproc", "imgcodecs", "video", "clang-runtime"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"

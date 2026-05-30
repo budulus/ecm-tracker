@@ -45,8 +45,9 @@ def _tracked_window():
     w.show()
     w._load_paths(discover(d), d)
     w._begin_roi_definition("ngon", n=4)
+    ngon = w.canvas._interaction
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
-        w._on_image_clicked(QPointF(*c))
+        ngon.on_press(QPointF(*c), None)
     w._detect_shi_tomasi()
     w._run_tracking()
     assert w.state.result is not None
@@ -165,6 +166,27 @@ def test_canvas_interaction_receives_clicks():
     assert len(got) == 1
 
 
+def test_roi_cancel_leaves_plugin_interaction_intact():
+    # The window-level Esc shortcut calls _cancel_roi_definition. While a plugin owns the
+    # canvas (begin_canvas_interaction unchecks define_roi_action), Esc/cancel must NOT tear
+    # down the plugin's interaction. Regression for the ROI shape-tools refactor.
+    w = _tracked_window()
+    ctx = PluginContext(w, "test")
+
+    class Tool(CanvasInteraction):
+        def on_press(self, image_pt, event):
+            pass
+
+    tool = Tool()
+    ctx.begin_canvas_interaction(tool)
+    assert w.canvas._interaction is tool
+    assert not w.define_roi_action.isChecked()  # plugin capture switched ROI off
+
+    w._cancel_roi_definition()  # what pressing Esc triggers
+    assert w.canvas._interaction is tool  # plugin interaction survives the cancel
+    ctx.end_canvas_interaction()
+
+
 def test_example_plugins_launch():
     w = _tracked_window()
     app = _app()
@@ -229,6 +251,56 @@ def test_principal_stretches_known():
     local_idx, F_fit, _b = fit_zone_deformation(polygon, ref, cur)
     assert local_idx.size == ref.shape[0]
     assert np.allclose(F_fit, F, atol=1e-4)
+
+
+def test_zone_fit_excludes_lost_tracks():
+    """Qt-free: a track LK lost (valid=False) must be dropped before the deformation fit, or its
+    frozen position biases F. Regression for the plain-lstsq robustness gap."""
+    from plugins.affine_zones.zones import fit_zone_deformation
+
+    polygon = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    F = np.diag([2.0, 0.5])
+    ref = np.array([[1, 1], [9, 2], [3, 8], [6, 6], [5, 4]], dtype=np.float32)
+    cur = (ref @ F.T).astype(np.float32)
+    cur[2] = [999.0, -999.0]  # a dead/frozen track that would skew a plain LS fit
+    valid = np.array([True, True, False, True, True])
+
+    local_idx, F_fit, _b = fit_zone_deformation(polygon, ref, cur, valid=valid)
+    assert local_idx.size == 4  # the corrupt point was excluded
+    assert np.allclose(F_fit, F, atol=1e-4)
+
+    # Without the mask the corrupt point poisons the fit.
+    _, F_bad, _ = fit_zone_deformation(polygon, ref, cur)
+    assert not np.allclose(F_bad, F, atol=1e-4)
+
+
+def test_track_status_accessor():
+    """ctx.track_status mirrors coords: (frames, points), reference frame all-valid."""
+    w = _tracked_window()
+    ctx = PluginContext(w, "test")
+    st = ctx.track_status(active_only=True)
+    assert st is not None and st.shape == (ctx.frame_count, ctx.n_active)
+    assert (st[0] == 1).all()  # every seed is valid on the reference frame
+
+
+def test_stretch_plot_opens():
+    """The matplotlib import is deferred + broadly guarded, and the plot window builds and
+    replots. Closing the plugin window also tears the plot window down."""
+    from plugins.affine_zones.zones import Zone, default_zone_color
+
+    w = _tracked_window()
+    rec = w.plugin_manager._records["affine_zones"]
+    plugin = rec.cls(PluginContext(w, "affine_zones"))
+    win = plugin.launch()
+    win.zones.append(Zone([(60, 50), (240, 50), (240, 180), (60, 180)], default_zone_color(0)))
+
+    win._open_plot()
+    assert win._plot_window is not None and win._plot_window.isVisible()
+    win._plot_window.replot()  # exercises the per-frame fit + status filtering
+
+    win.close()  # AffineZonesWindow.closeEvent must close the plot window too
+    assert win._plot_window is None
+    plugin.on_unload()
 
 
 if __name__ == "__main__":

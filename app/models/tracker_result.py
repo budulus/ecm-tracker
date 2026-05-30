@@ -26,6 +26,10 @@ class TrackerResult:
     fb_mean_error: np.ndarray  # (P,) float32
     fb_max_error: np.ndarray  # (P,) float32
 
+    # LK window size (px) used to produce this result, so overlays can show the actual search
+    # window even if the user later edits the Tracker params without re-running.
+    win_size: int = 0
+
     @property
     def n_frames(self) -> int:
         return self.coords_fw.shape[0]

@@ -344,7 +344,6 @@ class CanvasView(QWidget):
         alpha = round(255 * display["marker_opacity"] / 100)
         trail_alpha = round(140 * display["marker_opacity"] / 100)
         show_box = display["show_window_box"]
-        half = state.lk_params["win_size"] / 2.0
 
         cut = state.global_to_cut(state.current_index)
         coords = result.coords_fw[cut]
@@ -352,32 +351,48 @@ class CanvasView(QWidget):
         active = state.active_mask
         preview = self._preview_keep_mask
 
-        green = QColor(0, 220, 0)
-        red = QColor(255, 60, 60)
+        # Marker/trail pens are constant per keep-state, so build them once rather than
+        # allocating a QColor/QPen/QBrush per point inside the loop.
+        def _pens(rgb):
+            c = QColor(*rgb)
+            c.setAlpha(alpha)
+            t = QColor(*rgb)
+            t.setAlpha(trail_alpha)
+            return QPen(c, 1), QBrush(c), QPen(t, 1)
+
+        kept_pen, kept_brush, kept_trail = _pens((0, 220, 0))
+        drop_pen, drop_brush, drop_trail = _pens((255, 60, 60))
+
+        box_pen = None
+        if show_box:
+            # Use the win_size tracking actually used (recorded on the result), not the live
+            # param, which the user may have edited after tracking without re-running.
+            half = (result.win_size or state.lk_params["win_size"]) / 2.0
+            box_color = QColor(0, 220, 0)
+            box_color.setAlpha(alpha)
+            box_pen = QPen(box_color, 1)
+
         for p in range(result.n_points):
             if active is not None and not active[p]:
                 continue
             keep = True if preview is None else bool(preview[p])
-            color = QColor(green if keep else red)
-            color.setAlpha(alpha)
-            here = self.image_to_screen(coords[p][0], coords[p][1])
+            pen, brush, trail_pen = (
+                (kept_pen, kept_brush, kept_trail) if keep
+                else (drop_pen, drop_brush, drop_trail)
+            )
+            x, y = coords[p][0], coords[p][1]
+            here = self.image_to_screen(x, y)
             if show_box:
                 # The window box is an image-space region, so map its corners through the
                 # transform: it scales with zoom (unlike the constant-size markers).
-                tl = self.image_to_screen(coords[p][0] - half, coords[p][1] - half)
-                br = self.image_to_screen(coords[p][0] + half, coords[p][1] + half)
-                box_color = QColor(0, 220, 0)
-                box_color.setAlpha(alpha)
-                painter.setPen(QPen(box_color, 1))
+                tl = self.image_to_screen(x - half, y - half)
+                br = self.image_to_screen(x + half, y + half)
+                painter.setPen(box_pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(QRectF(tl, br))
             if prev is not None:
-                trail = QColor(color)
-                trail.setAlpha(trail_alpha)
-                painter.setPen(QPen(trail, 1))
-                painter.drawLine(
-                    self.image_to_screen(prev[p][0], prev[p][1]), here
-                )
-            painter.setPen(QPen(color, 1))
-            painter.setBrush(QBrush(color))
+                painter.setPen(trail_pen)
+                painter.drawLine(self.image_to_screen(prev[p][0], prev[p][1]), here)
+            painter.setPen(pen)
+            painter.setBrush(brush)
             painter.drawEllipse(here, radius, radius)

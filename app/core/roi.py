@@ -12,6 +12,8 @@ class ROI:
     build a complete polygon in one shot this way).
     """
 
+    MIN_CORNERS = 3  # a usable polygon needs at least a triangle
+
     def __init__(self, corners: Optional[Sequence[Tuple[float, float]]] = None):
         self.corners: List[Tuple[float, float]] = [
             (float(x), float(y)) for x, y in (corners or [])
@@ -20,7 +22,9 @@ class ROI:
 
     @property
     def is_complete(self) -> bool:
-        return self.closed
+        # Closed *and* at least a triangle: guards against a degenerate 1–2 corner polygon
+        # (e.g. ROI([p]) ) being treated as a usable, fillable region.
+        return self.closed and len(self.corners) >= self.MIN_CORNERS
 
     def add_corner(self, x: float, y: float) -> None:
         if not self.closed:
@@ -50,3 +54,15 @@ class ROI:
         if not self.is_complete:
             return False
         return cv2.pointPolygonTest(self._contour(), (float(x), float(y)), False) >= 0
+
+    def contains_many(self, pts) -> np.ndarray:
+        """Boolean mask over rows of ``pts`` (an ``(N, 2)`` array of ``(x, y)``) that lie inside a
+        *complete* ROI. All-False for an incomplete ROI. Vectorized sibling of :meth:`contains`."""
+        pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+        if not self.is_complete:
+            return np.zeros(len(pts), dtype=bool)
+        contour = self._contour()
+        return np.array(
+            [cv2.pointPolygonTest(contour, (float(x), float(y)), False) >= 0 for x, y in pts],
+            dtype=bool,
+        )

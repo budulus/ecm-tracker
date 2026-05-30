@@ -131,4 +131,5 @@ def track(
         err_bw=err_bw,
         fb_mean_error=fb_mean,
         fb_max_error=fb_max,
+        win_size=int(lk_params["win_size"]),
     )

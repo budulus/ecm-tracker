@@ -63,6 +63,8 @@ def export_csv(
         writer = csv.writer(f)
         writer.writerow(header)
         for i in range(n_frames):
-            writer.writerow([frame_names[i], *(repr(float(v)) for v in flat[i])])
+            # Fixed 6-decimal format (matches the affine_zones exporter); repr() would emit
+            # noisy full-precision float64 expansions of the float32 values.
+            writer.writerow([frame_names[i], *(f"{v:.6f}" for v in flat[i])])
 
     return csv_path, coords.shape

@@ -77,3 +77,34 @@ class CircleTool(_DragTool):
             return None
         angles = np.linspace(0.0, 2.0 * np.pi, CIRCLE_SEGMENTS, endpoint=False)
         return [(cx + r * math.cos(a), cy + r * math.sin(a)) for a in angles]
+
+
+class NGonTool:
+    """Collect ``n`` clicks to define an arbitrary polygon ROI; the n-th click closes it.
+
+    A click-based ``CanvasInteraction`` (duck-typed like the drag tools). Unlike them it builds
+    the ROI incrementally on ``window.state.roi`` so the in-progress polyline previews after each
+    click (an incomplete ROI draws open). Replaces the old imageClicked path so all three shapes
+    go through the single canvas-interaction mechanism.
+    """
+
+    def __init__(self, window, n):
+        self.window = window
+        self.n = n
+
+    def on_press(self, image_pt, event) -> None:
+        roi = self.window.state.roi
+        if roi is None:
+            return
+        roi.add_corner(image_pt.x(), image_pt.y())
+        if len(roi.corners) >= self.n:
+            roi.close()
+            self.window._finish_roi_definition()
+        else:
+            self.window.canvas.refresh()
+            self.window._update_tool_states()
+
+    def on_cancel(self) -> None:
+        # Abort before the n-th click is handled by the window's _cancel_roi_definition (it
+        # discards the incomplete ROI); nothing tool-local to undo.
+        pass

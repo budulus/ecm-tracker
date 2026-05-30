@@ -11,13 +11,13 @@ The icon glyph colors live in ``icon_loader`` (NORMAL/ACCENT/DISABLED) and are
 kept visually in sync with this sheet.
 """
 
-import os
-
 from PyQt5.QtWidgets import QApplication
 
-# Absolute path to the bundled icons, with forward slashes so it is valid inside
-# QSS ``url(...)`` on Windows too. Mirrors ``icon_loader._ICON_DIR``.
-_ICON_DIR = os.path.join(os.path.dirname(__file__), "icons").replace("\\", "/")
+from app.gui.icon_loader import _ICON_DIR as _ICON_DIR_RAW
+
+# The bundled-icons dir as a QSS url() path: forward slashes so url(...) is valid on Windows
+# too. Single source of truth is icon_loader._ICON_DIR.
+_ICON_DIR = _ICON_DIR_RAW.replace("\\", "/")
 
 LIGHT_QSS = """
 * { font-size: 13px; }

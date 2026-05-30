@@ -31,7 +31,7 @@ from app.core.image_sequence import ImageSequence, discover
 from app.core.roi import ROI
 from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
-from app.gui.roi_tools import CircleTool, RectangleTool
+from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
 from app.models.project_state import ProjectState
@@ -101,7 +101,6 @@ class MainWindow(QMainWindow):
 
         self.state = ProjectState()
         self.canvas = CanvasView(self.state)
-        self.canvas.imageClicked.connect(self._on_image_clicked)
         self.signals = PluginSignals()  # state-change hub broadcast to plugins
         self._status_label = QLabel()
         self.statusBar().addPermanentWidget(self._status_label)
@@ -109,7 +108,6 @@ class MainWindow(QMainWindow):
         self._cleanup_dialog = None
         self._cleanup_metrics = None
         self._preview_keep = None
-        self._roi_target_corners = 4  # number of clicks an N-Gon definition collects
         self._last_ngon_sides = 4  # remembered N for the N-Gon prompt default
 
         self.current_slider = LabeledSlider("Current")
@@ -193,8 +191,8 @@ class MainWindow(QMainWindow):
         self.define_roi_action.setToolTip("Define an ROI — Rectangle, Circle, or N-Gon")
 
         self._roi_menu = QMenu(self)
-        self._roi_menu.addAction("Rectangle", self._begin_rect)
-        self._roi_menu.addAction("Circle", self._begin_circle)
+        self._roi_menu.addAction("Rectangle", lambda: self._begin_roi_definition("rectangle"))
+        self._roi_menu.addAction("Circle", lambda: self._begin_roi_definition("circle"))
         self._roi_menu.addAction("N-Gon…", self._begin_ngon)
 
         self.clear_roi_action = QAction(load_icon("square-x"), "Clear", self)
@@ -421,12 +419,6 @@ class MainWindow(QMainWindow):
         if checked:
             self._cancel_roi_definition()
 
-    def _begin_rect(self) -> None:
-        self._begin_roi_definition("rectangle")
-
-    def _begin_circle(self) -> None:
-        self._begin_roi_definition("circle")
-
     def _begin_ngon(self) -> None:
         n, ok = QInputDialog.getInt(
             self, "N-Gon ROI", "Number of points:", self._last_ngon_sides, 3, 50
@@ -448,8 +440,7 @@ class MainWindow(QMainWindow):
         self.state.roi = ROI()
         self.define_roi_action.setChecked(True)
         if shape == "ngon":
-            self._roi_target_corners = n
-            self.canvas.clear_interaction()  # collect clicks via the imageClicked path
+            self.canvas.set_interaction(NGonTool(self, n))
             message = f"Click {n} points to define the ROI (Esc to cancel)."
         elif shape == "rectangle":
             self.canvas.set_interaction(RectangleTool(self))
@@ -464,6 +455,11 @@ class MainWindow(QMainWindow):
     def _commit_interactive_roi(self, corners) -> None:
         """Finalize an ROI built by a drag tool (Rectangle / Circle)."""
         self.state.roi = ROI(corners)
+        self._finish_roi_definition()
+
+    def _finish_roi_definition(self) -> None:
+        """Shared completion for every ROI tool: drop the interaction and notify. The tool has
+        already populated ``state.roi`` (drag tools build it fresh; the N-Gon tool closes it)."""
         self.define_roi_action.setChecked(False)
         self.canvas.clear_interaction()
         self.statusBar().showMessage("ROI complete.", 4000)
@@ -472,10 +468,17 @@ class MainWindow(QMainWindow):
         self._update_tool_states()
 
     def _cancel_roi_definition(self, silent: bool = False) -> None:
-        """Abort any in-progress ROI definition (Esc, pan tool, or starting a new shape)."""
+        """Abort an in-progress ROI definition (Esc, pan tool, or starting a new shape).
+
+        No-op unless *we* are mid-definition. ``define_roi_action`` is checked only while an
+        ROI is being defined, and ``begin_canvas_interaction`` unchecks it when a plugin takes
+        over the canvas — so this never tears down a plugin's interaction. (Esc while a plugin
+        is capturing canvas clicks must leave its handler intact.)
+        """
+        if not self.define_roi_action.isChecked():
+            return
         self.canvas.clear_interaction()
-        if self.define_roi_action.isChecked():
-            self.define_roi_action.setChecked(False)
+        self.define_roi_action.setChecked(False)
         if self.state.roi is not None and not self.state.roi.is_complete:
             self.state.roi = None
         if not silent:
@@ -493,21 +496,6 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_tool_states()
         self.signals.roi_changed.emit()
-
-    def _on_image_clicked(self, image_pt) -> None:
-        if not (self.define_roi_action.isChecked() and self.state.on_reference_frame):
-            return
-        roi = self.state.roi
-        if roi is None:
-            return
-        roi.add_corner(image_pt.x(), image_pt.y())
-        if len(roi.corners) >= self._roi_target_corners:
-            roi.close()
-            self.define_roi_action.setChecked(False)
-            self.statusBar().showMessage("ROI complete.", 4000)
-            self.signals.roi_changed.emit()
-        self.canvas.refresh()
-        self._update_tool_states()
 
     # ---- feature detection ---------------------------------------------
     def _open_corner_dialog(self) -> None:
@@ -707,26 +695,33 @@ class MainWindow(QMainWindow):
         self._update_tool_states()
 
     # ---- export ---------------------------------------------------------
-    def _export(self) -> None:
-        result = self.state.result
-        if result is None or self.state.active_mask is None:
-            return
+    def _export_target(self, default_name: str, caption: str, file_filter: str):
+        """Shared export precondition + save dialog. Returns ``(out_dir, filename)``, or ``None``
+        if there is nothing to export or the user cancelled."""
+        if self.state.result is None or self.state.active_mask is None:
+            return None
         if not self.state.active_mask.any():
             QMessageBox.warning(self, "Nothing to export", "No points remain to export.")
-            return
-        default_path = os.path.join(self.state.source_dir or "", "coords.npy")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export coordinates", default_path, "NumPy array (*.npy)"
-        )
+            return None
+        default_path = os.path.join(self.state.source_dir or "", default_name)
+        path, _ = QFileDialog.getSaveFileName(self, caption, default_path, file_filter)
         if not path:
+            return None
+        return os.path.dirname(path), os.path.basename(path)
+
+    def _export(self) -> None:
+        target = self._export_target("coords.npy", "Export coordinates", "NumPy array (*.npy)")
+        if target is None:
             return
+        out_dir, filename = target
+        result = self.state.result
         coords_path, seq_path, shape = export(
             result.coords_fw,
             self.state.active_mask,
             result.reference_index,
             result.last_index,
-            os.path.dirname(path),
-            os.path.basename(path),
+            out_dir,
+            filename,
         )
         self.statusBar().showMessage(
             f"Exported {shape[1]} points x {shape[0]} frames to "
@@ -735,18 +730,13 @@ class MainWindow(QMainWindow):
         )
 
     def _export_csv(self) -> None:
-        result = self.state.result
-        if result is None or self.state.active_mask is None:
-            return
-        if not self.state.active_mask.any():
-            QMessageBox.warning(self, "Nothing to export", "No points remain to export.")
-            return
-        default_path = os.path.join(self.state.source_dir or "", "coords.csv")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export coordinates as CSV", default_path, "CSV file (*.csv)"
+        target = self._export_target(
+            "coords.csv", "Export coordinates as CSV", "CSV file (*.csv)"
         )
-        if not path:
+        if target is None:
             return
+        out_dir, filename = target
+        result = self.state.result
         frame_names = [
             os.path.basename(self.state.sequence.paths[g])
             for g in range(result.reference_index, result.last_index + 1)
@@ -755,8 +745,8 @@ class MainWindow(QMainWindow):
             result.coords_fw,
             self.state.active_mask,
             frame_names,
-            os.path.dirname(path),
-            os.path.basename(path),
+            out_dir,
+            filename,
         )
         self.statusBar().showMessage(
             f"Exported {shape[1]} points x {shape[0]} frames to "
@@ -790,8 +780,10 @@ class MainWindow(QMainWindow):
         self.last_slider.setEnabled(has and not has_result)
 
         if self.define_roi_action.isChecked() and not on_ref:
-            self.canvas.clear_interaction()
-            self.define_roi_action.setChecked(False)
+            # Leaving the reference frame mid-definition: discard the partial ROI too, or the
+            # half-placed N-Gon polyline is orphaned (kept painting, detection silently blocked
+            # until the user Clears). silent=True avoids recursing back into _update_tool_states.
+            self._cancel_roi_definition(silent=True)
 
     # ---- status ---------------------------------------------------------
     def _update_status(self) -> None:

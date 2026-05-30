@@ -250,6 +250,19 @@ class PluginContext:
             return coords[:, mask, :]
         return coords
 
+    def track_status(self, active_only: bool = True) -> Optional[np.ndarray]:
+        """Forward per-frame tracking status as an ``(frames, points)`` uint8 array, aligned to
+        :meth:`coords` (``1`` = the point was tracked OK at that frame, ``0`` = LK failed and the
+        position was carried forward). Use it to drop dead/frozen tracks before fitting. Same
+        ``active_only`` semantics as :meth:`coords`; ``None`` if there is no result."""
+        if not self.has_result:
+            return None
+        status = self._state.result.status_fw
+        mask = self.active_mask
+        if active_only and mask is not None:
+            return status[:, mask]
+        return status
+
     def metrics(self) -> Optional[Metrics]:
         """Per-point quality metrics (FB error, failure counts, max step, out-of-bounds …),
         computed once and cached. ``None`` if no result. See ``app/core/cleanup.py:Metrics``."""

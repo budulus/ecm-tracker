@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from app.core.roi import ROI
 from app.plugins import CanvasInteraction
 
 MIN_ZONE_POINTS = 3  # an affine fit needs at least 3 correspondences
@@ -68,22 +69,25 @@ class Zone:
 
 
 def points_in_polygon(polygon, pts):
-    """Boolean mask of which (x, y) rows of ``pts`` fall inside ``polygon`` (list of (x, y))."""
-    contour = np.array(polygon, dtype=np.float32).reshape(-1, 1, 2)
-    return np.array(
-        [cv2.pointPolygonTest(contour, (float(x), float(y)), False) >= 0 for x, y in pts],
-        dtype=bool,
-    )
+    """Boolean mask of which (x, y) rows of ``pts`` fall inside ``polygon``. Delegates to
+    ``ROI.contains_many`` so the point-in-polygon test lives in one place (``app.core.roi``)."""
+    return ROI(list(polygon)).contains_many(pts)
 
 
-def fit_zone_deformation(polygon, ref_pts, cur_pts):
+def fit_zone_deformation(polygon, ref_pts, cur_pts, valid=None):
     """Least-squares affine fit for the points inside ``polygon``.
 
     Returns ``(local_idx, F, b)`` where ``local_idx`` indexes into the active-point arrays, ``F``
     is the 2×2 deformation gradient (linear part of ``x' = F x + b``) and ``b`` is the translation
     (discarded by callers). Returns ``None`` if the zone holds too few points.
+
+    ``valid`` (optional) is a bool mask over the active points; points that are False — e.g. a
+    track LK lost at this frame, whose last position was carried forward — are excluded so dead
+    tracks don't bias the deformation gradient.
     """
     inside = points_in_polygon(polygon, ref_pts)
+    if valid is not None:
+        inside = inside & np.asarray(valid, dtype=bool)
     local_idx = np.where(inside)[0]
     if local_idx.size < MIN_ZONE_POINTS:
         return None
@@ -112,13 +116,17 @@ def principal_stretches(F):
     return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
 
 
-def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, max_iters=2000, confidence=0.99):
+def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, max_iters=2000, confidence=0.99,
+                    valid=None):
     """RANSAC affine fit for the points inside ``polygon`` (used by the cleaning dialog).
 
     Returns ``(local_idx, M, inliers)`` where ``M`` is the 2×3 affine (or None) and ``inliers`` is
     a bool array aligned to ``local_idx``. Returns ``None`` if the zone holds too few points.
+    ``valid`` (optional) excludes lost tracks before RANSAC, as in :func:`fit_zone_deformation`.
     """
     inside = points_in_polygon(polygon, ref_pts)
+    if valid is not None:
+        inside = inside & np.asarray(valid, dtype=bool)
     local_idx = np.where(inside)[0]
     if local_idx.size < MIN_ZONE_POINTS:
         return None
@@ -164,6 +172,7 @@ class AffineZonesWindow(QWidget):
         self._ransac_dialog = None
         self._ransac_preview = None  # (zone_idx, local_idx, inliers) while previewing
         self._plot_window = None
+        self._fits_cache = None  # per-zone fits for the current state; invalidated in _refresh
 
         self.new_btn = QPushButton("New Zone")
         self.finish_btn = QPushButton("Finish Zone")
@@ -200,8 +209,7 @@ class AffineZonesWindow(QWidget):
         ctx.signals.frame_changed.connect(self._refresh)
         ctx.signals.result_changed.connect(self._refresh)
         ctx.signals.mask_changed.connect(self._refresh)
-        self._update_buttons()
-        self._refresh()
+        self._refresh()  # also refreshes button-enable state (see _refresh's tail)
 
     # ---- lifecycle ------------------------------------------------------
     def showEvent(self, event):
@@ -241,8 +249,7 @@ class AffineZonesWindow(QWidget):
             self.zones.append(Zone(self._tool.vertices, default_zone_color(len(self.zones))))
         self.ctx.end_canvas_interaction()
         self._tool = None
-        self._update_buttons()
-        self._refresh()
+        self._refresh()  # rebuilds the table and refreshes button-enable state
 
     def _clear_zones(self):
         self.zones.clear()
@@ -265,7 +272,23 @@ class AffineZonesWindow(QWidget):
         )
 
     # ---- compute --------------------------------------------------------
-    def _current_fits(self):
+    def _valid_at(self, cut):
+        """Per-active-point bool mask: True where the track is valid at frame ``cut`` (LK didn't
+        lose it). ``None`` if no result, which the fit functions treat as 'all points valid'."""
+        status = self.ctx.track_status(active_only=True)
+        if status is None or cut is None:
+            return None
+        return status[cut] == 1
+
+    def _get_fits(self):
+        """Per-zone fits for the current frame, cached so a refresh and the paint it triggers
+        (plus incidental repaints from zoom/pan) don't each redo the least-squares fits. The
+        cache is invalidated in _refresh, which every state-change signal funnels through."""
+        if self._fits_cache is None:
+            self._fits_cache = self._compute_fits()
+        return self._fits_cache
+
+    def _compute_fits(self):
         """Return a list aligned to self.zones of (local_idx, F) or None per zone."""
         ctx = self.ctx
         cut = ctx.current_cut
@@ -273,18 +296,21 @@ class AffineZonesWindow(QWidget):
         if cut is None or coords is None or coords.shape[1] == 0:
             return [None] * len(self.zones)
         ref_pts, cur_pts = coords[0], coords[cut]
+        valid = self._valid_at(cut)
         out = []
         for zone in self.zones:
-            fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts)
+            fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
             out.append((fit[0], fit[1]) if fit is not None else None)
         return out
 
     def _refresh(self):
-        fits = self._current_fits()
+        self._fits_cache = None  # state changed: recompute fits once, then reuse in _paint
+        fits = self._get_fits()
         self.table.setRowCount(len(self.zones))
         for z, fit in enumerate(fits):
             self._set_cell(z, COL_ZONE, str(z + 1))
-            self._install_color_button(z)
+            if self.table.cellWidget(z, COL_COLOR) is None:
+                self._install_color_button(z)  # only build it once per row, not every refresh
             if fit is None:
                 for col in (COL_PTS, COL_L1, COL_L2, COL_V1, COL_V2):
                     self._set_cell(z, col, "—")
@@ -362,13 +388,15 @@ class AffineZonesWindow(QWidget):
             return
         if self._plot_window is None:
             try:
-                self._plot_window = StretchPlotWindow(self)
-            except ImportError:
+                mpl = _load_matplotlib()  # before constructing the widget, so nothing leaks
+            except Exception:
                 QMessageBox.critical(
-                    self, "matplotlib missing",
-                    "matplotlib is required for plotting. Run `uv sync` and try again.",
+                    self, "matplotlib unavailable",
+                    "matplotlib with a working Qt5 backend is required for plotting. "
+                    "Run `uv sync` and try again.",
                 )
                 return
+            self._plot_window = StretchPlotWindow(self, mpl)
         self._plot_window.show()
         self._plot_window.raise_()
         self._plot_window.replot()
@@ -394,6 +422,7 @@ class AffineZonesWindow(QWidget):
             return
         ref_pts = coords[0]
         ref_global = self.ctx.reference_index
+        status = self.ctx.track_status(active_only=True)
         try:
             with open(path, "w", newline="") as f:
                 w = csv.writer(f)
@@ -401,8 +430,9 @@ class AffineZonesWindow(QWidget):
                             "lambda1", "lambda2", "v1x", "v1y", "v2x", "v2y"])
                 for cut in range(self.ctx.frame_count):
                     cur_pts = coords[cut]
+                    valid = None if status is None else (status[cut] == 1)
                     for z, zone in enumerate(self.zones):
-                        fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts)
+                        fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
                         if fit is None:
                             continue
                         local_idx, F, _b = fit
@@ -418,7 +448,7 @@ class AffineZonesWindow(QWidget):
 
     # ---- overlay --------------------------------------------------------
     def _paint(self, painter, ctx):
-        fits = self._current_fits()
+        fits = self._get_fits()
         coords = ctx.coords(active_only=True)
         cut = ctx.current_cut
         cur_pts = coords[cut] if (coords is not None and cut is not None) else None
@@ -511,7 +541,7 @@ class RansacDialog(QDialog):
         fit = fit_zone_affine(
             self.owner.zones[z].polygon, coords[0], coords[cut],
             reproj=self.reproj.value(), max_iters=self.max_iters.value(),
-            confidence=self.confidence.value(),
+            confidence=self.confidence.value(), valid=self.owner._valid_at(cut),
         )
         return z, fit
 
@@ -554,10 +584,23 @@ class RansacDialog(QDialog):
         super().closeEvent(event)
 
 
+def _load_matplotlib():
+    """Lazily import the matplotlib Qt5 backend, returning ``(FigureCanvasQTAgg, Figure)``.
+
+    Deferred (not module-level) so the plugin's mere import doesn't pull in matplotlib at app
+    startup. Raises on *any* failure — a missing package (ImportError) or a backend that fails to
+    initialize (e.g. a Qt-binding mismatch, which raises non-ImportError) — so the caller can show
+    a message and skip constructing the plot widget entirely.
+    """
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
+    from matplotlib.figure import Figure
+    return FigureCanvasQTAgg, NavigationToolbar2QT, Figure
+
+
 class StretchPlotWindow(QWidget):
     """Embedded matplotlib plot of λ1 (solid) / λ2 (dashed) over frames, per zone color."""
 
-    def __init__(self, owner):
+    def __init__(self, owner, mpl):
         super().__init__(owner)
         self.owner = owner
         self.ctx = owner.ctx
@@ -565,8 +608,7 @@ class StretchPlotWindow(QWidget):
         self.setWindowTitle("Principal stretches over frames")
         self.resize(720, 480)
 
-        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
-        from matplotlib.figure import Figure
+        FigureCanvasQTAgg, NavigationToolbar2QT, Figure = mpl
 
         self.figure = Figure(tight_layout=True)
         self.canvas = FigureCanvasQTAgg(self.figure)
@@ -588,12 +630,14 @@ class StretchPlotWindow(QWidget):
         coords = self.ctx.coords(active_only=True)
         if coords is not None and coords.shape[1] > 0:
             ref_pts = coords[0]
+            status = self.ctx.track_status(active_only=True)
             frames = np.array([self.ctx.cut_to_global(t) for t in range(self.ctx.frame_count)])
             for z, zone in enumerate(self.owner.zones):
                 lam1 = np.full(self.ctx.frame_count, np.nan)
                 lam2 = np.full(self.ctx.frame_count, np.nan)
                 for t in range(self.ctx.frame_count):
-                    fit = fit_zone_deformation(zone.polygon, ref_pts, coords[t])
+                    valid = None if status is None else (status[t] == 1)
+                    fit = fit_zone_deformation(zone.polygon, ref_pts, coords[t], valid=valid)
                     if fit is None:
                         continue
                     lam1[t], lam2[t], _v1, _v2 = principal_stretches(fit[1])

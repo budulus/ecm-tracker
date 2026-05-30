@@ -1,9 +1,11 @@
 //! Seed-point generation: Shi-Tomasi corners or a regular grid clipped to the ROI.
 //! Ports `app/core/feature_detection.py`.
 
+use crate::image_sequence::ImageSequence;
 use crate::roi::Roi;
 use opencv::core::{Mat, Point2f, Vector};
 use opencv::imgproc;
+use opencv::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Shi-Tomasi / Harris corner parameters (`DEFAULT_SHI_TOMASI`).
@@ -67,6 +69,24 @@ pub fn shi_tomasi(
         params.k,
     )?;
     Ok(corners.iter().map(|p| (p.x, p.y)).collect())
+}
+
+/// Detect Shi-Tomasi corners on the reference frame, restricted to a complete ROI if given.
+/// Convenience wrapper that keeps OpenCV `Mat` out of the GUI layer.
+pub fn detect_corners(
+    seq: &ImageSequence,
+    reference_index: usize,
+    roi: Option<&Roi>,
+    params: &ShiTomasiParams,
+) -> Result<Vec<(f32, f32)>, String> {
+    let gray = seq.load_gray(reference_index).map_err(|e| e.to_string())?;
+    let mask = match roi {
+        Some(r) if r.is_complete() => {
+            Some(r.mask(gray.rows(), gray.cols()).map_err(|e| e.to_string())?)
+        }
+        _ => None,
+    };
+    shi_tomasi(&gray, mask.as_ref(), params).map_err(|e| e.to_string())
 }
 
 /// `np.arange(start, stop, step)` — count = ceil((stop-start)/step), values start + i*step.

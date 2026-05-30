@@ -1,10 +1,10 @@
 //! Frame canvas: image→screen transform (fit-to-rect → zoom → pan), texture draw, and
 //! scroll-zoom / drag-pan. Ports the geometry model of `app/gui/canvas_view.py` to egui.
 //!
-//! All overlay geometry will be stored in *image* coordinates and mapped through `Transform`
-//! at paint time, so markers stay constant-size under zoom (same approach as the Qt canvas).
+//! Overlay geometry is stored in *image* coordinates and mapped through `Transform` at paint
+//! time, so markers/handles stay constant-size under zoom (same approach as the Qt canvas).
 
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, TextureHandle, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
 
 /// Maps image pixels ↔ screen pixels for the current view.
 #[derive(Clone, Copy)]
@@ -21,6 +21,14 @@ impl Transform {
         let d = p - self.origin;
         Pos2::new(d.x / self.scale, d.y / self.scale)
     }
+}
+
+/// What `CanvasView::show` produced: the widget rect, the active transform (None when no
+/// frame is shown), and the interaction response (for tool-specific image-space input).
+pub struct CanvasOut {
+    pub rect: Rect,
+    pub transform: Option<Transform>,
+    pub response: egui::Response,
 }
 
 /// Pan/zoom view state for the canvas.
@@ -51,23 +59,30 @@ impl CanvasView {
         Transform { origin, scale }
     }
 
-    /// Draw the frame texture (if any) with the current view and handle input.
-    /// Returns the active `Transform` so callers can paint overlays in image space.
+    /// Draw the frame texture (if any) with the current view and handle pan/zoom.
+    /// `allow_primary_pan` lets the active tool claim left-drag (e.g. ROI drawing); middle/right
+    /// drag always pans. Returns the rect + transform + response for overlays and tools.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         tex: Option<(&TextureHandle, [usize; 2])>,
-    ) -> Option<Transform> {
+        allow_primary_pan: bool,
+    ) -> CanvasOut {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(30));
 
-        let (handle, [iw, ih]) = tex?;
+        let Some((handle, [iw, ih])) = tex else {
+            return CanvasOut { rect, transform: None, response };
+        };
         let (img_w, img_h) = (iw as f32, ih as f32);
 
-        // Drag to pan.
-        if response.dragged() {
+        // Pan: middle/right drag always; left drag only when the tool doesn't claim it.
+        let pan = response.dragged_by(egui::PointerButton::Middle)
+            || response.dragged_by(egui::PointerButton::Secondary)
+            || (allow_primary_pan && response.dragged_by(egui::PointerButton::Primary));
+        if pan {
             self.pan += response.drag_delta();
         }
 
@@ -93,6 +108,36 @@ impl CanvasView {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
         );
-        Some(t)
+        CanvasOut { rect, transform: Some(t), response }
+    }
+}
+
+const ROI_OUTLINE: Color32 = Color32::from_rgb(255, 215, 0); // gold
+const ROI_VERTEX: Color32 = Color32::from_rgb(255, 0, 255); // magenta
+
+/// Draw an ROI polygon (image-space corners) in screen space: outline + vertex handles.
+/// `closed` joins the last corner back to the first.
+pub fn draw_roi(painter: &egui::Painter, t: &Transform, corners: &[(f64, f64)], closed: bool) {
+    if corners.is_empty() {
+        return;
+    }
+    let pts: Vec<Pos2> = corners
+        .iter()
+        .map(|&(x, y)| t.image_to_screen(x as f32, y as f32))
+        .collect();
+    let stroke = Stroke::new(2.0, ROI_OUTLINE);
+    let edges = if closed { pts.len() } else { pts.len().saturating_sub(1) };
+    for i in 0..edges {
+        painter.line_segment([pts[i], pts[(i + 1) % pts.len()]], stroke);
+    }
+    for p in &pts {
+        painter.circle_filled(*p, 4.0, ROI_VERTEX);
+    }
+}
+
+/// Draw a set of image-space points as constant-size filled markers (e.g. seed features).
+pub fn draw_points(painter: &egui::Painter, t: &Transform, pts: &[(f32, f32)], color: Color32, radius: f32) {
+    for &(x, y) in pts {
+        painter.circle_filled(t.image_to_screen(x, y), radius, color);
     }
 }

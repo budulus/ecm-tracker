@@ -10,10 +10,10 @@ build environment, and the next steps. Companion docs:
 - This is the in-progress **Rust + egui + embedded-Python** rewrite of the PyQt5 ECM Tracker.
   The Python app under `../app/` is the working reference; `rust/` is the port.
 - **Done:** Phase 0 (scaffold + toolchain), Phase 1 (full `core`+`models` port, parity-tested
-  bit-identical), Phase 2 slices 1–2 (canvas + ROI/detection).
+  bit-identical), Phase 2 slices 1–3 (canvas + ROI/detection + Run Tracking & overlays).
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 2 slice 3 — Run Tracking (with progress) + tracked-point/trail overlays.
+- **Next:** Phase 2 slice 4 — Cleanup panel (band filters + live preview + apply/undo).
 
 ## Status
 
@@ -21,13 +21,15 @@ build environment, and the next steps. Companion docs:
 |---|---|---|
 | 0 — scaffold + toolchain de-risk | ✅ done, pushed | `b0a3c26` |
 | 1 — core + models port (parity-tested) | ✅ done, pushed | `3b25e05` |
-| 2 slice 1 — canvas (open/display/zoom/pan/scrub) | ✅ done | `ca0f1ab` (⚠ unpushed) |
-| 2 slice 2 — ROI rect + corner detection + overlays | ✅ done | latest commit (⚠ unpushed) |
-| 2 slice 3+ — tracking, cleanup, dialogs, theme/icons | ⬜ next | — |
+| 2 slice 1 — canvas (open/display/zoom/pan/scrub) | ✅ done, pushed | `ca0f1ab` |
+| 2 slice 2 — ROI rect + corner detection + overlays | ✅ done, pushed | `95f61a0` |
+| 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done | ⚠ uncommitted |
+| 2 slice 4+ — cleanup, dialogs, theme/icons | ⬜ next | — |
 
-⚠ **`origin/main` is behind local `main`** — the Forgejo push fails on Git Credential Manager
-auth (interactive prompt this tool can't answer). Run `git push origin main` yourself; if it
-rejects, clear the `placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager.
+⚠ **Slice 3 is implemented + verified locally but not yet committed.** When committing, note the
+Forgejo push can fail on Git Credential Manager auth (interactive prompt this tool can't answer):
+run `git push origin main` yourself, and if it rejects, clear the
+`placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager.
 
 ## Build environment (critical — read before building)
 
@@ -88,11 +90,18 @@ rust/crates/
 
 ## Next steps (priority order)
 
-1. **Phase 2 slice 3 — Run Tracking + overlays.** Wire `core::tracking::track` (it takes an
-   optional `progress` callback → drive a progress bar / cancel). On completion set
-   `state.result` and a default all-true `active_mask`. Add tracked-point markers + motion-trail
-   overlays (green = kept) in `canvas.rs`, drawn from `coords_fw` at the current cut index.
-2. **Slice 4 — Cleanup panel.** A side panel binding `core::cleanup::Thresholds` band filters;
+> ✅ **Slice 3 — Run Tracking + overlays (done).** `core::tracking::track` runs on a **background
+> thread** (egui can't pump events mid-call like the Qt `QProgressDialog`); progress + a cancel
+> flag flow back over an `mpsc` channel to a centered progress Window (egui 0.30 has no `Modal`).
+> On completion `state.result` + an all-true `active_mask` are set. `canvas::draw_tracks` draws
+> the tracked points at the current cut index (green = kept, skips masked/non-finite points).
+> Re-detecting or changing the ROI invalidates a stale result (`invalidate_tracking`).
+> **Deviation from the original note:** motion-*trail* overlays were omitted — the Python
+> reference (`canvas_view._draw_tracked`) draws only per-frame markers + an optional 1-frame
+> trail/window-box gated on `display_params`; trails/box belong with the Display dialog (slice 5),
+> so they were deferred to keep the port faithful. Add them when `DisplayParams` gets a UI.
+
+1. **Slice 4 — Cleanup panel.** A side panel binding `core::cleanup::Thresholds` band filters;
    `compute_metrics` once per result; live green/red preview mask; apply (`active_mask &= keep`) +
    undo (snapshot stack). Mirror `app/gui/cleanup_dialog.py`.
 3. **Slice 5 — Dialogs + extras.** Parameter dialogs (corner/grid/tracker/display) with

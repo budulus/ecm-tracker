@@ -141,3 +141,27 @@ pub fn draw_points(painter: &egui::Painter, t: &Transform, pts: &[(f32, f32)], c
         painter.circle_filled(t.image_to_screen(x, y), radius, color);
     }
 }
+
+const TRACK_KEPT: Color32 = Color32::from_rgb(0, 200, 0); // green
+
+/// Draw tracked points at the current frame. Skips points masked out by `active` and any with
+/// non-finite coordinates (failed tracks). Mirrors `CanvasView._draw_tracks` (kept = green).
+pub fn draw_tracks(
+    painter: &egui::Painter,
+    t: &Transform,
+    pts: &[(f32, f32)],
+    active: Option<&[bool]>,
+    radius: f32,
+) {
+    for (i, &(x, y)) in pts.iter().enumerate() {
+        if let Some(mask) = active {
+            if !mask.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+        }
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        painter.circle_filled(t.image_to_screen(x, y), radius, TRACK_KEPT);
+    }
+}

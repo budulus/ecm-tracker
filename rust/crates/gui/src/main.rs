@@ -15,9 +15,14 @@ use canvas::CanvasView;
 use ecm_core::feature_detection;
 use ecm_core::image_sequence::{discover_dir, ImageSequence};
 use ecm_core::project_state::ProjectState;
+use ecm_core::result::TrackerResult;
 use ecm_core::roi::Roi;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::thread;
 
 fn main() -> eframe::Result<()> {
     let smoke = std::env::var_os("ECM_SMOKE").is_some();
@@ -41,6 +46,26 @@ enum Tool {
     RoiRect,
 }
 
+/// Message from the background tracking thread to the UI.
+enum TrackMsg {
+    /// Passes completed so far (out of `2 * (n_cut - 1)`).
+    Progress(usize),
+    /// Tracking finished: `Some` = result, `None` = cancelled. Boxed (large variant).
+    Done(Box<Option<TrackerResult>>),
+    Error(String),
+}
+
+/// A running background tracking job: live progress, a cancel flag, and the result channel.
+/// egui can't pump events mid-call (the Python app uses `QProgressDialog` +
+/// `processEvents`), so `core::tracking::track` runs on a worker thread and reports back here.
+struct TrackJob {
+    rx: mpsc::Receiver<TrackMsg>,
+    cancel: Arc<AtomicBool>,
+    done: usize,
+    total: usize,
+    _handle: thread::JoinHandle<()>,
+}
+
 struct EcmApp {
     state: ProjectState,
     canvas: CanvasView,
@@ -49,6 +74,8 @@ struct EcmApp {
     roi_draft_start: Option<egui::Pos2>,
     /// (frame index currently uploaded, texture handle).
     tex: Option<(usize, egui::TextureHandle)>,
+    /// In-flight background tracking job (progress + cancel), if any.
+    track_job: Option<TrackJob>,
     status: String,
     smoke: bool,
 }
@@ -71,12 +98,16 @@ impl EcmApp {
             tool: Tool::Pan,
             roi_draft_start: None,
             tex: None,
+            track_job: None,
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
         if let Some(dir) = std::env::var_os("ECM_SMOKE_DIR") {
             app.open_dir(PathBuf::from(dir));
             app.detect_corners(); // exercise the detection path in the smoke check
+            if app.smoke {
+                app.smoke_track(); // exercise the tracking path in the smoke check
+            }
         }
         app
     }
@@ -114,9 +145,160 @@ impl EcmApp {
         match result {
             Ok(pts) => {
                 self.status = format!("Detected {} corners", pts.len());
+                self.invalidate_tracking(); // new seeds → any existing result is stale
                 self.state.features = Some(pts);
             }
             Err(e) => self.status = format!("Detect error: {e}"),
+        }
+    }
+
+    /// Discard any tracking result (and its mask/undo). Seeds and ROI are left untouched.
+    /// Called whenever the inputs to tracking (seeds/ROI) change so stale tracks aren't shown.
+    fn invalidate_tracking(&mut self) {
+        self.state.result = None;
+        self.state.active_mask = None;
+        self.state.undo_stack.clear();
+    }
+
+    fn clear_tracking(&mut self) {
+        self.invalidate_tracking();
+        self.status = "Tracking cleared.".into();
+    }
+
+    /// Synchronous tracking for the headless smoke run only — the interactive path is the
+    /// background `run_tracking`, whose thread + modal can't complete in a single `update()`
+    /// before the smoke build closes the window. Exercises the track→result→overlay path.
+    fn smoke_track(&mut self) {
+        let Some(seq) = self.state.sequence.as_ref() else {
+            return;
+        };
+        let Some(feats) = self.state.features.clone() else {
+            return;
+        };
+        if feats.is_empty() {
+            return;
+        }
+        match ecm_core::tracking::track(
+            seq,
+            self.state.reference_index,
+            self.state.last_index,
+            &feats,
+            &self.state.lk_params,
+            None,
+        ) {
+            Ok(Some(result)) => {
+                self.state.active_mask = Some(vec![true; result.n_points()]);
+                self.state.result = Some(result);
+            }
+            Ok(None) => {}
+            Err(e) => self.status = format!("smoke track error: {e}"),
+        }
+    }
+
+    /// Start tracking the current seeds on a background thread (no-op if one is already
+    /// running or there are no seeds). Mirrors `MainWindow._run_tracking`.
+    fn run_tracking(&mut self) {
+        if self.track_job.is_some() {
+            return;
+        }
+        let Some(seq) = self.state.sequence.as_ref() else {
+            return;
+        };
+        let feats = match self.state.features.as_ref() {
+            Some(f) if !f.is_empty() => f.clone(),
+            _ => return,
+        };
+        let paths = seq.paths.clone();
+        let reference = self.state.reference_index;
+        let last = self.state.last_index;
+        let lk = self.state.lk_params;
+        let total = (2 * self.state.n_cut().saturating_sub(1)).max(1);
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_thread = cancel.clone();
+        let (tx, rx) = mpsc::channel::<TrackMsg>();
+        let handle = thread::spawn(move || {
+            // The worker owns its own ImageSequence (built from cloned paths) so the UI
+            // thread keeps decoding frames for display independently.
+            let seq = match ImageSequence::new(paths) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(TrackMsg::Error(e));
+                    return;
+                }
+            };
+            let progress_tx = tx.clone();
+            let mut progress = move |done: usize, _total: usize| -> bool {
+                let _ = progress_tx.send(TrackMsg::Progress(done));
+                cancel_thread.load(Ordering::Relaxed)
+            };
+            let outcome =
+                ecm_core::tracking::track(&seq, reference, last, &feats, &lk, Some(&mut progress));
+            let msg = match outcome {
+                Ok(opt) => TrackMsg::Done(Box::new(opt)),
+                Err(e) => TrackMsg::Error(e.to_string()),
+            };
+            let _ = tx.send(msg);
+        });
+
+        self.track_job = Some(TrackJob { rx, cancel, done: 0, total, _handle: handle });
+        self.status = "Tracking…".into();
+    }
+
+    /// Drain progress/result messages from the worker. On completion stores the result with a
+    /// default all-true active mask (mirrors `MainWindow._run_tracking`'s success path).
+    fn poll_track_job(&mut self, ctx: &egui::Context) {
+        if self.track_job.is_none() {
+            return;
+        }
+        enum Outcome {
+            Pending,
+            Cancelled,
+            Done(TrackerResult),
+            Error(String),
+        }
+        let mut outcome = Outcome::Pending;
+        {
+            let job = self.track_job.as_mut().unwrap();
+            loop {
+                match job.rx.try_recv() {
+                    Ok(TrackMsg::Progress(d)) => job.done = d,
+                    Ok(TrackMsg::Done(opt)) => {
+                        outcome = match *opt {
+                            Some(r) => Outcome::Done(r),
+                            None => Outcome::Cancelled,
+                        };
+                        break;
+                    }
+                    Ok(TrackMsg::Error(e)) => {
+                        outcome = Outcome::Error(e);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        outcome = Outcome::Cancelled;
+                        break;
+                    }
+                }
+            }
+        }
+        match outcome {
+            Outcome::Pending => ctx.request_repaint(), // keep polling while the worker runs
+            Outcome::Cancelled => {
+                self.track_job = None;
+                self.status = "Tracking cancelled.".into();
+            }
+            Outcome::Error(e) => {
+                self.track_job = None;
+                self.status = format!("Tracking error: {e}");
+            }
+            Outcome::Done(result) => {
+                let (np, nf) = (result.n_points(), result.n_frames());
+                self.state.active_mask = Some(vec![true; np]);
+                self.state.result = Some(result);
+                self.track_job = None;
+                self.status = format!("Tracked {np} points over {nf} frames.");
+            }
         }
     }
 
@@ -165,12 +347,15 @@ impl EcmApp {
             }
             self.roi_draft_start = None;
             self.state.features = None; // ROI changed → seeds are stale
+            self.invalidate_tracking(); // …and so is any tracking result
         }
     }
 }
 
 impl eframe::App for EcmApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_track_job(ctx);
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Open Folder…").clicked() {
@@ -185,10 +370,34 @@ impl eframe::App for EcmApp {
                     if ui.button("Clear ROI").clicked() {
                         self.state.roi = None;
                         self.state.features = None;
+                        self.invalidate_tracking();
                     }
                     ui.separator();
                     if ui.button("Detect Corners").clicked() {
                         self.detect_corners();
+                    }
+                    ui.separator();
+                    let can_track = self
+                        .state
+                        .features
+                        .as_ref()
+                        .is_some_and(|f| !f.is_empty())
+                        && self.track_job.is_none();
+                    if ui
+                        .add_enabled(can_track, egui::Button::new("▶ Run Tracking"))
+                        .clicked()
+                    {
+                        self.run_tracking();
+                    }
+                    if self.state.result.is_some()
+                        && ui
+                            .add_enabled(
+                                self.track_job.is_none(),
+                                egui::Button::new("Clear Tracking"),
+                            )
+                            .clicked()
+                    {
+                        self.clear_tracking();
                     }
                     ui.separator();
                     if ui.button("Fit").clicked() {
@@ -233,26 +442,72 @@ impl eframe::App for EcmApp {
                 if let Some(roi) = self.state.roi.as_ref() {
                     canvas::draw_roi(&painter, &tf, &roi.corners, roi.closed);
                 }
-                if self.state.on_reference_frame() {
-                    if let Some(feats) = self.state.features.as_ref() {
-                        canvas::draw_points(
-                            &painter,
-                            &tf,
-                            feats,
-                            egui::Color32::from_rgb(0, 220, 220), // cyan seeds
-                            3.0,
-                        );
+                let marker_r = self.state.display_params.marker_size.max(2) as f32;
+                match self.state.result.as_ref() {
+                    // No result yet: show the seed features on the reference frame.
+                    None => {
+                        if self.state.on_reference_frame() {
+                            if let Some(feats) = self.state.features.as_ref() {
+                                canvas::draw_points(
+                                    &painter,
+                                    &tf,
+                                    feats,
+                                    egui::Color32::from_rgb(0, 220, 220), // cyan seeds
+                                    marker_r,
+                                );
+                            }
+                        }
+                    }
+                    // Result present: show the tracked points at the current frame (green = kept).
+                    Some(result) => {
+                        let cut = self.state.global_to_cut(self.state.current_index);
+                        if cut >= 0 && (cut as usize) < result.n_frames() {
+                            let cut = cut as usize;
+                            let pts: Vec<(f32, f32)> = (0..result.n_points())
+                                .map(|j| {
+                                    (result.coords_fw[[cut, j, 0]], result.coords_fw[[cut, j, 1]])
+                                })
+                                .collect();
+                            canvas::draw_tracks(
+                                &painter,
+                                &tf,
+                                &pts,
+                                self.state.active_mask.as_deref(),
+                                marker_r,
+                            );
+                        }
                     }
                 }
             }
         });
 
+        if let Some(job) = self.track_job.as_ref() {
+            let frac = job.done as f32 / job.total.max(1) as f32;
+            // egui 0.30 has no `Modal`; a centered, non-collapsible Window is the progress
+            // dialog. The Run/Clear buttons are disabled while a job runs (see the toolbar),
+            // so this doesn't need to block input behind it.
+            egui::Window::new("Tracking…")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(240.0);
+                    ui.add(egui::ProgressBar::new(frac).show_percentage());
+                    ui.label(format!("{} / {} passes", job.done, job.total));
+                    ui.add_space(4.0);
+                    if ui.button("Cancel").clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                });
+        }
+
         if self.smoke {
             eprintln!(
-                "[smoke] frames={} frame_texture_uploaded={} features={} status={:?}",
+                "[smoke] frames={} frame_texture_uploaded={} features={} tracked_points={} status={:?}",
                 self.state.total_images(),
                 self.tex.is_some(),
                 self.state.features.as_ref().map_or(0, Vec::len),
+                self.state.result.as_ref().map_or(0, |r| r.n_points()),
                 self.status,
             );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

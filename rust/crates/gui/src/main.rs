@@ -47,6 +47,8 @@ fn main() -> eframe::Result<()> {
 enum Tool {
     Pan,
     RoiRect,
+    RoiCircle,
+    RoiNgon,
 }
 
 /// Which parameter dialog window is open (Parameters menu).
@@ -137,14 +139,42 @@ struct EcmApp {
     smoke: bool,
 }
 
-/// Axis-aligned rectangle ROI from two image-space corners.
-fn rect_roi(a: egui::Pos2, b: egui::Pos2) -> Roi {
-    Roi::new(vec![
+/// Image px below which a rubber-band drag is treated as a stray click (ROI discarded).
+/// Mirrors `roi_tools.MIN_SIZE`.
+const MIN_ROI_SIZE: f32 = 3.0;
+/// Polygon segments approximating a Circle ROI. Mirrors `roi_tools.CIRCLE_SEGMENTS`.
+const CIRCLE_SEGMENTS: usize = 64;
+
+/// Axis-aligned rectangle corners from two image-space points, or `None` if the drag is too
+/// small in either axis. Mirrors `RectangleTool._corners`.
+fn rect_corners(a: egui::Pos2, b: egui::Pos2) -> Option<Vec<(f64, f64)>> {
+    if (b.x - a.x).abs() < MIN_ROI_SIZE || (b.y - a.y).abs() < MIN_ROI_SIZE {
+        return None;
+    }
+    Some(vec![
         (a.x as f64, a.y as f64),
         (b.x as f64, a.y as f64),
         (b.x as f64, b.y as f64),
         (a.x as f64, b.y as f64),
     ])
+}
+
+/// A `CIRCLE_SEGMENTS`-gon approximating the circle centered at `center` with radius reaching
+/// `edge`, or `None` if the radius is too small. Mirrors `CircleTool._corners`.
+fn circle_corners(center: egui::Pos2, edge: egui::Pos2) -> Option<Vec<(f64, f64)>> {
+    let r = (edge - center).length();
+    if r < MIN_ROI_SIZE {
+        return None;
+    }
+    let (cx, cy, r) = (center.x as f64, center.y as f64, r as f64);
+    Some(
+        (0..CIRCLE_SEGMENTS)
+            .map(|i| {
+                let a = 2.0 * std::f64::consts::PI * (i as f64) / (CIRCLE_SEGMENTS as f64);
+                (cx + r * a.cos(), cy + r * a.sin())
+            })
+            .collect(),
+    )
 }
 
 impl EcmApp {
@@ -422,6 +452,7 @@ impl EcmApp {
                         let p = &mut self.state.display_params;
                         ui.checkbox(&mut p.show_markers, "Show markers");
                         ui.checkbox(&mut p.show_roi, "Show ROI");
+                        ui.checkbox(&mut p.show_window_box, "Show LK window box");
                         egui::Grid::new("disp_grid").num_columns(2).show(ui, |ui| {
                             ui.label("Marker size");
                             ui.add(egui::DragValue::new(&mut p.marker_size).range(1..=20));
@@ -681,29 +712,97 @@ impl EcmApp {
         }
     }
 
-    /// Handle ROI rectangle drawing on the canvas (image-space) for the current frame.
-    fn handle_roi_draw(&mut self, tf: &canvas::Transform, r: &egui::Response) {
-        if self.tool != Tool::RoiRect {
-            return;
+    /// Route canvas mouse input (image-space) to the active ROI tool for the current frame.
+    /// Rect/Circle are rubber-band drags; N-Gon collects clicks. Mirrors the duck-typed
+    /// `CanvasInteraction`s wired up by `app/gui/roi_tools.py`.
+    fn handle_roi_interaction(&mut self, tf: &canvas::Transform, r: &egui::Response) {
+        match self.tool {
+            Tool::RoiRect | Tool::RoiCircle => self.handle_roi_drag(tf, r),
+            Tool::RoiNgon => self.handle_ngon(tf, r),
+            Tool::Pan => {}
         }
+    }
+
+    /// Rubber-band drag shared by the Rect/Circle tools: press fixes the anchor, drag previews
+    /// the polygon live (via `drag_corners`), release commits it — or discards a too-small drag
+    /// (`drag_corners` → `None`). Mirrors the `_DragTool` press/move/release plumbing.
+    fn handle_roi_drag(&mut self, tf: &canvas::Transform, r: &egui::Response) {
         if r.drag_started_by(egui::PointerButton::Primary) {
             self.roi_draft_start = r.interact_pointer_pos().map(|p| tf.screen_to_image(p));
         }
-        if r.dragged_by(egui::PointerButton::Primary) {
+        if r.dragged_by(egui::PointerButton::Primary) || r.drag_stopped_by(egui::PointerButton::Primary)
+        {
             if let (Some(start), Some(p)) = (self.roi_draft_start, r.interact_pointer_pos()) {
-                self.state.roi = Some(rect_roi(start, tf.screen_to_image(p)));
+                self.state.roi = self.drag_corners(start, tf.screen_to_image(p)).map(Roi::new);
             }
         }
         if r.drag_stopped_by(egui::PointerButton::Primary) {
-            if let (Some(start), Some(p)) = (self.roi_draft_start, r.interact_pointer_pos()) {
-                let cur = tf.screen_to_image(p);
-                if (cur.x - start.x).abs() < 3.0 || (cur.y - start.y).abs() < 3.0 {
-                    self.state.roi = None; // reject degenerate drag
-                }
-            }
             self.roi_draft_start = None;
             self.state.features = None; // ROI changed → seeds are stale
             self.invalidate_tracking(); // …and so is any tracking result
+        }
+    }
+
+    /// Corners for the in-progress drag of the active drag-tool (Rect default, Circle if
+    /// selected), or `None` when the drag is too small to be a deliberate ROI.
+    fn drag_corners(&self, start: egui::Pos2, cur: egui::Pos2) -> Option<Vec<(f64, f64)>> {
+        match self.tool {
+            Tool::RoiCircle => circle_corners(start, cur),
+            _ => rect_corners(start, cur),
+        }
+    }
+
+    /// N-Gon tool: each left-click appends a vertex (starting a fresh polygon when the previous
+    /// one was closed); a right-click closes it once it has ≥ `Roi::MIN_CORNERS`; Esc abandons an
+    /// in-progress polygon. Mirrors `NGonTool`.
+    fn handle_ngon(&mut self, tf: &canvas::Transform, r: &egui::Response) {
+        if r.clicked_by(egui::PointerButton::Primary) {
+            if let Some(p) = r.interact_pointer_pos() {
+                let img = tf.screen_to_image(p);
+                // No open polygon in progress → start a fresh one (and drop stale seeds/result).
+                if self.state.roi.as_ref().is_none_or(|roi| roi.closed) {
+                    self.state.roi = Some(Roi::default());
+                    self.state.features = None;
+                    self.invalidate_tracking();
+                }
+                if let Some(roi) = self.state.roi.as_mut() {
+                    roi.add_corner(img.x as f64, img.y as f64);
+                }
+            }
+        }
+        if r.clicked_by(egui::PointerButton::Secondary) {
+            enum Close {
+                Done(usize),
+                TooFew,
+            }
+            // Decide + mutate the ROI under one borrow, then update status after it ends.
+            let act = match self.state.roi.as_mut() {
+                Some(roi) if roi.closed => None,
+                Some(roi) if roi.corners.len() >= Roi::MIN_CORNERS => {
+                    roi.close();
+                    Some(Close::Done(roi.corners.len()))
+                }
+                Some(_) => Some(Close::TooFew),
+                None => None,
+            };
+            match act {
+                Some(Close::Done(n)) => {
+                    self.state.features = None; // ROI changed → seeds + tracking are stale
+                    self.invalidate_tracking();
+                    self.status = format!("ROI closed ({n} points).");
+                }
+                Some(Close::TooFew) => {
+                    self.status =
+                        format!("Need at least {} points to close the ROI.", Roi::MIN_CORNERS);
+                }
+                None => {}
+            }
+        }
+        // Esc abandons an in-progress (still-open) polygon.
+        if r.ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && self.state.roi.as_ref().is_some_and(|roi| !roi.closed)
+        {
+            self.state.roi = None;
         }
     }
 }
@@ -723,6 +822,8 @@ impl eframe::App for EcmApp {
                     ui.separator();
                     ui.selectable_value(&mut self.tool, Tool::Pan, "✋ Pan");
                     ui.selectable_value(&mut self.tool, Tool::RoiRect, "▭ Rect ROI");
+                    ui.selectable_value(&mut self.tool, Tool::RoiCircle, "◯ Circle ROI");
+                    ui.selectable_value(&mut self.tool, Tool::RoiNgon, "△ N-Gon ROI");
                     if ui.button("Clear ROI").clicked() {
                         self.state.roi = None;
                         self.state.features = None;
@@ -947,6 +1048,14 @@ impl eframe::App for EcmApp {
             CleanupAction::None => {}
         }
 
+        // An unclosed ROI only exists mid-N-Gon; selecting any other tool abandons it
+        // (mirrors `_cancel_roi_definition` on tool switch).
+        if self.tool != Tool::RoiNgon
+            && self.state.roi.as_ref().is_some_and(|roi| !roi.closed)
+        {
+            self.state.roi = None;
+        }
+
         self.ensure_texture(ctx);
         // Clone the cheap texture handle so the canvas closure doesn't borrow `self.tex`
         // while `self.canvas` is borrowed mutably.
@@ -956,7 +1065,7 @@ impl eframe::App for EcmApp {
             let t = tex.as_ref().map(|(h, sz)| (h, *sz));
             let out = self.canvas.show(ui, t, allow_pan);
             if let Some(tf) = out.transform {
-                self.handle_roi_draw(&tf, &out.response);
+                self.handle_roi_interaction(&tf, &out.response);
 
                 let painter = ui.painter_at(out.rect);
                 let disp = self.state.display_params; // Copy; honors the Display dialog live
@@ -995,6 +1104,18 @@ impl eframe::App for EcmApp {
                                     .collect();
                                 let preview =
                                     self.cleanup.as_ref().map(|cs| cs.preview_keep.as_slice());
+                                // LK search window around each active point (gated on Display),
+                                // drawn under the markers using the win_size recorded on the result.
+                                if disp.show_window_box {
+                                    canvas::draw_window_boxes(
+                                        &painter,
+                                        &tf,
+                                        &pts,
+                                        self.state.active_mask.as_deref(),
+                                        result.win_size,
+                                        alpha,
+                                    );
+                                }
                                 canvas::draw_tracks(
                                     &painter,
                                     &tf,

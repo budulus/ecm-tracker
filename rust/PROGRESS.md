@@ -10,12 +10,12 @@ build environment, and the next steps. Companion docs:
 - This is the in-progress **Rust + egui + embedded-Python** rewrite of the PyQt5 ECM Tracker.
   The Python app under `../app/` is the working reference; `rust/` is the port.
 - **Done:** Phase 0 (scaffold + toolchain), Phase 1 (full `core`+`models` port, parity-tested
-  bit-identical), Phase 2 slices 1–4 + **5a** (canvas + ROI/detection + Run Tracking & overlays +
-  Cleanup panel + parameter dialogs, grid detection, Export UI, Display wiring).
+  bit-identical), Phase 2 slices 1–4 + **5a** + **5b** (canvas + ROI/detection + Run Tracking &
+  overlays + Cleanup panel + parameter dialogs, grid detection, Export UI, Display wiring +
+  Circle/N-Gon ROI tools + LK window-box overlay).
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** finish Phase 2 slice 5 — **Circle + N-Gon ROI tools** (canvas interaction) and the
-  optional window-box overlay; then slice 6 (theme + icons).
+- **Next:** Phase 2 slice 6 — theme + icons (egui light style; render `app/gui/icons/*.svg`).
 
 ## Status
 
@@ -28,8 +28,8 @@ build environment, and the next steps. Companion docs:
 | 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done, pushed | `b468af7` |
 | 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
 | 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done, pushed | `8ffe412` |
-| 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ⬜ next | — |
-| 2 slice 6 — theme + icons | ⬜ later | — |
+| 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ✅ done (uncommitted) | — |
+| 2 slice 6 — theme + icons | ⬜ next | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -89,11 +89,13 @@ rust/crates/
            GUI helpers: ImageSequence::load_rgba, feature_detection::detect_corners,
            settings::save_section<T: Serialize>.
   gui/     egui app. src/main.rs = app shell: ProjectState, toolbar, frame slider, Open Folder,
-           Pan/RoiRect tools, Detect Corners + Detect Grid, Run Tracking (bg thread + progress
-           Window + cancel), Clear Tracking, Cleanup side-panel, ⚙ Params menu (4 dialogs +
-           Save-as-defaults), Export menu (.npy/.csv via rfd). src/canvas.rs = image↔screen
-           Transform (fit→zoom→pan), texture draw, and draw_roi / draw_points / draw_tracks
-           (alpha + green-kept / red-preview-drop) overlays.
+           Pan + Rect/Circle/N-Gon ROI tools (rubber-band drag for Rect/Circle; N-Gon = click-add
+           / right-click-close / Esc-cancel), Detect Corners + Detect Grid, Run Tracking (bg thread
+           + progress Window + cancel), Clear Tracking, Cleanup side-panel, ⚙ Params menu (4
+           dialogs + Save-as-defaults), Export menu (.npy/.csv via rfd). src/canvas.rs =
+           image↔screen Transform (fit→zoom→pan), texture draw, and draw_roi / draw_points /
+           draw_tracks (alpha + green-kept / red-preview-drop) / draw_window_boxes (LK search
+           window, zoom-scaled) overlays.
   pyhost/  embedded CPython (pyo3 0.27) — only a numpy-import smoke test so far (Phase 3).
 ```
 - **Tests: 12**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
@@ -133,21 +135,26 @@ rust/crates/
 > dialog now feeds the overlays live (show-markers / show-ROI / marker size / opacity); the LK
 > window-box overlay is deferred to slice 5b.
 
-1. **Slice 5b — Circle & N-Gon ROI tools (+ window box).** The Rect ROI is a plain primary-drag
-   in `main.rs::handle_roi_draw`; Circle/N-Gon need a small **canvas interaction** path. Mirror
-   `app/gui/roi_tools.py` (RectangleTool / CircleTool / NGonTool): Circle = centre press + drag
-   radius → emit a many-sided polygon (Python uses ~64 pts) via `Roi::new(corners)`; N-Gon =
-   left-click `Roi::add_corner`, right-click `Roi::close`, Esc cancels. Add `Tool` variants +
-   toolbar buttons and route image-space mouse events from `canvas.rs` (it returns the click
-   `Response`; `Transform::screen_to_image` converts). Then the optional LK window-box overlay
-   gated on `display_params.show_window_box`: draw `result.win_size`-sized rects in image space
-   (scaled by zoom) around each active tracked point.
-2. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg` +
+> ✅ **Slice 5b — Circle & N-Gon ROI tools + window box (done).** `main.rs::handle_roi_interaction`
+> routes canvas mouse input to the active tool: Rect/Circle share `handle_roi_drag` (press fixes the
+> anchor, drag previews live via `drag_corners`, release commits — or discards a sub-`MIN_ROI_SIZE`
+> drag); Circle emits a 64-gon via `circle_corners` + `Roi::new`. N-Gon (`handle_ngon`) appends a
+> vertex per left-click (`Roi::add_corner`, starting a fresh polygon when the last was closed),
+> right-click closes once it has ≥ `Roi::MIN_CORNERS`, Esc abandons; leaving the tool drops an
+> unclosed polygon. New `Tool::RoiCircle`/`RoiNgon` + toolbar buttons (`◯`/`△`, Geometric-Shapes
+> glyphs so font coverage matches the existing `▭`). The optional LK window-box overlay
+> (`canvas::draw_window_boxes`, gated on `display_params.show_window_box` — now a Display-dialog
+> checkbox) draws a green, zoom-scaled `result.win_size` square around each active point, under the
+> markers (matching `canvas_view._draw_tracked`). Faithful to `app/gui/roi_tools.py`. Build +
+> 12 tests + `ECM_SMOKE` all green. **Deferred (as before):** per-frame motion *trails* — they
+> belong with the trail/Display work, not this slice.
+
+1. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg` +
    `tiny-skia` → recolored egui textures.
-3. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
+2. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
    `numpy` crate, host-rendered `OverlayPainter` draw-commands, event-bus signals, declared UI
    panels, `apply_keep_mask`. Bundle numpy/scipy/opencv-python/matplotlib into the plugin env.
-4. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
+3. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 

@@ -142,6 +142,41 @@ pub fn draw_points(painter: &egui::Painter, t: &Transform, pts: &[(f32, f32)], c
     }
 }
 
+/// Draw the LK search window (a `win_size`-px square in *image* space, so it scales with zoom)
+/// around each active, finite tracked point. Mirrors the optional window-box overlay in
+/// `CanvasView._draw_tracked` (gated on `display_params.show_window_box`): green, alpha-matched
+/// to the markers, color independent of the cleanup preview.
+pub fn draw_window_boxes(
+    painter: &egui::Painter,
+    t: &Transform,
+    pts: &[(f32, f32)],
+    active: Option<&[bool]>,
+    win_size: i32,
+    alpha: u8,
+) {
+    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 220, 0, alpha)); // green
+    let half = win_size as f32 * 0.5;
+    for (i, &(x, y)) in pts.iter().enumerate() {
+        if let Some(mask) = active {
+            if !mask.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+        }
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        // Map the image-space box corners through the transform (zoom-aware), then outline it.
+        let tl = t.image_to_screen(x - half, y - half);
+        let tr = t.image_to_screen(x + half, y - half);
+        let br = t.image_to_screen(x + half, y + half);
+        let bl = t.image_to_screen(x - half, y + half);
+        painter.line_segment([tl, tr], stroke);
+        painter.line_segment([tr, br], stroke);
+        painter.line_segment([br, bl], stroke);
+        painter.line_segment([bl, tl], stroke);
+    }
+}
+
 /// Draw tracked points at the current frame. Skips points masked out by `active` and any with
 /// non-finite coordinates (failed tracks). Mirrors `CanvasView._draw_tracked`: among the active
 /// points, a cleanup `preview` keep-mask colors survivors green and would-be drops red; with no

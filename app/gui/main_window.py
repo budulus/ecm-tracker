@@ -1,8 +1,8 @@
 import os
 
 import numpy as np
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import QDesktopServices, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -95,7 +95,7 @@ class LabeledSlider(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Feature Tracker")
+        self.setWindowTitle("ECM Tracker")
         self.resize(1100, 800)
 
         self.state = ProjectState()
@@ -169,11 +169,14 @@ class MainWindow(QMainWindow):
         params_menu.addAction("Grid...").triggered.connect(self._open_grid_dialog)
         params_menu.addAction("Tracker...").triggered.connect(self._open_tracker_dialog)
 
-        cleanup_menu = self.menuBar().addMenu("&Cleanup")
-        cleanup_menu.addAction("Open Cleanup...").triggered.connect(self._open_cleanup)
-
         # Populated by the PluginManager after construction.
         self._plugins_menu = self.menuBar().addMenu("&Plugins")
+
+        help_menu = self.menuBar().addMenu("&Help")
+        view_help = help_menu.addAction("View &Help")
+        view_help.setShortcut("F1")
+        view_help.triggered.connect(self._open_help)
+        help_menu.addAction("&About...").triggered.connect(self._open_about)
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Tools")
@@ -515,6 +518,20 @@ class MainWindow(QMainWindow):
         else:
             self.state.display_params = snapshot
         self.canvas.update()
+
+    # ---- help -----------------------------------------------------------
+    def _open_help(self) -> None:
+        help_path = os.path.join(os.path.dirname(__file__), "help.html")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(help_path))
+
+    def _open_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About ECM Tracker",
+            "<h3>ECM Tracker</h3>"
+            "<p>Image-feature tracking for frame sequences.</p>"
+            "<p>&copy; 2026 Senecell AG</p>",
+        )
 
     def _detect_shi_tomasi(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():

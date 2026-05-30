@@ -1,4 +1,4 @@
-"""Feature Tracker plugin SDK.
+"""ECM Tracker plugin SDK.
 
 Public API for plugin authors (everything you need is in :mod:`app.plugins.api`)::
 

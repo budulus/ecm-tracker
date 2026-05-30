@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECM Tracker — Help</title>
+<style>
+  :root {
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --ink: #1e293b;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --bg: #f8fafc;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  .wrap {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  header.hero {
+    background: linear-gradient(135deg, var(--accent), #1d4ed8);
+    color: #fff;
+    padding: 48px 24px 40px;
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  header.hero h1 {
+    margin: 0;
+    font-size: 2.4rem;
+    letter-spacing: -0.02em;
+  }
+  header.hero p {
+    margin: 10px 0 0;
+    font-size: 1.05rem;
+    opacity: 0.92;
+  }
+
+  nav.toc {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 24px;
+    margin-bottom: 40px;
+  }
+  nav.toc strong {
+    display: block;
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  nav.toc ol {
+    margin: 0;
+    padding-left: 20px;
+    columns: 2;
+    column-gap: 32px;
+  }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  section { margin-bottom: 40px; }
+  h2 {
+    font-size: 1.4rem;
+    margin: 0 0 6px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+    letter-spacing: -0.01em;
+  }
+  h2 .num {
+    display: inline-block;
+    min-width: 1.7em;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  h3 { font-size: 1.05rem; margin: 22px 0 4px; }
+  p { margin: 8px 0; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+
+  .lead { color: var(--muted); }
+
+  .steps {
+    list-style: none;
+    counter-reset: step;
+    padding: 0;
+    margin: 16px 0 0;
+  }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 12px 16px 12px 56px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 10px;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 14px; top: 50%;
+    transform: translateY(-50%);
+    width: 28px; height: 28px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    background: var(--accent-soft);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  kbd {
+    font-family: "SF Mono", ui-monospace, Consolas, "Liberation Mono", monospace;
+    font-size: 0.85em;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 7px;
+    white-space: nowrap;
+    color: var(--ink);
+  }
+
+  .tip {
+    background: var(--accent-soft);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    color: #1e3a8a;
+  }
+  .tip strong { color: var(--accent); }
+
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: middle; margin-right: 2px; }
+  .kept { background: #22c55e; }
+  .dropped { background: #ef4444; }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--line);
+    padding-top: 24px;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>ECM Tracker</h1>
+  <p>Track image features through a sequence of frames — seed, track, refine, export.</p>
+</header>
+
+<div class="wrap">
+
+  <nav class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#workflow">The workflow</a></li>
+      <li><a href="#loading">Loading images</a></li>
+      <li><a href="#frames">Choosing frames</a></li>
+      <li><a href="#roi">Defining a region (ROI)</a></li>
+      <li><a href="#detect">Detecting features</a></li>
+      <li><a href="#track">Tracking</a></li>
+      <li><a href="#cleanup">Cleaning up tracks</a></li>
+      <li><a href="#display">Display options</a></li>
+      <li><a href="#export">Exporting</a></li>
+      <li><a href="#plugins">Plugins</a></li>
+      <li><a href="#shortcuts">Keyboard shortcuts</a></li>
+    </ol>
+  </nav>
+
+  <section id="workflow">
+    <h2><span class="num">1</span>The workflow</h2>
+    <p class="lead">ECM Tracker follows a simple five-step pipeline. Work through it top to bottom — the toolbar is grouped in the same order.</p>
+    <ol class="steps">
+      <li><strong>Load</strong> an image sequence (a folder or a set of files).</li>
+      <li><strong>Define a region of interest (ROI)</strong> on your reference frame.</li>
+      <li><strong>Seed feature points</strong> inside the ROI — automatic corners or a regular grid.</li>
+      <li><strong>Track</strong> the points across the frame range, forward and backward.</li>
+      <li><strong>Clean up</strong> low-quality tracks, then <strong>export</strong> the survivors.</li>
+    </ol>
+  </section>
+
+  <section id="loading">
+    <h2><span class="num">2</span>Loading images</h2>
+    <p>From the <strong>File</strong> menu (or the toolbar):</p>
+    <ul>
+      <li><strong>Open Directory…</strong> (<kbd>Ctrl</kbd>+<kbd>O</kbd>) — load every image in a folder, in name order.</li>
+      <li><strong>Open Files…</strong> — pick an explicit set of images.</li>
+    </ul>
+    <p>Images of any common format are accepted and normalised internally, so colour and grayscale sources mix freely.</p>
+  </section>
+
+  <section id="frames">
+    <h2><span class="num">3</span>Choosing frames</h2>
+    <p>Three sliders at the bottom of the window control which frames you see and track:</p>
+    <ul>
+      <li><strong>Reference</strong> — the start of the tracked range. Your ROI and feature points are defined here.</li>
+      <li><strong>Last</strong> — the end of the tracked range.</li>
+      <li><strong>Current</strong> — the frame currently shown on the canvas (move it freely to inspect any frame).</li>
+    </ul>
+    <div class="tip"><strong>Note:</strong> changing the Reference frame or the ROI invalidates an existing tracking result, so you'll be asked to confirm before it is discarded.</div>
+  </section>
+
+  <section id="roi">
+    <h2><span class="num">4</span>Defining a region (ROI)</h2>
+    <p>The ROI bounds where features are seeded. Use the <strong>Define</strong> button's dropdown to pick a shape:</p>
+    <ul>
+      <li><strong>Rectangle</strong> — click and drag a box.</li>
+      <li><strong>Circle</strong> — click the centre and drag out the radius.</li>
+      <li><strong>N-Gon</strong> — free-form polygon: <em>left-click</em> to drop each vertex, then <em>right-click</em> to close the shape (needs at least three points).</li>
+    </ul>
+    <div class="tip">Press <kbd>Esc</kbd> at any time to cancel a region you're in the middle of drawing.</div>
+  </section>
+
+  <section id="detect">
+    <h2><span class="num">5</span>Detecting features</h2>
+    <p>With an ROI in place, seed the points to track. Two strategies are available from the <strong>Detect</strong> toolbar group:</p>
+    <ul>
+      <li><strong>Corners (Shi-Tomasi)</strong> — finds strong, trackable corner features automatically.</li>
+      <li><strong>Grid</strong> — lays down a regular grid of points, regardless of image content.</li>
+    </ul>
+    <p>Fine-tune either method under <strong>Parameters → Corner Detection…</strong> and <strong>Grid…</strong>. Your settings are remembered between sessions.</p>
+  </section>
+
+  <section id="track">
+    <h2><span class="num">6</span>Tracking</h2>
+    <p>Press <strong>Run Tracking</strong> (the primary blue button). ECM Tracker uses pyramidal Lucas-Kanade optical flow to follow every seeded point:</p>
+    <ul>
+      <li><strong>Forward</strong> from the reference frame to the last frame, then</li>
+      <li><strong>Backward</strong> from the last frame back to the reference.</li>
+    </ul>
+    <p>The round trip yields a <strong>forward–backward error</strong> for each point — the distance between where it started and where the return trip lands it. A small error means a reliable track; a large error flags a point worth dropping. Tune the optical-flow settings under <strong>Parameters → Tracker…</strong></p>
+  </section>
+
+  <section id="cleanup">
+    <h2><span class="num">7</span>Cleaning up tracks</h2>
+    <p>Open <strong>Cleanup</strong> (in the Track toolbar group) to filter out unreliable tracks. As you adjust the sliders the canvas previews the result live:</p>
+    <ul>
+      <li><span class="swatch kept"></span><strong>Green</strong> — points that will be kept.</li>
+      <li><span class="swatch dropped"></span><strong>Red</strong> — points that will be dropped.</li>
+    </ul>
+    <p>Cleanup is <strong>non-destructive</strong>: the original tracking result is never altered, points only ever leave the active set, and every filter step can be undone.</p>
+  </section>
+
+  <section id="display">
+    <h2><span class="num">8</span>Display options</h2>
+    <p>Under the <strong>Display</strong> menu you can tailor the overlays:</p>
+    <ul>
+      <li>Adjust feature-marker <strong>size</strong> and <strong>opacity</strong>.</li>
+      <li>Toggle <strong>Show ROI</strong> to hide or reveal the region outline.</li>
+    </ul>
+    <p>Use the <strong>View</strong> toolbar group to zoom in, zoom out, or fit the image to the window. Drag with the middle or right mouse button to pan.</p>
+  </section>
+
+  <section id="export">
+    <h2><span class="num">9</span>Exporting</h2>
+    <p>When you're happy with the surviving tracks, use the <strong>Export</strong> dropdown (toolbar or <strong>File → Export…</strong>, <kbd>Ctrl</kbd>+<kbd>E</kbd>):</p>
+    <ul>
+      <li><strong>NumPy array (.npy)</strong> — the tracked coordinates as an array, for downstream analysis.</li>
+      <li><strong>CSV (.csv)</strong> — a spreadsheet-friendly table with interleaved x/y columns per frame.</li>
+    </ul>
+  </section>
+
+  <section id="plugins">
+    <h2><span class="num">10</span>Plugins</h2>
+    <p>ECM Tracker is extensible. The <strong>Plugins</strong> menu lists any installed add-ons for post-processing, custom export, or extra on-canvas visualisations. Several examples ship with the app — see the developer guide in the <code>plugins/</code> folder to write your own.</p>
+  </section>
+
+  <section id="shortcuts">
+    <h2><span class="num">11</span>Keyboard shortcuts</h2>
+    <table>
+      <thead>
+        <tr><th>Shortcut</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open directory</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>Export</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Q</kbd></td><td>Quit</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>+</kbd></td><td>Zoom in</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>-</kbd></td><td>Zoom out</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>0</kbd></td><td>Fit image to window</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Cancel an in-progress ROI</td></tr>
+        <tr><td><kbd>F1</kbd></td><td>Open this help</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    ECM Tracker &nbsp;·&nbsp; &copy; 2026 Senecell AG
+  </footer>
+
+</div>
+</body>
+</html>

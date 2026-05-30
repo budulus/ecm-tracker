@@ -1,4 +1,4 @@
-"""Public plugin SDK for the Feature Tracker.
+"""Public plugin SDK for the ECM Tracker.
 
 This is the **only** file a plugin author needs to read. A plugin is a small Python package
 under ``plugins/`` that subclasses :class:`TrackerPlugin` and, when launched from the

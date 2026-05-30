@@ -1,4 +1,4 @@
-# Writing Feature Tracker plugins
+# Writing ECM Tracker plugins
 
 A plugin is a self-contained folder under `plugins/` that adds a window to the **Plugins**
 menu. Plugins are for **post-processing, export, and visualization** — they read the tracked

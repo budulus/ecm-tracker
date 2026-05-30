@@ -8,7 +8,7 @@ from app.gui.theme import apply_theme
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Feature Tracker")
+    app.setApplicationName("ECM Tracker")
     apply_theme(app)
     window = MainWindow()
     window.show()

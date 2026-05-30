@@ -1,0 +1,12 @@
+# Copy this to .cargo/config.toml on each machine and set an absolute target-dir
+# that lives OUTSIDE the Dropbox-synced tree. This is required: Cargo writing
+# into a Dropbox folder hits intermittent file-lock failures ("os error 32"),
+# and target/ is large + non-portable (just like .venv, which is also per-machine).
+#
+# Windows:
+[build]
+target-dir = "C:/Users/<you>/AppData/Local/ecm-tracker/target"
+#
+# macOS / Linux:
+# [build]
+# target-dir = "/Users/<you>/Library/Caches/ecm-tracker/target"

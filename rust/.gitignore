@@ -1,0 +1,10 @@
+# Rust build artifacts — never sync (huge, machine-specific), like .venv.
+# Builds are redirected out of Dropbox via .cargo/config.toml, but ignore a
+# stray local target/ too just in case.
+/target
+
+# Machine-specific build config (absolute, out-of-Dropbox target-dir). Each
+# machine copies .cargo/config.toml.example → .cargo/config.toml.
+/.cargo/config.toml
+
+# Cargo.lock IS committed (this workspace builds a binary application).

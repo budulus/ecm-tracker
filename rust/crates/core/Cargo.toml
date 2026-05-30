@@ -1,0 +1,12 @@
+[package]
+name = "ecm-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Qt-free core: ports app/core/ + app/models/ (CV pipeline, dual-index model,
+# TrackerResult, ProjectState). No GUI, no Python — exercisable headlessly.
+[dependencies]
+# clang-runtime: load libclang.dll dynamically (the PyPI libclang wheel ships
+# only the .dll, no import .lib), so clang-sys doesn't need a build-time link lib.
+opencv = { version = "0.95.1", default-features = false, features = ["imgproc", "imgcodecs", "video", "clang-runtime"] }

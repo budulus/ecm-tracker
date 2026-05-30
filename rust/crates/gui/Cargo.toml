@@ -1,0 +1,15 @@
+[package]
+name = "ecm-tracker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The egui host application (ports app/gui/). The binary IS the shipped app.
+[[bin]]
+name = "ecm-tracker"
+path = "src/main.rs"
+
+[dependencies]
+ecm-core = { workspace = true }
+eframe = "0.30.0"
+# eframe + egui added via `cargo add` in the next step.

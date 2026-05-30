@@ -25,15 +25,14 @@ build environment, and the next steps. Companion docs:
 | 1 — core + models port (parity-tested) | ✅ done, pushed | `3b25e05` |
 | 2 slice 1 — canvas (open/display/zoom/pan/scrub) | ✅ done, pushed | `ca0f1ab` |
 | 2 slice 2 — ROI rect + corner detection + overlays | ✅ done, pushed | `95f61a0` |
-| 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done | `b468af7` (⚠ unpushed) |
-| 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done | ⚠ uncommitted |
+| 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done, pushed | `b468af7` |
+| 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
 | 2 slice 5+ — dialogs, grid detect, Circle/N-Gon ROI, Export UI, theme/icons | ⬜ next | — |
 
-⚠ **`origin/main` is behind: slice 3 (`b468af7`) is committed but the push failed on Git
-Credential Manager auth (`401 — credentials expired`), which this tool can't answer
-interactively; slice 4 is verified locally but not yet committed.** Run `git push origin main`
-yourself (it will carry both once slice 4 is committed); if it rejects, clear the
-`placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager and retry.
+> Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
+> `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
+> rejects, run `git push origin main` yourself; if it still rejects, clear the
+> `placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager and retry.
 
 ## Build environment (critical — read before building)
 
@@ -105,10 +104,15 @@ rust/crates/
 > trail/window-box gated on `display_params`; trails/box belong with the Display dialog (slice 5),
 > so they were deferred to keep the port faithful. Add them when `DisplayParams` gets a UI.
 
-1. **Slice 4 — Cleanup panel.** A side panel binding `core::cleanup::Thresholds` band filters;
-   `compute_metrics` once per result; live green/red preview mask; apply (`active_mask &= keep`) +
-   undo (snapshot stack). Mirror `app/gui/cleanup_dialog.py`.
-3. **Slice 5 — Dialogs + extras.** Parameter dialogs (corner/grid/tracker/display) with
+> ✅ **Slice 4 — Cleanup panel (done).** Right `SidePanel` bound to `core::cleanup::Thresholds`:
+> `compute_metrics` once per result (with ROI + image size), then per band an enable checkbox + a
+> single max-threshold `DragValue` (7 bands, "keep iff metric ≤ hi", clamped to the finite data
+> ceiling) plus the two boolean filters (left-image / left-ROI). Live green/red preview is
+> recomputed each frame via `build_mask` and drawn by `canvas::draw_tracks`; Apply
+> (`active_mask &= keep`, undoably) / Undo / Close. Mirrors `app/gui/cleanup_dialog.py`.
+> **Deferred:** cleanup-threshold settings persistence (`thresholds_to/from_value`) — lands with
+> the slice-5 Save-as-defaults work.
+1. **Slice 5 — Dialogs + extras.** Parameter dialogs (corner/grid/tracker/display) with
    Save-as-defaults via `settings::update_section`; Circle + N-Gon ROI tools; grid detection;
    Export UI (`core::export`).
 4. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg`+

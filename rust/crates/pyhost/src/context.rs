@@ -11,7 +11,14 @@
 //! frame index (`0 .. n_total_images-1`); tracked-data arrays are **cut**-indexed (`0` = reference).
 //! Convert with `global_to_cut` / `cut_to_global`.
 
+use ndarray::{Array2, Array3, Axis};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, ToPyArray};
 use pyo3::prelude::*;
+
+/// Indices (into the full P points) where `mask` is true, in order — the kept-point columns.
+fn kept_indices(mask: &[bool]) -> Vec<usize> {
+    mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect()
+}
 
 /// Immutable copy of the read-relevant app state, handed to a `PluginContext`. Plain data only
 /// (no `ecm-core` types) so `pyhost` stays decoupled from the core/opencv stack — the GUI layer,
@@ -34,6 +41,15 @@ pub struct ContextSnapshot {
     pub n_active: usize,
     /// ROI corner points `[(x, y), …]` in image coordinates (empty if no ROI).
     pub roi_corners: Vec<(f64, f64)>,
+
+    /// Forward tracked coordinates `(frames, P, 2)` f32, cut-indexed (`[0]` = reference). `None`
+    /// if no result.
+    pub coords_fw: Option<Array3<f32>>,
+    /// Forward per-frame tracking status `(frames, P)` u8 (1 = tracked OK, 0 = carried forward).
+    /// `None` if no result.
+    pub status_fw: Option<Array2<u8>>,
+    /// Active (keep) mask `(P,)`: true where a point survived cleanup. `None` if no result.
+    pub active_mask: Option<Vec<bool>>,
 }
 
 /// The façade a plugin uses to reach the app. One instance per plugin (passed as `self.ctx`);
@@ -142,11 +158,62 @@ impl PluginContext {
     fn roi_corners(&self) -> Vec<(f64, f64)> {
         self.snap.roi_corners.clone()
     }
+
+    // ---- tracked-data arrays (rust-numpy) -------------------------------
+    /// Tracked forward coordinates as an `(frames, points, 2)` float32 array. With `active_only`
+    /// (default True) only kept points are returned (point axis aligns with `point_indices`);
+    /// False returns all P points. `None` if no result. Cut-indexed on axis 0 (`coords[0]` =
+    /// reference frame).
+    #[pyo3(signature = (active_only = true))]
+    fn coords<'py>(&self, py: Python<'py>, active_only: bool) -> Option<Bound<'py, PyArray3<f32>>> {
+        let coords = self.snap.coords_fw.as_ref()?;
+        match (active_only, self.snap.active_mask.as_ref()) {
+            (true, Some(mask)) => Some(coords.select(Axis(1), &kept_indices(mask)).into_pyarray(py)),
+            _ => Some(coords.to_pyarray(py)),
+        }
+    }
+
+    /// Forward per-frame tracking status as an `(frames, points)` uint8 array, aligned to
+    /// `coords` (1 = tracked OK, 0 = LK failed and the position was carried forward). Same
+    /// `active_only` semantics as `coords`; `None` if no result.
+    #[pyo3(signature = (active_only = true))]
+    fn track_status<'py>(
+        &self,
+        py: Python<'py>,
+        active_only: bool,
+    ) -> Option<Bound<'py, PyArray2<u8>>> {
+        let status = self.snap.status_fw.as_ref()?;
+        match (active_only, self.snap.active_mask.as_ref()) {
+            (true, Some(mask)) => Some(status.select(Axis(1), &kept_indices(mask)).into_pyarray(py)),
+            _ => Some(status.to_pyarray(py)),
+        }
+    }
+
+    /// The `(P,)` bool keep-mask: True where a point survived cleanup. `None` if no result.
+    /// Read-only — change it via `apply_keep_mask` (a later slice).
+    #[getter]
+    fn active_mask<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<bool>>> {
+        Some(self.snap.active_mask.as_ref()?.to_pyarray(py))
+    }
+
+    /// Original column indices (into the full P points) of the kept points, matching the point
+    /// axis of `coords(active_only=True)`. `None` if no result. (`np.where(active_mask)[0]`.)
+    fn point_indices<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<i64>>> {
+        let mask = self.snap.active_mask.as_ref()?;
+        let idx: Vec<i64> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i as i64)
+            .collect();
+        Some(idx.into_pyarray(py))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
 
     fn sample() -> ContextSnapshot {
         ContextSnapshot {
@@ -161,6 +228,33 @@ mod tests {
             point_count: 267,
             n_active: 200,
             roi_corners: vec![(10.0, 10.0), (110.0, 10.0), (110.0, 90.0), (10.0, 90.0)],
+            coords_fw: None,
+            status_fw: None,
+            active_mask: None,
+        }
+    }
+
+    /// A small, self-consistent "has result" snapshot for the array API: 3 frames × 4 points,
+    /// mask keeps columns [0, 2, 3] (n_active 3). `coords[f,p,c] = f*100 + p*10 + c` so values
+    /// are easy to check after column selection.
+    fn sample_with_arrays() -> ContextSnapshot {
+        let coords = Array3::from_shape_fn((3, 4, 2), |(f, p, c)| (f * 100 + p * 10 + c) as f32);
+        let status = Array2::from_shape_fn((3, 4), |(f, p)| ((f + p) % 2) as u8);
+        ContextSnapshot {
+            n_total_images: 8,
+            has_sequence: true,
+            has_result: true,
+            image_size: Some((48, 64)),
+            reference_index: 0,
+            last_index: 2,
+            current_index: 1,
+            frame_count: 3,
+            point_count: 4,
+            n_active: 3,
+            roi_corners: vec![],
+            coords_fw: Some(coords),
+            status_fw: Some(status),
+            active_mask: Some(vec![true, false, true, true]),
         }
     }
 
@@ -206,6 +300,57 @@ mod tests {
             let ctx = Py::new(py, PluginContext::new(snap)).unwrap();
             let cc: Option<i64> = ctx.bind(py).getattr("current_cut").unwrap().extract().unwrap();
             assert_eq!(cc, None);
+        });
+    }
+
+    /// coords / track_status / active_mask / point_indices return correctly-shaped NumPy arrays,
+    /// and active_only selects the kept columns ([0, 2, 3]) in order.
+    #[test]
+    fn tracked_arrays_from_python() {
+        Python::attach(|py| {
+            let ctx = Py::new(py, PluginContext::new(sample_with_arrays())).unwrap();
+            let b = ctx.bind(py);
+
+            // Full coords: (3, 4, 2).
+            let full: PyReadonlyArray3<f32> =
+                b.call_method1("coords", (false,)).unwrap().extract().unwrap();
+            assert_eq!(full.as_array().shape(), &[3, 4, 2]);
+
+            // Active coords: (3, 3, 2), kept columns [0, 2, 3]. Column 1 of the active array is the
+            // original point 2 → coords[0, 2, c] = 0*100 + 2*10 + c = (20, 21) at frame 0.
+            let act: PyReadonlyArray3<f32> =
+                b.call_method1("coords", (true,)).unwrap().extract().unwrap();
+            let a = act.as_array();
+            assert_eq!(a.shape(), &[3, 3, 2]);
+            assert_eq!(a[[0, 1, 0]], 20.0);
+            assert_eq!(a[[0, 1, 1]], 21.0);
+
+            // Active status: (3, 3).
+            let st: PyReadonlyArray2<u8> =
+                b.call_method1("track_status", (true,)).unwrap().extract().unwrap();
+            assert_eq!(st.as_array().shape(), &[3, 3]);
+
+            // active_mask: (4,) bool, unfiltered.
+            let m: PyReadonlyArray1<bool> = b.getattr("active_mask").unwrap().extract().unwrap();
+            assert_eq!(m.as_array().to_vec(), vec![true, false, true, true]);
+
+            // point_indices: the kept columns.
+            let pi: PyReadonlyArray1<i64> =
+                b.call_method0("point_indices").unwrap().extract().unwrap();
+            assert_eq!(pi.as_array().to_vec(), vec![0_i64, 2, 3]);
+        });
+    }
+
+    /// With no result, every array accessor returns Python None.
+    #[test]
+    fn no_result_arrays_are_none() {
+        Python::attach(|py| {
+            let ctx = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let b = ctx.bind(py);
+            assert!(b.call_method1("coords", (true,)).unwrap().is_none());
+            assert!(b.call_method1("track_status", (false,)).unwrap().is_none());
+            assert!(b.getattr("active_mask").unwrap().is_none());
+            assert!(b.call_method0("point_indices").unwrap().is_none());
         });
     }
 }

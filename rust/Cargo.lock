@@ -920,6 +920,8 @@ dependencies = [
 name = "ecm-pyhost"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
+ "numpy",
  "pyo3",
 ]
 
@@ -2185,6 +2187,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "numpy"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7aac2e6a6e4468ffa092ad43c39b81c79196c2bb773b8db4085f695efe3bba17"
+dependencies = [
+ "libc",
+ "ndarray",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "pyo3",
+ "pyo3-build-config",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]

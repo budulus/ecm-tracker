@@ -215,10 +215,11 @@ def test_gui_pipeline():
     w.resize(1000, 700)
     w.show()
     w._load_paths(discover(src), src)
-    w._begin_roi_definition("ngon", n=4)
+    w._begin_roi_definition("ngon")
     ngon = w.canvas._interaction
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
         ngon.on_press(QPointF(*c), None)
+    ngon.on_right_press(QPointF(60, 180), None)  # right-click closes the polygon
     w._detect_shi_tomasi()
     w._run_tracking()
     assert w.state.result is not None
@@ -303,12 +304,18 @@ def test_roi_shape_tools():
     tool.on_release(QPointF(11, 11), None)
     assert w.state.roi is None and not w.define_roi_action.isChecked()
 
-    # N-Gon: pick N, then click N arbitrary points; the Nth click closes it.
-    w._begin_roi_definition("ngon", n=5)
+    # N-Gon: left-click arbitrary points (no preset count); right-click closes it.
+    w._begin_roi_definition("ngon")
     assert w.define_roi_action.isChecked()
     ngon = w.canvas._interaction
-    for c in [(60, 50), (240, 50), (240, 180), (150, 220), (60, 180)]:
+    ngon.on_press(QPointF(60, 50), None)
+    ngon.on_right_press(QPointF(60, 50), None)  # <3 points: must not close
+    assert not w.state.roi.is_complete and w.define_roi_action.isChecked()
+    for c in [(240, 50), (240, 180), (150, 220), (60, 180)]:
         ngon.on_press(QPointF(*c), None)
+    assert not w.state.roi.is_complete  # left-clicks never auto-close
+    assert w.define_roi_action.isChecked() and len(w.state.roi.corners) == 5
+    ngon.on_right_press(QPointF(60, 180), None)  # right-click closes
     assert w.state.roi.is_complete and len(w.state.roi.corners) == 5
     assert not w.define_roi_action.isChecked()
 
@@ -328,8 +335,8 @@ def test_partial_ngon_discarded_on_frame_navigation():
     w.show()
     w._load_paths(discover(src), src)
 
-    # Start an N-Gon and place only 2 of 5 corners (definition still in progress).
-    w._begin_roi_definition("ngon", n=5)
+    # Start an N-Gon and place only 2 corners without closing (definition still in progress).
+    w._begin_roi_definition("ngon")
     ngon = w.canvas._interaction
     for c in [(60, 50), (240, 50)]:
         ngon.on_press(QPointF(*c), None)
@@ -360,10 +367,11 @@ def test_display_settings():
     assert set(w.state.display_params) == set(DEFAULT_DISPLAY)
 
     w._load_paths(discover(src), src)
-    w._begin_roi_definition("ngon", n=4)
+    w._begin_roi_definition("ngon")
     ngon = w.canvas._interaction
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
         ngon.on_press(QPointF(*c), None)
+    ngon.on_right_press(QPointF(60, 180), None)  # right-click closes the polygon
     w._detect_shi_tomasi()
     w._run_tracking()
     assert w.state.result is not None
@@ -373,9 +381,9 @@ def test_display_settings():
         w.canvas.render(QPixmap(w.canvas.size()))
 
     for cfg in (
-        dict(show_markers=True, marker_size=10, marker_opacity=50, show_window_box=True),
-        dict(show_markers=False, marker_size=1, marker_opacity=0, show_window_box=False),
-        dict(show_markers=True, marker_size=3, marker_opacity=100, show_window_box=True),
+        dict(show_markers=True, marker_size=10, marker_opacity=50, show_window_box=True, show_roi=True),
+        dict(show_markers=False, marker_size=1, marker_opacity=0, show_window_box=False, show_roi=False),
+        dict(show_markers=True, marker_size=3, marker_opacity=100, show_window_box=True, show_roi=True),
     ):
         w.state.display_params = cfg
         _paint()

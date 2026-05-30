@@ -138,6 +138,25 @@ class CanvasView(QWidget):
             pass
         return True
 
+    def _right_press_consumed(self, event) -> bool:
+        """Give the active interaction a chance to handle a right-click (e.g. N-Gon close).
+
+        Unlike ``_dispatch_interaction``, this returns False when the handler lacks
+        ``on_right_press`` so right-drag still pans for tools/plugins that don't opt in. Do not
+        fold this back into ``_dispatch_interaction`` — the missing-method default is opposite.
+        """
+        handler = self._interaction
+        if handler is None:
+            return False
+        method = getattr(handler, "on_right_press", None)
+        if method is None:
+            return False
+        try:
+            method(self.screen_to_image(QPointF(event.pos())), event)
+        except Exception:
+            pass
+        return True
+
     def refresh(self) -> None:
         """Rebuild the cached frame image from the current state and repaint."""
         seq = self._state.sequence
@@ -188,6 +207,8 @@ class CanvasView(QWidget):
                 self.setCursor(Qt.ClosedHandCursor)
             elif not self._dispatch_interaction("on_press", event):
                 self.imageClicked.emit(self.screen_to_image(QPointF(event.pos())))
+        elif event.button() == Qt.RightButton and self._right_press_consumed(event):
+            pass  # consumed by the active interaction (e.g. N-Gon close)
         elif event.button() in (Qt.MiddleButton, Qt.RightButton):
             self._panning = True
             self._last_pan_pos = QPointF(event.pos())
@@ -290,6 +311,8 @@ class CanvasView(QWidget):
                 painter.restore()
 
     def _draw_roi(self, painter: QPainter) -> None:
+        if not self._state.display_params["show_roi"]:
+            return
         roi = self._state.roi
         if roi is None or not roi.corners:
             return

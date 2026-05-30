@@ -15,6 +15,7 @@ DEFAULT_DISPLAY = dict(
     marker_size=3,        # marker radius in screen px (~ the previous hardcoded 2.5)
     marker_opacity=100,   # percent, 0-100 (100 preserves the original look)
     show_window_box=False,
+    show_roi=True,
 )
 
 

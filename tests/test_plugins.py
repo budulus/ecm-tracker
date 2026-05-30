@@ -44,10 +44,11 @@ def _tracked_window():
     w.resize(900, 600)
     w.show()
     w._load_paths(discover(d), d)
-    w._begin_roi_definition("ngon", n=4)
+    w._begin_roi_definition("ngon")
     ngon = w.canvas._interaction
     for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
         ngon.on_press(QPointF(*c), None)
+    ngon.on_right_press(QPointF(60, 180), None)  # right-click closes the polygon
     w._detect_shi_tomasi()
     w._run_tracking()
     assert w.state.result is not None

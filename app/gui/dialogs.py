@@ -172,13 +172,17 @@ class DisplayDialog(QDialog):
         self.show_window_box = QCheckBox()
         self.show_window_box.setChecked(bool(params["show_window_box"]))
 
+        self.show_roi = QCheckBox()
+        self.show_roi.setChecked(bool(params["show_roi"]))
+
         form = QFormLayout(self)
         form.addRow("Show trackers", self.show_markers)
         form.addRow("Marker size", self._with_value_label(self.marker_size, "px"))
         form.addRow("Opacity", self._with_value_label(self.marker_opacity, "%"))
         form.addRow("Show window-size box", self.show_window_box)
+        form.addRow("Show ROI", self.show_roi)
 
-        for widget in (self.show_markers, self.show_window_box):
+        for widget in (self.show_markers, self.show_window_box, self.show_roi):
             widget.toggled.connect(self._emit)
         for slider in (self.marker_size, self.marker_opacity):
             slider.valueChanged.connect(self._emit)
@@ -206,6 +210,7 @@ class DisplayDialog(QDialog):
             marker_size=self.marker_size.value(),
             marker_opacity=self.marker_opacity.value(),
             show_window_box=self.show_window_box.isChecked(),
+            show_roi=self.show_roi.isChecked(),
         )
 
 

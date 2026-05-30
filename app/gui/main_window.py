@@ -8,7 +8,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -108,7 +107,6 @@ class MainWindow(QMainWindow):
         self._cleanup_dialog = None
         self._cleanup_metrics = None
         self._preview_keep = None
-        self._last_ngon_sides = 4  # remembered N for the N-Gon prompt default
 
         self.current_slider = LabeledSlider("Current")
         self.reference_slider = LabeledSlider("Reference")
@@ -193,7 +191,7 @@ class MainWindow(QMainWindow):
         self._roi_menu = QMenu(self)
         self._roi_menu.addAction("Rectangle", lambda: self._begin_roi_definition("rectangle"))
         self._roi_menu.addAction("Circle", lambda: self._begin_roi_definition("circle"))
-        self._roi_menu.addAction("N-Gon…", self._begin_ngon)
+        self._roi_menu.addAction("N-Gon", lambda: self._begin_roi_definition("ngon"))
 
         self.clear_roi_action = QAction(load_icon("square-x"), "Clear", self)
         self.clear_roi_action.setToolTip("Remove the current ROI")
@@ -419,16 +417,7 @@ class MainWindow(QMainWindow):
         if checked:
             self._cancel_roi_definition()
 
-    def _begin_ngon(self) -> None:
-        n, ok = QInputDialog.getInt(
-            self, "N-Gon ROI", "Number of points:", self._last_ngon_sides, 3, 50
-        )
-        if not ok:
-            return
-        self._last_ngon_sides = n
-        self._begin_roi_definition("ngon", n=n)
-
-    def _begin_roi_definition(self, shape: str, n: int = None) -> None:
+    def _begin_roi_definition(self, shape: str) -> None:
         """Start defining an ROI of the given shape on the reference frame."""
         if not (self.state.has_sequence and self.state.on_reference_frame):
             return
@@ -440,8 +429,8 @@ class MainWindow(QMainWindow):
         self.state.roi = ROI()
         self.define_roi_action.setChecked(True)
         if shape == "ngon":
-            self.canvas.set_interaction(NGonTool(self, n))
-            message = f"Click {n} points to define the ROI (Esc to cancel)."
+            self.canvas.set_interaction(NGonTool(self))
+            message = "Left-click to add points; right-click to close the ROI (Esc to cancel)."
         elif shape == "rectangle":
             self.canvas.set_interaction(RectangleTool(self))
             message = "Drag a rectangle from corner to corner (Esc to cancel)."

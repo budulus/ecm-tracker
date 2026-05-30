@@ -28,7 +28,7 @@ build environment, and the next steps. Companion docs:
 | 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done, pushed | `b468af7` |
 | 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
 | 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done, pushed | `8ffe412` |
-| 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ✅ done (uncommitted) | — |
+| 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ✅ done | `7e8f8bb` |
 | 2 slice 6 — theme + icons | ⬜ next | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with

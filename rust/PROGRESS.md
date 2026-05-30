@@ -13,12 +13,14 @@ build environment, and the next steps. Companion docs:
   bit-identical), **Phase 2 complete (slices 1–6)** — canvas + ROI/detection + Run Tracking &
   overlays + Cleanup panel + parameter dialogs + grid detection + Export UI + Display wiring +
   Circle/N-Gon ROI tools + LK window-box overlay + **light theme & SVG toolbar icons**.
-  **Phase 3 (plugin host) STARTED:** slice **3a** — a `#[pyclass] PluginContext` over an immutable
-  state snapshot exposing the scalar/list read API, driven from embedded Python in tests.
+  **Phase 3 (plugin host) STARTED:** slices **3a** (`#[pyclass] PluginContext` over an immutable
+  state snapshot, scalar/list read API) + **3b** (rust-numpy arrays — `coords()` / `track_status()`
+  / `active_mask` / `point_indices()`), both driven from embedded Python in tests.
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 3 slice **3b** — rust-numpy zero-copy arrays (`coords()` / `track_status()` /
-  `active_mask()`) on `PluginContext`; then 3c discovery+menu, 3d overlays, 3e events + write-back.
+- **Next:** Phase 3 slice **3c** — plugin discovery + loading (port `manager.py`) + a Rust-side
+  Python SDK (`TrackerPlugin` base, `PluginContext` `#[pymodule]`) + a Plugins menu in the GUI;
+  then 3d overlays, 3e events + `apply_keep_mask` write-back + panels.
 
 ## Status
 
@@ -34,8 +36,8 @@ build environment, and the next steps. Companion docs:
 | 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ✅ done | `7e8f8bb` |
 | 2 slice 6 — light theme + SVG toolbar icons | ✅ done | `8edfe0f` |
 | 3a — plugin host: `PluginContext` pyclass (read-bridge, snapshot) | ✅ done | `f912a82` |
-| 3b — plugin host: rust-numpy zero-copy arrays (coords/status/mask) | ⬜ next | — |
-| 3c — plugin discovery + loading + Plugins menu + Python SDK base | ⬜ later | — |
+| 3b — plugin host: rust-numpy arrays (coords/status/mask/indices) | ✅ done | `44f7cdc` |
+| 3c — plugin discovery + loading + Plugins menu + Python SDK base | ⬜ next | — |
 | 3d — overlays as host-rendered draw-commands + canvas integration | ⬜ later | — |
 | 3e — event hub + `apply_keep_mask` write-back + panels + settings | ⬜ later | — |
 
@@ -68,7 +70,7 @@ Non-obvious build requirements (all encoded in `cargoenv.ps1`; full story in `RE
 ```powershell
 $CE = "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1"
 pwsh $CE build --workspace --manifest-path .\Cargo.toml     # build everything
-pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 14 tests incl. parity
+pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 16 tests incl. parity
 pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI window
 ```
 `cargoenv.ps1` changes the working dir, so when invoking it from elsewhere pass an **absolute**
@@ -107,12 +109,14 @@ rust/crates/
            port, applied to the context at startup). src/icons.rs = Lucide SVGs embedded from
            app/gui/icons via include_str! → resvg/tiny-skia render → alpha-recolored, cached egui
            textures (toolbar glyphs via a tool_button helper + the OS window icon).
-  pyhost/  embedded CPython (pyo3 0.27). src/context.rs = `#[pyclass] PluginContext` over an
-           immutable `ContextSnapshot` (plain data, no core types) exposing the scalar/list read
-           API (counts, frame indices, global↔cut conversions, image_size, roi_corners) — the
-           Rust port of `app/plugins/api.py:PluginContext`. Plus the Phase-0 numpy-import smoke.
+  pyhost/  embedded CPython (pyo3 0.27) + rust-numpy 0.27. src/context.rs = `#[pyclass]
+           PluginContext` over an immutable `ContextSnapshot` (plain data, no core types) — the
+           Rust port of `app/plugins/api.py:PluginContext`. Scalar/list reads (counts, frame
+           indices, global↔cut conversions, image_size, roi_corners) + NumPy arrays
+           (`coords(active_only)` / `track_status(active_only)` / `active_mask` / `point_indices()`,
+           cut-indexed, active_only selects kept columns). Plus the Phase-0 numpy-import smoke.
 ```
-- **Tests: 14**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 16**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -184,19 +188,26 @@ rust/crates/
 > command in 3e. Two tests drive the pyclass through Python's `getattr`/`call_method` (proving the
 > bridge is exposed to embedded Python) + assert the index math. No new deps (pyo3 only). 14 tests.
 
-1. **Slice 3b — rust-numpy arrays.** Add the `numpy` crate (version matching pyo3 0.27 — verify
-   before adding) + `ndarray`; extend `ContextSnapshot` with `coords_fw` (Array3) / `status_fw` /
-   `active_mask`, and add `coords(active_only)` / `track_status(active_only)` / `active_mask`
-   returning NumPy arrays (zero-copy where lifetimes allow, else a copy). Mirror the cut-indexing.
-2. **Slice 3c — discovery + menu + SDK.** Port `manager.py` (scan `plugins/`, import
+> ✅ **Slice 3b — rust-numpy arrays (done).** Added `numpy = "0.27"` + `ndarray = "0.16"` to
+> `pyhost` (verified: numpy 0.27.1 needs `pyo3 ^0.27` + `ndarray >=0.15,<=0.17`, so both unify with
+> the existing pins; 0.28 is held back by the workspace's rustc-1.80 pin). `ContextSnapshot` gained
+> `coords_fw` (Array3) / `status_fw` (Array2) / `active_mask` (Vec<bool>), and `PluginContext` now
+> serves `coords(active_only)` → `(frames,P,2)` f32, `track_status(active_only)` → `(frames,P)` u8,
+> `active_mask` → `(P,)` bool, and `point_indices()` → kept column indices. `active_only=True`
+> (default) selects the kept columns via `ndarray.select(Axis(1), …)` (an owned array →
+> `into_pyarray`); the full case copies via `to_pyarray`. Cut-indexed on axis 0. Two tests drive
+> all four from Python, asserting shapes + the [0,2,3] column selection + values; a no-result
+> snapshot returns None for every array. 16 tests.
+
+1. **Slice 3c — discovery + menu + SDK.** Port `manager.py` (scan `plugins/`, import
    `plugins.<name>`, find `PLUGIN`/`TrackerPlugin` subclass, instantiate, isolate errors); define a
    Rust-side Python SDK module (`TrackerPlugin` base + the `PluginContext` registered as a
    `#[pymodule]`); add a **Plugins** menu to the GUI; ship a Rust-compatible example/test plugin.
-3. **Slice 3d — overlays.** Host-rendered draw-commands (plugins return shapes in image space; the
+2. **Slice 3d — overlays.** Host-rendered draw-commands (plugins return shapes in image space; the
    Rust canvas renders them via the existing overlay hook) replacing the Qt `OverlayFn`.
-4. **Slice 3e — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
+3. **Slice 3e — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
    `apply_keep_mask` write-back command, declared egui control panels, plugin settings persistence.
-5. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
+4. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 

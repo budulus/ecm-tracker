@@ -418,6 +418,70 @@ def test_app_icon():
     assert icon.availableSizes()  # several sizes registered for window/taskbar use
 
 
+def test_navigation_buttons():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
+    assert app is not None
+    src, _ = _sequence(n=12)
+    from app.gui.icon_loader import _ICON_DIR
+    from app.gui.main_window import MainWindow
+
+    w = MainWindow()
+    w._load_paths(discover(src), src)
+    total = w.state.total_images
+    assert total == 12
+
+    # A reference..last range distinct from the sequence ends.
+    w._on_reference_changed(2)
+    w._on_last_changed(8)
+    assert w.state.reference_index == 2 and w.state.last_index == 8
+
+    # Reference / Last buttons jump Current to those frames.
+    w.go_reference_action.trigger()
+    assert w.state.current_index == 2
+    w.go_last_action.trigger()
+    assert w.state.current_index == 8
+
+    # Prev / Next step Current by one.
+    w.next_frame_action.trigger()
+    assert w.state.current_index == 9
+    w.prev_frame_action.trigger()
+    assert w.state.current_index == 8
+
+    # Boundaries: Prev disabled at frame 0, Next disabled at the last frame.
+    w._go_to_frame(0)
+    assert w.state.current_index == 0
+    assert not w.prev_frame_action.isEnabled() and w.next_frame_action.isEnabled()
+    w._go_to_frame(total - 1)
+    assert w.state.current_index == total - 1
+    assert not w.next_frame_action.isEnabled() and w.prev_frame_action.isEnabled()
+
+    # Each nav action is backed by a real SVG (QSvgRenderer fails silently otherwise).
+    for action, name in [
+        (w.go_reference_action, "skip-back"),
+        (w.prev_frame_action, "chevron-left"),
+        (w.next_frame_action, "chevron-right"),
+        (w.go_last_action, "skip-forward"),
+    ]:
+        assert not action.icon().isNull()
+        assert os.path.exists(os.path.join(_ICON_DIR, f"{name}.svg"))
+
+    # ←/→ are bound to the canvas (WidgetWithChildrenShortcut), NOT window-global: a
+    # window-wide shortcut on these navigation keys conflicts with sliders/tables/plugin
+    # windows and crashes plugin launch. Keep them canvas-scoped.
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QKeySequence
+
+    assert w._prev_frame_shortcut.key() == QKeySequence(Qt.Key_Left)
+    assert w._next_frame_shortcut.key() == QKeySequence(Qt.Key_Right)
+    for sc in (w._prev_frame_shortcut, w._next_frame_shortcut):
+        assert sc.parent() is w.canvas
+        assert sc.context() == Qt.WidgetWithChildrenShortcut
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

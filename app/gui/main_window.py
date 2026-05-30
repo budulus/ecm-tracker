@@ -137,6 +137,20 @@ class MainWindow(QMainWindow):
         self._roi_escape = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._roi_escape.activated.connect(self._cancel_roi_definition)
 
+        # ←/→ step the Current frame, scoped to the canvas (WidgetWithChildrenShortcut) so
+        # they don't hijack arrow keys from the sliders/spin boxes or from plugin windows
+        # (a window-wide shortcut on these navigation keys conflicts widely and is unstable).
+        self._prev_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self.canvas)
+        self._prev_frame_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._prev_frame_shortcut.activated.connect(
+            lambda: self._go_to_frame(self.state.current_index - 1)
+        )
+        self._next_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Right), self.canvas)
+        self._next_frame_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._next_frame_shortcut.activated.connect(
+            lambda: self._go_to_frame(self.state.current_index + 1)
+        )
+
         # Discover installed plugins and populate the Plugins menu.
         self.plugin_manager = PluginManager(self)
         self.plugin_manager.discover()
@@ -255,6 +269,44 @@ class MainWindow(QMainWindow):
         )
         self.display_action.triggered.connect(self._open_display_dialog)
 
+        # Navigation: convenience jumps for the Current frame. Lambdas read live
+        # state at click time so a later reference/last change is honored.
+        self.go_reference_action = QAction(load_icon("skip-back"), "Reference", self)
+        self.go_reference_action.setToolTip("Jump to the reference frame")
+        self.go_reference_action.triggered.connect(
+            lambda: self._go_to_frame(self.state.reference_index)
+        )
+
+        self.prev_frame_action = QAction(load_icon("chevron-left"), "Prev", self)
+        self.prev_frame_action.setToolTip("Previous frame (←)")
+        self.prev_frame_action.triggered.connect(
+            lambda: self._go_to_frame(self.state.current_index - 1)
+        )
+
+        self.next_frame_action = QAction(load_icon("chevron-right"), "Next", self)
+        self.next_frame_action.setToolTip("Next frame (→)")
+        self.next_frame_action.triggered.connect(
+            lambda: self._go_to_frame(self.state.current_index + 1)
+        )
+
+        self.go_last_action = QAction(load_icon("skip-forward"), "Last", self)
+        self.go_last_action.setToolTip("Jump to the last frame")
+        self.go_last_action.triggered.connect(
+            lambda: self._go_to_frame(self.state.last_index)
+        )
+
+        toolbar.addWidget(
+            self._toolbar_group(
+                "NAVIGATE",
+                [
+                    self.go_reference_action,
+                    self.prev_frame_action,
+                    self.next_frame_action,
+                    self.go_last_action,
+                ],
+            )
+        )
+        toolbar.addSeparator()
         toolbar.addWidget(
             self._toolbar_group(
                 "ROI",
@@ -413,6 +465,15 @@ class MainWindow(QMainWindow):
         self._sync_range_constraints()
         self._update_status()
         self._update_tool_states()
+
+    def _go_to_frame(self, global_index: int) -> None:
+        """Move Current to ``global_index`` (clamped), driving the same refresh
+        path as the Current slider."""
+        if not self.state.has_sequence:
+            return
+        target = max(0, min(global_index, self.state.total_images - 1))
+        self.current_slider.setValue(target)  # sync widget (setValue blocks signals)
+        self._on_current_changed(target)      # state + canvas + status + tools + signal
 
     # ---- ROI ------------------------------------------------------------
     def _on_pan_tool_toggled(self, checked: bool) -> None:
@@ -784,6 +845,13 @@ class MainWindow(QMainWindow):
         self.current_slider.setEnabled(has)
         self.reference_slider.setEnabled(has and not has_result)
         self.last_slider.setEnabled(has and not has_result)
+
+        self.go_reference_action.setEnabled(has)
+        self.go_last_action.setEnabled(has)
+        self.prev_frame_action.setEnabled(has and self.state.current_index > 0)
+        self.next_frame_action.setEnabled(
+            has and self.state.current_index < self.state.total_images - 1
+        )
 
         if self.define_roi_action.isChecked() and not on_ref:
             # Leaving the reference frame mid-definition: discard the partial ROI too, or the

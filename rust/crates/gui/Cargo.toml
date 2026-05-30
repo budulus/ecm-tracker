@@ -13,3 +13,4 @@ path = "src/main.rs"
 ecm-core = { workspace = true }
 eframe = "0.30.0"     # egui + native window/GL shell
 rfd = "0.17.2"        # native folder/file picker
+resvg = "0.47.0"      # SVG → raster for toolbar icons (re-exports usvg + tiny-skia)

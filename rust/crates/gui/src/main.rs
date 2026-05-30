@@ -10,6 +10,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // no console in release
 
 mod canvas;
+mod icons;
+mod theme;
 
 use canvas::CanvasView;
 use ecm_core::cleanup;
@@ -29,17 +31,21 @@ use std::thread;
 
 fn main() -> eframe::Result<()> {
     let smoke = std::env::var_os("ECM_SMOKE").is_some();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([640.0, 480.0])
-            .with_title("ECM Tracker"),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1100.0, 720.0])
+        .with_min_inner_size([640.0, 480.0])
+        .with_title("ECM Tracker");
+    if let Some(icon) = icons::app_icon(256) {
+        viewport = viewport.with_icon(Arc::new(icon));
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
         "ECM Tracker",
         options,
-        Box::new(move |_cc| Ok(Box::new(EcmApp::new(smoke)))),
+        Box::new(move |cc| {
+            theme::apply(&cc.egui_ctx); // light theme on the whole context (window + dialogs)
+            Ok(Box::new(EcmApp::new(smoke)))
+        }),
     )
 }
 
@@ -124,6 +130,8 @@ enum CleanupAction {
 struct EcmApp {
     state: ProjectState,
     canvas: CanvasView,
+    /// Lazily-rendered, recolored SVG toolbar-icon textures.
+    icons: icons::IconStore,
     tool: Tool,
     /// Image-space start corner while dragging a rectangular ROI.
     roi_draft_start: Option<egui::Pos2>,
@@ -177,11 +185,37 @@ fn circle_corners(center: egui::Pos2, edge: egui::Pos2) -> Option<Vec<(f64, f64)
     )
 }
 
+/// A toolbar button with an optional bundled icon (text-only fallback when none is bundled).
+/// `selected` gives the checked/toggle look; `accent` paints it as the primary action (blue fill +
+/// white glyph). Mirrors the `QToolButton` styling from `theme.py`.
+fn tool_button(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    store: &mut icons::IconStore,
+    icon: &'static str,
+    label: &str,
+    selected: bool,
+    accent: bool,
+    enabled: bool,
+) -> egui::Response {
+    let glyph = if accent { icons::ACCENT } else { icons::NORMAL };
+    let mut btn = match store.image(ctx, icon, glyph, 16.0) {
+        Some(img) => egui::Button::image_and_text(img, label),
+        None => egui::Button::new(label),
+    };
+    btn = btn.selected(selected);
+    if accent {
+        btn = btn.fill(egui::Color32::from_rgb(0x25, 0x63, 0xeb));
+    }
+    ui.add_enabled(enabled, btn)
+}
+
 impl EcmApp {
     fn new(smoke: bool) -> Self {
         let mut app = Self {
             state: ProjectState::new(),
             canvas: CanvasView::default(),
+            icons: icons::IconStore::default(),
             tool: Tool::Pan,
             roi_draft_start: None,
             tex: None,
@@ -820,20 +854,29 @@ impl eframe::App for EcmApp {
                 }
                 if self.state.has_sequence() {
                     ui.separator();
-                    ui.selectable_value(&mut self.tool, Tool::Pan, "✋ Pan");
-                    ui.selectable_value(&mut self.tool, Tool::RoiRect, "▭ Rect ROI");
-                    ui.selectable_value(&mut self.tool, Tool::RoiCircle, "◯ Circle ROI");
-                    ui.selectable_value(&mut self.tool, Tool::RoiNgon, "△ N-Gon ROI");
-                    if ui.button("Clear ROI").clicked() {
+                    // Circle/N-Gon have no bundled icon → text-only (geometric-shape glyph kept).
+                    if tool_button(ui, ctx, &mut self.icons, "hand", "Pan", self.tool == Tool::Pan, false, true).clicked() {
+                        self.tool = Tool::Pan;
+                    }
+                    if tool_button(ui, ctx, &mut self.icons, "frame", "Rect ROI", self.tool == Tool::RoiRect, false, true).clicked() {
+                        self.tool = Tool::RoiRect;
+                    }
+                    if tool_button(ui, ctx, &mut self.icons, "circle", "◯ Circle ROI", self.tool == Tool::RoiCircle, false, true).clicked() {
+                        self.tool = Tool::RoiCircle;
+                    }
+                    if tool_button(ui, ctx, &mut self.icons, "ngon", "△ N-Gon ROI", self.tool == Tool::RoiNgon, false, true).clicked() {
+                        self.tool = Tool::RoiNgon;
+                    }
+                    if tool_button(ui, ctx, &mut self.icons, "square-x", "Clear ROI", false, false, true).clicked() {
                         self.state.roi = None;
                         self.state.features = None;
                         self.invalidate_tracking();
                     }
                     ui.separator();
-                    if ui.button("Detect Corners").clicked() {
+                    if tool_button(ui, ctx, &mut self.icons, "scan", "Corners", false, false, true).clicked() {
                         self.detect_corners();
                     }
-                    if ui.button("Detect Grid").clicked() {
+                    if tool_button(ui, ctx, &mut self.icons, "grid", "Grid", false, false, true).clicked() {
                         self.detect_grid();
                     }
                     ui.separator();
@@ -843,25 +886,16 @@ impl eframe::App for EcmApp {
                         .as_ref()
                         .is_some_and(|f| !f.is_empty())
                         && self.track_job.is_none();
-                    if ui
-                        .add_enabled(can_track, egui::Button::new("▶ Run Tracking"))
-                        .clicked()
-                    {
+                    if tool_button(ui, ctx, &mut self.icons, "play", "Run", false, true, can_track).clicked() {
                         self.run_tracking();
                     }
-                    if self.state.result.is_some()
-                        && ui
-                            .add_enabled(
-                                self.track_job.is_none(),
-                                egui::Button::new("Clear Tracking"),
-                            )
-                            .clicked()
-                    {
-                        self.clear_tracking();
-                    }
                     if self.state.result.is_some() {
+                        let enabled = self.track_job.is_none();
+                        if tool_button(ui, ctx, &mut self.icons, "trash", "Clear Tracking", false, false, enabled).clicked() {
+                            self.clear_tracking();
+                        }
                         let open = self.cleanup.is_some();
-                        if ui.selectable_label(open, "Cleanup").clicked() {
+                        if tool_button(ui, ctx, &mut self.icons, "sliders", "Cleanup", open, false, true).clicked() {
                             if open {
                                 self.cleanup = None;
                             } else {
@@ -907,7 +941,7 @@ impl eframe::App for EcmApp {
                         }
                     });
                     ui.separator();
-                    if ui.button("Fit").clicked() {
+                    if tool_button(ui, ctx, &mut self.icons, "maximize", "Fit", false, false, true).clicked() {
                         self.canvas.reset();
                     }
                     ui.label(format!(

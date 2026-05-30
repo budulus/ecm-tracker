@@ -10,12 +10,13 @@ build environment, and the next steps. Companion docs:
 - This is the in-progress **Rust + egui + embedded-Python** rewrite of the PyQt5 ECM Tracker.
   The Python app under `../app/` is the working reference; `rust/` is the port.
 - **Done:** Phase 0 (scaffold + toolchain), Phase 1 (full `core`+`models` port, parity-tested
-  bit-identical), Phase 2 slices 1–4 + **5a** + **5b** (canvas + ROI/detection + Run Tracking &
-  overlays + Cleanup panel + parameter dialogs, grid detection, Export UI, Display wiring +
-  Circle/N-Gon ROI tools + LK window-box overlay).
+  bit-identical), **Phase 2 complete (slices 1–6)** — canvas + ROI/detection + Run Tracking &
+  overlays + Cleanup panel + parameter dialogs + grid detection + Export UI + Display wiring +
+  Circle/N-Gon ROI tools + LK window-box overlay + **light theme & SVG toolbar icons**.
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 2 slice 6 — theme + icons (egui light style; render `app/gui/icons/*.svg`).
+- **Next:** Phase 3 — plugin host (`pyhost`): embedded-Python `PluginContext`, zero-copy NumPy,
+  host-rendered overlays, event-bus signals, `apply_keep_mask`.
 
 ## Status
 
@@ -29,7 +30,8 @@ build environment, and the next steps. Companion docs:
 | 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
 | 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done, pushed | `8ffe412` |
 | 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ✅ done | `7e8f8bb` |
-| 2 slice 6 — theme + icons | ⬜ next | — |
+| 2 slice 6 — light theme + SVG toolbar icons | ✅ done | `8edfe0f` |
+| 3 — plugin host (`pyhost`) | ⬜ next | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -95,7 +97,10 @@ rust/crates/
            dialogs + Save-as-defaults), Export menu (.npy/.csv via rfd). src/canvas.rs =
            image↔screen Transform (fit→zoom→pan), texture draw, and draw_roi / draw_points /
            draw_tracks (alpha + green-kept / red-preview-drop) / draw_window_boxes (LK search
-           window, zoom-scaled) overlays.
+           window, zoom-scaled) overlays. src/theme.rs = light egui Visuals (LIGHT_QSS palette
+           port, applied to the context at startup). src/icons.rs = Lucide SVGs embedded from
+           app/gui/icons via include_str! → resvg/tiny-skia render → alpha-recolored, cached egui
+           textures (toolbar glyphs via a tool_button helper + the OS window icon).
   pyhost/  embedded CPython (pyo3 0.27) — only a numpy-import smoke test so far (Phase 3).
 ```
 - **Tests: 12**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
@@ -149,12 +154,20 @@ rust/crates/
 > 12 tests + `ECM_SMOKE` all green. **Deferred (as before):** per-frame motion *trails* — they
 > belong with the trail/Display work, not this slice.
 
-1. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg` +
-   `tiny-skia` → recolored egui textures.
-2. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
+> ✅ **Slice 6 — Light theme + SVG toolbar icons (done).** `theme::apply` sets egui `Visuals` from
+> the `LIGHT_QSS` palette (window #f4f5f7 / surface #fff / border #d6dade / text #2b2f33 / accent
+> #2563eb; buttons flat until hover; accent selection) once on the context at startup — egui has no
+> stylesheet, so it's a palette port, not a 1:1 QSS reproduction. `icons` embeds the Lucide SVGs
+> (`include_str!` from `app/gui/icons`), renders them with **resvg 0.47 + tiny-skia**, recolors by
+> alpha (the Qt `SourceIn` recolor: keep coverage-alpha, replace RGB with the tint), and caches the
+> egui textures by (name, color); the full-color `app_icon.svg` becomes the OS window icon. Toolbar
+> buttons use a `tool_button` helper (icon-or-text + `Button::selected` toggle + accent-filled Run);
+> Circle/N-Gon keep geometric-shape glyphs (no bundled icon). Build + 12 tests + `ECM_SMOKE` green.
+
+1. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
    `numpy` crate, host-rendered `OverlayPainter` draw-commands, event-bus signals, declared UI
    panels, `apply_keep_mask`. Bundle numpy/scipy/opencv-python/matplotlib into the plugin env.
-3. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
+2. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 
@@ -170,6 +183,16 @@ rust/crates/
   -> Result`; `ShiTomasiParams.use_harris_detector`, `GridParams { spacing_x, spacing_y }`;
   `export::export(...) -> NpyExport { shape: (N,P,2) }`, `export::export_csv(...) -> (PathBuf,
   (N,P,2))`; `settings::update_section(name, Value)` / `settings::save_section<T: Serialize>`.
+- **Theming/icons (egui 0.30 + resvg 0.47, verified before coding):** egui has no stylesheet —
+  theme via `Visuals` (`Visuals::light()` then override `panel_fill`/`window_fill`/`extreme_bg_color`
+  /`selection`/`widgets.{noninteractive,inactive,hovered,active,open}`). `WidgetVisuals` fields are
+  `bg_fill / weak_bg_fill / bg_stroke / rounding / fg_stroke / expansion`; `Rounding::same(f32)`
+  (NOT egui 0.31's `corner_radius`/u8). `Button` has `image_and_text` / `selected(bool)` / `fill`.
+  resvg API: `usvg::Tree::from_str(&str, &usvg::Options)`, `tree.size().width()` (a **method**),
+  `resvg::render(&tree, Transform, &mut pixmap.as_mut())` (transform **by value**); resvg re-exports
+  `usvg` + `tiny_skia` (`tiny_skia::Pixmap::pixels()` → `[PremultipliedColorU8]`, `.alpha()` /
+  `.demultiply()`). The window icon wants **unmultiplied** RGBA (`IconData`); recolor keeps alpha
+  and swaps RGB so premultiplied-vs-not doesn't matter there.
 - **Build invocation:** see the Commands note above (absolute manifest path; benign vswhere
   warning; background-task-to-log if interactive output capture misbehaves).
 

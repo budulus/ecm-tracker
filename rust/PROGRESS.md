@@ -27,7 +27,7 @@ build environment, and the next steps. Companion docs:
 | 2 slice 2 — ROI rect + corner detection + overlays | ✅ done, pushed | `95f61a0` |
 | 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done, pushed | `b468af7` |
 | 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
-| 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done | ⚠ uncommitted |
+| 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done, pushed | `8ffe412` |
 | 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ⬜ next | — |
 | 2 slice 6 — theme + icons | ⬜ later | — |
 
@@ -60,12 +60,19 @@ Non-obvious build requirements (all encoded in `cargoenv.ps1`; full story in `RE
 ```powershell
 $CE = "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1"
 pwsh $CE build --workspace --manifest-path .\Cargo.toml     # build everything
-pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 11 tests incl. parity
+pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 12 tests incl. parity
 pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI window
 ```
-Headless GUI smoke check (loads fixtures, detects corners, exits): set `ECM_SMOKE=1` and
-`ECM_SMOKE_DIR=<rust>\crates\core\tests\fixtures\frames`, run the built exe with the opencv `bin`
-on `PATH`.
+`cargoenv.ps1` changes the working dir, so when invoking it from elsewhere pass an **absolute**
+`--manifest-path` (…\rust\Cargo.toml). The `'vswhere.exe' is not recognized` line it prints is a
+**benign warning** — vcvars still sets up the env and the build succeeds. Invoke with
+`pwsh -NoProfile`. If interactive output capture looks empty/garbled, run the command as a
+background task that tees to a log file and read the log — that has been reliable here.
+
+Headless GUI smoke check (loads fixtures → detects corners → tracks → reports counts → exits):
+set `ECM_SMOKE=1` and `ECM_SMOKE_DIR=<rust>\crates\core\tests\fixtures\frames`, then run the built
+exe with the opencv `bin` (`%LOCALAPPDATA%\ecm-tracker\opencv\opencv\build\x64\vc16\bin`) on `PATH`.
+A pass prints `[smoke] frames=12 … tracked_points=267 …`.
 
 Regenerate the parity fixture (uses the app's `.venv`, which has the real `cv2`), from repo root:
 ```
@@ -79,13 +86,17 @@ rust/crates/
   core/    Qt-free port of app/core + app/models. Modules: image_sequence, roi,
            feature_detection, tracking, cleanup, export, settings, result
            (TrackerResult/LkParams), project_state (dual global/cut index model).
-           GUI helpers: ImageSequence::load_rgba, feature_detection::detect_corners.
-  gui/     egui app. src/main.rs = app shell (ProjectState, toolbar, frame slider,
-           Open Folder, Pan/RoiRect tools, Detect Corners). src/canvas.rs = image↔screen
-           Transform (fit→zoom→pan), texture draw, draw_roi/draw_points overlays.
+           GUI helpers: ImageSequence::load_rgba, feature_detection::detect_corners,
+           settings::save_section<T: Serialize>.
+  gui/     egui app. src/main.rs = app shell: ProjectState, toolbar, frame slider, Open Folder,
+           Pan/RoiRect tools, Detect Corners + Detect Grid, Run Tracking (bg thread + progress
+           Window + cancel), Clear Tracking, Cleanup side-panel, ⚙ Params menu (4 dialogs +
+           Save-as-defaults), Export menu (.npy/.csv via rfd). src/canvas.rs = image↔screen
+           Transform (fit→zoom→pan), texture draw, and draw_roi / draw_points / draw_tracks
+           (alpha + green-kept / red-preview-drop) overlays.
   pyhost/  embedded CPython (pyo3 0.27) — only a numpy-import smoke test so far (Phase 3).
 ```
-- **Tests: 11**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 12**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -122,15 +133,38 @@ rust/crates/
 > dialog now feeds the overlays live (show-markers / show-ROI / marker size / opacity); the LK
 > window-box overlay is deferred to slice 5b.
 
-1. **Slice 5b — ROI tools + window box.** Circle (centre-drag) and N-Gon (click-to-add,
-   right-click to close) ROI tools via a canvas interaction handler; optional LK window-size box
-   overlay driven by `display_params.show_window_box`.
-4. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg`+
+1. **Slice 5b — Circle & N-Gon ROI tools (+ window box).** The Rect ROI is a plain primary-drag
+   in `main.rs::handle_roi_draw`; Circle/N-Gon need a small **canvas interaction** path. Mirror
+   `app/gui/roi_tools.py` (RectangleTool / CircleTool / NGonTool): Circle = centre press + drag
+   radius → emit a many-sided polygon (Python uses ~64 pts) via `Roi::new(corners)`; N-Gon =
+   left-click `Roi::add_corner`, right-click `Roi::close`, Esc cancels. Add `Tool` variants +
+   toolbar buttons and route image-space mouse events from `canvas.rs` (it returns the click
+   `Response`; `Transform::screen_to_image` converts). Then the optional LK window-box overlay
+   gated on `display_params.show_window_box`: draw `result.win_size`-sized rects in image space
+   (scaled by zoom) around each active tracked point.
+2. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg` +
    `tiny-skia` → recolored egui textures.
-5. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
+3. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the
    `numpy` crate, host-rendered `OverlayPainter` draw-commands, event-bus signals, declared UI
    panels, `apply_keep_mask`. Bundle numpy/scipy/opencv-python/matplotlib into the plugin env.
-6. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
+4. **Phase 4** — port the 3 example plugins. **Phase 5** — packaging/installer (`cargo-packager`).
+
+## Gotchas learned (egui 0.30 + core API + build)
+
+- **egui is pinned to 0.30** (`crates/gui/Cargo.toml`, `eframe = "0.30.0"`). There is **no
+  `egui::Modal`** — use a centered `Window`. `DragValue::clamp_range` is deprecated → use
+  `.range(lo..=hi)` (present in 0.30). `menu_button` + `ui.close_menu()`, `Window::open(&mut bool)`,
+  and `Color32::from_rgba_unmultiplied` are all available.
+- **Verify against the real `core` API before coding** (these are easy to misremember and cost two
+  build round-trips this session): `cleanup::compute_metrics(result, Option<&Roi>, (h,w)) ->
+  Result<Metrics>`; `cleanup::Thresholds` has *named* `BandFilter` fields (each a single max `hi`,
+  keep iff `metric <= hi`) + bools `drop_left_image` / `drop_left_roi`; `cleanup::build_mask(
+  &Metrics, &Thresholds) -> Vec<bool>`; `feature_detection::regular_grid(&Roi, sx: f64, sy: f64)
+  -> Result`; `ShiTomasiParams.use_harris_detector`, `GridParams { spacing_x, spacing_y }`;
+  `export::export(...) -> NpyExport { shape: (N,P,2) }`, `export::export_csv(...) -> (PathBuf,
+  (N,P,2))`; `settings::update_section(name, Value)` / `settings::save_section<T: Serialize>`.
+- **Build invocation:** see the Commands note above (absolute manifest path; benign vswhere
+  warning; background-task-to-log if interactive output capture misbehaves).
 
 ## Verification approach
 

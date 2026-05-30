@@ -70,3 +70,29 @@ def load_icon(name: str, color: str = NORMAL, size: int = 20) -> QIcon:
     icon.addPixmap(_tinted_pixmap(name, DISABLED, size, dpr), QIcon.Disabled, QIcon.Off)
     _cache[key] = icon
     return icon
+
+
+def load_app_icon() -> QIcon:
+    """Return the full-color application ``QIcon`` (``icons/app_icon.svg``).
+
+    Unlike :func:`load_icon`, the SVG's own colors are preserved (no recolor), and
+    the icon carries pixmaps at several sizes for crisp window/taskbar rendering.
+    Memoized under a fixed key.
+    """
+    cached = _cache.get("__app_icon__")
+    if cached is not None:
+        return cached
+
+    renderer = QSvgRenderer(os.path.join(_ICON_DIR, "app_icon.svg"))
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        renderer.render(painter, QRectF(0, 0, size, size))
+        painter.end()
+        icon.addPixmap(pixmap)
+
+    _cache["__app_icon__"] = icon
+    return icon

@@ -405,6 +405,19 @@ def test_display_settings():
     assert ProjectState().display_params["marker_opacity"] == 33
 
 
+def test_app_icon():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
+    assert app is not None
+    from app.gui.icon_loader import load_app_icon
+
+    icon = load_app_icon()
+    assert not icon.isNull()
+    assert icon.availableSizes()  # several sizes registered for window/taskbar use
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

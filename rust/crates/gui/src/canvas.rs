@@ -142,13 +142,10 @@ pub fn draw_points(painter: &egui::Painter, t: &Transform, pts: &[(f32, f32)], c
     }
 }
 
-const TRACK_KEPT: Color32 = Color32::from_rgb(0, 200, 0); // green
-const TRACK_DROP: Color32 = Color32::from_rgb(255, 60, 60); // red (cleanup preview: will drop)
-
 /// Draw tracked points at the current frame. Skips points masked out by `active` and any with
 /// non-finite coordinates (failed tracks). Mirrors `CanvasView._draw_tracked`: among the active
 /// points, a cleanup `preview` keep-mask colors survivors green and would-be drops red; with no
-/// preview everything kept is green.
+/// preview everything kept is green. `alpha` (0–255) is the Display dialog's marker opacity.
 pub fn draw_tracks(
     painter: &egui::Painter,
     t: &Transform,
@@ -156,7 +153,10 @@ pub fn draw_tracks(
     active: Option<&[bool]>,
     preview: Option<&[bool]>,
     radius: f32,
+    alpha: u8,
 ) {
+    let kept = Color32::from_rgba_unmultiplied(0, 200, 0, alpha); // green
+    let drop_color = Color32::from_rgba_unmultiplied(255, 60, 60, alpha); // red = will drop
     for (i, &(x, y)) in pts.iter().enumerate() {
         if let Some(mask) = active {
             if !mask.get(i).copied().unwrap_or(false) {
@@ -167,7 +167,6 @@ pub fn draw_tracks(
             continue;
         }
         let drop = preview.is_some_and(|pv| !pv.get(i).copied().unwrap_or(true));
-        let color = if drop { TRACK_DROP } else { TRACK_KEPT };
-        painter.circle_filled(t.image_to_screen(x, y), radius, color);
+        painter.circle_filled(t.image_to_screen(x, y), radius, if drop { drop_color } else { kept });
     }
 }

@@ -68,3 +68,11 @@ pub fn update_section(name: &str, data: Value) -> std::io::Result<()> {
     settings.insert(name.to_string(), data);
     save_settings(&settings)
 }
+
+/// Serialize a value and persist it as one section — the typed convenience over `update_section`
+/// (used by the GUI's "Save as defaults"). Mirrors persisting a params dataclass to its section.
+pub fn save_section<T: serde::Serialize>(name: &str, value: &T) -> std::io::Result<()> {
+    let data = serde_json::to_value(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    update_section(name, data)
+}

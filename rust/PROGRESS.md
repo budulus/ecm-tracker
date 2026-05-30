@@ -10,12 +10,12 @@ build environment, and the next steps. Companion docs:
 - This is the in-progress **Rust + egui + embedded-Python** rewrite of the PyQt5 ECM Tracker.
   The Python app under `../app/` is the working reference; `rust/` is the port.
 - **Done:** Phase 0 (scaffold + toolchain), Phase 1 (full `core`+`models` port, parity-tested
-  bit-identical), Phase 2 slices 1–4 (canvas + ROI/detection + Run Tracking & overlays + Cleanup
-  panel).
+  bit-identical), Phase 2 slices 1–4 + **5a** (canvas + ROI/detection + Run Tracking & overlays +
+  Cleanup panel + parameter dialogs, grid detection, Export UI, Display wiring).
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 2 slice 5 — parameter dialogs (corner/grid/tracker/display), grid detection,
-  Circle + N-Gon ROI tools, Export UI.
+- **Next:** finish Phase 2 slice 5 — **Circle + N-Gon ROI tools** (canvas interaction) and the
+  optional window-box overlay; then slice 6 (theme + icons).
 
 ## Status
 
@@ -27,7 +27,9 @@ build environment, and the next steps. Companion docs:
 | 2 slice 2 — ROI rect + corner detection + overlays | ✅ done, pushed | `95f61a0` |
 | 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done, pushed | `b468af7` |
 | 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done, pushed | `7f35c8d` |
-| 2 slice 5+ — dialogs, grid detect, Circle/N-Gon ROI, Export UI, theme/icons | ⬜ next | — |
+| 2 slice 5a — param dialogs + Save-defaults, grid detect, Export UI, Display wiring | ✅ done | ⚠ uncommitted |
+| 2 slice 5b — Circle + N-Gon ROI tools, window-box overlay | ⬜ next | — |
+| 2 slice 6 — theme + icons | ⬜ later | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -112,9 +114,17 @@ rust/crates/
 > (`active_mask &= keep`, undoably) / Undo / Close. Mirrors `app/gui/cleanup_dialog.py`.
 > **Deferred:** cleanup-threshold settings persistence (`thresholds_to/from_value`) — lands with
 > the slice-5 Save-as-defaults work.
-1. **Slice 5 — Dialogs + extras.** Parameter dialogs (corner/grid/tracker/display) with
-   Save-as-defaults via `settings::update_section`; Circle + N-Gon ROI tools; grid detection;
-   Export UI (`core::export`).
+> ✅ **Slice 5a — Dialogs + extras (done).** Four parameter dialogs (corner/grid/tracker/display)
+> as egui `Window`s editing the live `ProjectState` params, each with **Save as defaults** via
+> `settings::save_section`. **Grid detection** (`regular_grid`, clipped to a complete ROI) on a
+> "Detect Grid" button. **Export** menu (`.npy` via `export::export`, `.csv` via `export_csv`)
+> behind a native `rfd` save dialog, enabled only when active points remain. The **Display**
+> dialog now feeds the overlays live (show-markers / show-ROI / marker size / opacity); the LK
+> window-box overlay is deferred to slice 5b.
+
+1. **Slice 5b — ROI tools + window box.** Circle (centre-drag) and N-Gon (click-to-add,
+   right-click to close) ROI tools via a canvas interaction handler; optional LK window-size box
+   overlay driven by `display_params.show_window_box`.
 4. **Slice 6 — Theme + icons.** egui light style; render `app/gui/icons/*.svg` via `resvg`+
    `tiny-skia` → recolored egui textures.
 5. **Phase 3 — Plugin host (`pyhost`).** `PluginContext` `#[pyclass]`, zero-copy NumPy via the

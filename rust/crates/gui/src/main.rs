@@ -13,13 +13,15 @@ mod canvas;
 
 use canvas::CanvasView;
 use ecm_core::cleanup;
+use ecm_core::export;
 use ecm_core::feature_detection;
 use ecm_core::image_sequence::{discover_dir, ImageSequence};
 use ecm_core::project_state::ProjectState;
 use ecm_core::result::TrackerResult;
 use ecm_core::roi::Roi;
+use ecm_core::settings;
 use eframe::egui;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -45,6 +47,15 @@ fn main() -> eframe::Result<()> {
 enum Tool {
     Pan,
     RoiRect,
+}
+
+/// Which parameter dialog window is open (Parameters menu).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialog {
+    Corner,
+    Grid,
+    Tracker,
+    Display,
 }
 
 /// Message from the background tracking thread to the UI.
@@ -120,6 +131,8 @@ struct EcmApp {
     track_job: Option<TrackJob>,
     /// Open cleanup panel session (metrics + thresholds + preview), if any.
     cleanup: Option<CleanupState>,
+    /// Open parameter dialog window, if any.
+    dialog: Option<Dialog>,
     status: String,
     smoke: bool,
 }
@@ -144,6 +157,7 @@ impl EcmApp {
             tex: None,
             track_job: None,
             cleanup: None,
+            dialog: None,
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
@@ -194,6 +208,239 @@ impl EcmApp {
                 self.state.features = Some(pts);
             }
             Err(e) => self.status = format!("Detect error: {e}"),
+        }
+    }
+
+    /// Seed a regular grid of points inside the (complete) ROI. Mirrors `_detect_grid`.
+    fn detect_grid(&mut self) {
+        let result = {
+            let Some(roi) = self.state.roi.as_ref() else {
+                self.status = "Define an ROI first.".into();
+                return;
+            };
+            if !roi.is_complete() {
+                self.status = "ROI is not complete.".into();
+                return;
+            }
+            feature_detection::regular_grid(
+                roi,
+                self.state.grid_params.spacing_x as f64,
+                self.state.grid_params.spacing_y as f64,
+            )
+        };
+        match result {
+            Ok(pts) => {
+                let n = pts.len();
+                self.invalidate_tracking(); // new seeds → any existing result is stale
+                self.state.features = Some(pts);
+                self.status = format!("Grid: {n} feature points.");
+            }
+            Err(e) => self.status = format!("Grid error: {e}"),
+        }
+    }
+
+    /// Export the kept (active) forward coordinates via a native save dialog — `.npy`
+    /// (+ a `_sequence.txt` sidecar) or flat `.csv`. Mirrors `_export` / `_export_csv`.
+    fn export_coords(&mut self, csv: bool) {
+        let Some(result) = self.state.result.as_ref() else {
+            return;
+        };
+        let Some(mask) = self.state.active_mask.as_ref() else {
+            return;
+        };
+        if !mask.iter().any(|&b| b) {
+            self.status = "Nothing to export — no active points remain.".into();
+            return;
+        }
+        let default_name = if csv { "coords.csv" } else { "coords.npy" };
+        let (filter_name, ext): (&str, &str) =
+            if csv { ("CSV file", "csv") } else { ("NumPy array", "npy") };
+        let mut dlg = rfd::FileDialog::new()
+            .add_filter(filter_name, &[ext])
+            .set_file_name(default_name);
+        if let Some(dir) = self.state.source_dir.as_ref() {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.save_file() else {
+            return;
+        };
+        let out_dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(default_name)
+            .to_string();
+
+        let outcome: std::io::Result<(usize, usize, usize)> = if csv {
+            let frame_names: Vec<String> = match self.state.sequence.as_ref() {
+                Some(s) => (result.reference_index..=result.last_index)
+                    .map(|g| {
+                        s.paths[g]
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            export::export_csv(&result.coords_fw, mask, &frame_names, &out_dir, &filename)
+                .map(|(_, shape)| shape)
+        } else {
+            export::export(
+                &result.coords_fw,
+                mask,
+                result.reference_index,
+                result.last_index,
+                &out_dir,
+                &filename,
+            )
+            .map(|e| e.shape)
+        };
+        self.status = match outcome {
+            Ok((n, k, _)) => format!("Exported {k} points × {n} frames to {filename}"),
+            Err(e) => format!("Export failed: {e}"),
+        };
+    }
+
+    /// Render the active parameter dialog window. Edits the live params in `ProjectState`;
+    /// "Save as defaults" persists that section via `settings::update_section`. Mirrors the
+    /// Parameters-menu dialogs in `app/gui/dialogs.py`.
+    fn show_dialogs(&mut self, ctx: &egui::Context) {
+        let Some(kind) = self.dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        match kind {
+            Dialog::Corner => {
+                egui::Window::new("Corner Detection")
+                    .open(&mut open)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        let p = &mut self.state.shi_tomasi_params;
+                        egui::Grid::new("corner_grid").num_columns(2).show(ui, |ui| {
+                            ui.label("Max corners");
+                            ui.add(egui::DragValue::new(&mut p.max_corners).range(1..=100_000));
+                            ui.end_row();
+                            ui.label("Quality level");
+                            ui.add(
+                                egui::DragValue::new(&mut p.quality_level)
+                                    .speed(0.001)
+                                    .range(0.0001..=1.0),
+                            );
+                            ui.end_row();
+                            ui.label("Min distance");
+                            ui.add(
+                                egui::DragValue::new(&mut p.min_distance)
+                                    .speed(0.1)
+                                    .range(0.0..=500.0),
+                            );
+                            ui.end_row();
+                            ui.label("Block size");
+                            ui.add(egui::DragValue::new(&mut p.block_size).range(1..=99));
+                            ui.end_row();
+                            ui.label("Harris k");
+                            ui.add(egui::DragValue::new(&mut p.k).speed(0.001).range(0.0..=1.0));
+                            ui.end_row();
+                        });
+                        ui.checkbox(&mut p.use_harris_detector, "Use Harris detector");
+                        ui.separator();
+                        save = ui.button("Save as defaults").clicked();
+                    });
+                if save {
+                    let _ = settings::save_section("shi_tomasi", &self.state.shi_tomasi_params);
+                    self.status = "Saved corner-detection defaults.".into();
+                }
+            }
+            Dialog::Grid => {
+                egui::Window::new("Grid")
+                    .open(&mut open)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        let p = &mut self.state.grid_params;
+                        egui::Grid::new("grid_grid").num_columns(2).show(ui, |ui| {
+                            ui.label("Spacing X (px)");
+                            ui.add(egui::DragValue::new(&mut p.spacing_x).range(1..=1000));
+                            ui.end_row();
+                            ui.label("Spacing Y (px)");
+                            ui.add(egui::DragValue::new(&mut p.spacing_y).range(1..=1000));
+                            ui.end_row();
+                        });
+                        ui.separator();
+                        save = ui.button("Save as defaults").clicked();
+                    });
+                if save {
+                    let _ = settings::save_section("grid", &self.state.grid_params);
+                    self.status = "Saved grid defaults.".into();
+                }
+            }
+            Dialog::Tracker => {
+                egui::Window::new("Tracker (Lucas–Kanade)")
+                    .open(&mut open)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        let p = &mut self.state.lk_params;
+                        egui::Grid::new("lk_grid").num_columns(2).show(ui, |ui| {
+                            ui.label("Window size");
+                            ui.add(egui::DragValue::new(&mut p.win_size).range(1..=199));
+                            ui.end_row();
+                            ui.label("Pyramid levels");
+                            ui.add(egui::DragValue::new(&mut p.max_level).range(0..=10));
+                            ui.end_row();
+                            ui.label("Max iterations");
+                            ui.add(egui::DragValue::new(&mut p.max_iter).range(1..=200));
+                            ui.end_row();
+                            ui.label("Epsilon");
+                            ui.add(
+                                egui::DragValue::new(&mut p.epsilon)
+                                    .speed(0.001)
+                                    .range(0.0001..=1.0),
+                            );
+                            ui.end_row();
+                            ui.label("Min eigen threshold");
+                            ui.add(
+                                egui::DragValue::new(&mut p.min_eig_threshold)
+                                    .speed(0.0001)
+                                    .range(0.0..=1.0),
+                            );
+                            ui.end_row();
+                        });
+                        ui.separator();
+                        save = ui.button("Save as defaults").clicked();
+                    });
+                if save {
+                    let _ = settings::save_section("lk", &self.state.lk_params);
+                    self.status = "Saved tracker defaults.".into();
+                }
+            }
+            Dialog::Display => {
+                egui::Window::new("Display")
+                    .open(&mut open)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        let p = &mut self.state.display_params;
+                        ui.checkbox(&mut p.show_markers, "Show markers");
+                        ui.checkbox(&mut p.show_roi, "Show ROI");
+                        egui::Grid::new("disp_grid").num_columns(2).show(ui, |ui| {
+                            ui.label("Marker size");
+                            ui.add(egui::DragValue::new(&mut p.marker_size).range(1..=20));
+                            ui.end_row();
+                            ui.label("Opacity %");
+                            ui.add(egui::DragValue::new(&mut p.marker_opacity).range(0..=100));
+                            ui.end_row();
+                        });
+                        ui.separator();
+                        save = ui.button("Save as defaults").clicked();
+                    });
+                if save {
+                    let _ = settings::save_section("display", &self.state.display_params);
+                    self.status = "Saved display defaults.".into();
+                }
+            }
+        }
+        if !open {
+            self.dialog = None;
         }
     }
 
@@ -485,6 +732,9 @@ impl eframe::App for EcmApp {
                     if ui.button("Detect Corners").clicked() {
                         self.detect_corners();
                     }
+                    if ui.button("Detect Grid").clicked() {
+                        self.detect_grid();
+                    }
                     ui.separator();
                     let can_track = self
                         .state
@@ -518,6 +768,43 @@ impl eframe::App for EcmApp {
                             }
                         }
                     }
+                    let can_export = self.state.result.is_some()
+                        && self
+                            .state
+                            .active_mask
+                            .as_ref()
+                            .is_some_and(|m| m.iter().any(|&b| b));
+                    if can_export {
+                        ui.menu_button("Export", |ui| {
+                            if ui.button("Save as .npy…").clicked() {
+                                self.export_coords(false);
+                                ui.close_menu();
+                            }
+                            if ui.button("Save as .csv…").clicked() {
+                                self.export_coords(true);
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                    ui.separator();
+                    ui.menu_button("⚙ Params", |ui| {
+                        if ui.button("Corner Detection…").clicked() {
+                            self.dialog = Some(Dialog::Corner);
+                            ui.close_menu();
+                        }
+                        if ui.button("Grid…").clicked() {
+                            self.dialog = Some(Dialog::Grid);
+                            ui.close_menu();
+                        }
+                        if ui.button("Tracker…").clicked() {
+                            self.dialog = Some(Dialog::Tracker);
+                            ui.close_menu();
+                        }
+                        if ui.button("Display…").clicked() {
+                            self.dialog = Some(Dialog::Display);
+                            ui.close_menu();
+                        }
+                    });
                     ui.separator();
                     if ui.button("Fit").clicked() {
                         self.canvas.reset();
@@ -672,45 +959,52 @@ impl eframe::App for EcmApp {
                 self.handle_roi_draw(&tf, &out.response);
 
                 let painter = ui.painter_at(out.rect);
-                if let Some(roi) = self.state.roi.as_ref() {
-                    canvas::draw_roi(&painter, &tf, &roi.corners, roi.closed);
+                let disp = self.state.display_params; // Copy; honors the Display dialog live
+                if disp.show_roi {
+                    if let Some(roi) = self.state.roi.as_ref() {
+                        canvas::draw_roi(&painter, &tf, &roi.corners, roi.closed);
+                    }
                 }
-                let marker_r = self.state.display_params.marker_size.max(2) as f32;
-                match self.state.result.as_ref() {
-                    // No result yet: show the seed features on the reference frame.
-                    None => {
-                        if self.state.on_reference_frame() {
-                            if let Some(feats) = self.state.features.as_ref() {
-                                canvas::draw_points(
-                                    &painter,
-                                    &tf,
-                                    feats,
-                                    egui::Color32::from_rgb(0, 220, 220), // cyan seeds
-                                    marker_r,
-                                );
+                let marker_r = disp.marker_size.max(2) as f32;
+                let alpha = (255 * disp.marker_opacity.clamp(0, 100) / 100) as u8;
+                if disp.show_markers {
+                    match self.state.result.as_ref() {
+                        // No result yet: show the seed features on the reference frame.
+                        None => {
+                            if self.state.on_reference_frame() {
+                                if let Some(feats) = self.state.features.as_ref() {
+                                    canvas::draw_points(
+                                        &painter,
+                                        &tf,
+                                        feats,
+                                        egui::Color32::from_rgba_unmultiplied(0, 220, 220, alpha),
+                                        marker_r,
+                                    );
+                                }
                             }
                         }
-                    }
-                    // Result present: show the tracked points at the current frame (green = kept).
-                    Some(result) => {
-                        let cut = self.state.global_to_cut(self.state.current_index);
-                        if cut >= 0 && (cut as usize) < result.n_frames() {
-                            let cut = cut as usize;
-                            let pts: Vec<(f32, f32)> = (0..result.n_points())
-                                .map(|j| {
-                                    (result.coords_fw[[cut, j, 0]], result.coords_fw[[cut, j, 1]])
-                                })
-                                .collect();
-                            let preview =
-                                self.cleanup.as_ref().map(|cs| cs.preview_keep.as_slice());
-                            canvas::draw_tracks(
-                                &painter,
-                                &tf,
-                                &pts,
-                                self.state.active_mask.as_deref(),
-                                preview,
-                                marker_r,
-                            );
+                        // Result present: tracked points at the current frame (green = kept).
+                        Some(result) => {
+                            let cut = self.state.global_to_cut(self.state.current_index);
+                            if cut >= 0 && (cut as usize) < result.n_frames() {
+                                let cut = cut as usize;
+                                let pts: Vec<(f32, f32)> = (0..result.n_points())
+                                    .map(|j| {
+                                        (result.coords_fw[[cut, j, 0]], result.coords_fw[[cut, j, 1]])
+                                    })
+                                    .collect();
+                                let preview =
+                                    self.cleanup.as_ref().map(|cs| cs.preview_keep.as_slice());
+                                canvas::draw_tracks(
+                                    &painter,
+                                    &tf,
+                                    &pts,
+                                    self.state.active_mask.as_deref(),
+                                    preview,
+                                    marker_r,
+                                    alpha,
+                                );
+                            }
                         }
                     }
                 }
@@ -736,6 +1030,8 @@ impl eframe::App for EcmApp {
                     }
                 });
         }
+
+        self.show_dialogs(ctx);
 
         if self.smoke {
             eprintln!(

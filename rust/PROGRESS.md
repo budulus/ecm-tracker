@@ -10,10 +10,12 @@ build environment, and the next steps. Companion docs:
 - This is the in-progress **Rust + egui + embedded-Python** rewrite of the PyQt5 ECM Tracker.
   The Python app under `../app/` is the working reference; `rust/` is the port.
 - **Done:** Phase 0 (scaffold + toolchain), Phase 1 (full `core`+`models` port, parity-tested
-  bit-identical), Phase 2 slices 1–3 (canvas + ROI/detection + Run Tracking & overlays).
+  bit-identical), Phase 2 slices 1–4 (canvas + ROI/detection + Run Tracking & overlays + Cleanup
+  panel).
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 2 slice 4 — Cleanup panel (band filters + live preview + apply/undo).
+- **Next:** Phase 2 slice 5 — parameter dialogs (corner/grid/tracker/display), grid detection,
+  Circle + N-Gon ROI tools, Export UI.
 
 ## Status
 
@@ -23,13 +25,15 @@ build environment, and the next steps. Companion docs:
 | 1 — core + models port (parity-tested) | ✅ done, pushed | `3b25e05` |
 | 2 slice 1 — canvas (open/display/zoom/pan/scrub) | ✅ done, pushed | `ca0f1ab` |
 | 2 slice 2 — ROI rect + corner detection + overlays | ✅ done, pushed | `95f61a0` |
-| 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done | ⚠ uncommitted |
-| 2 slice 4+ — cleanup, dialogs, theme/icons | ⬜ next | — |
+| 2 slice 3 — Run Tracking (bg thread + progress/cancel) + track overlays | ✅ done | `b468af7` (⚠ unpushed) |
+| 2 slice 4 — Cleanup panel (band filters + live green/red preview + apply/undo) | ✅ done | ⚠ uncommitted |
+| 2 slice 5+ — dialogs, grid detect, Circle/N-Gon ROI, Export UI, theme/icons | ⬜ next | — |
 
-⚠ **Slice 3 is implemented + verified locally but not yet committed.** When committing, note the
-Forgejo push can fail on Git Credential Manager auth (interactive prompt this tool can't answer):
-run `git push origin main` yourself, and if it rejects, clear the
-`placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager.
+⚠ **`origin/main` is behind: slice 3 (`b468af7`) is committed but the push failed on Git
+Credential Manager auth (`401 — credentials expired`), which this tool can't answer
+interactively; slice 4 is verified locally but not yet committed.** Run `git push origin main`
+yourself (it will carry both once slice 4 is committed); if it rejects, clear the
+`placksiserver.tail87cfa8.ts.net` entry in Windows Credential Manager and retry.
 
 ## Build environment (critical — read before building)
 

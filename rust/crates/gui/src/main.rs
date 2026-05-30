@@ -12,6 +12,7 @@
 mod canvas;
 
 use canvas::CanvasView;
+use ecm_core::cleanup;
 use ecm_core::feature_detection;
 use ecm_core::image_sequence::{discover_dir, ImageSequence};
 use ecm_core::project_state::ProjectState;
@@ -66,6 +67,47 @@ struct TrackJob {
     _handle: thread::JoinHandle<()>,
 }
 
+/// The 7 numeric cleanup bands in panel order. Each maps to a `cleanup::Thresholds` band field
+/// and is a single *max* threshold (keep a point iff `metric <= hi`), matching the Python dialog.
+const BAND_LABELS: [&str; 7] = [
+    "Forward failures (max)",
+    "Backward failures (max)",
+    "OpenCV error (max)",
+    "Mean OpenCV error (max)",
+    "FB error — mean (max)",
+    "FB error — max (max)",
+    "Max step distance (max)",
+];
+
+/// Finite maximum of a metric column (ignoring the +inf never-tracked points), or 0.0 if none
+/// are finite — the per-band ceiling for the drag clamps, so each slider is scaled to its data.
+fn finite_max(values: &[f32]) -> f64 {
+    values
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold(0.0_f32, f32::max) as f64
+}
+
+/// Open cleanup-panel session: metrics computed once from the result, the live thresholds being
+/// edited, each band's data ceiling (for the drag clamps), and the latest preview keep-mask.
+/// Mirrors the state `MainWindow` holds while `CleanupDialog` is open.
+struct CleanupState {
+    metrics: cleanup::Metrics,
+    thresholds: cleanup::Thresholds,
+    caps: [f64; 7],          // per-band data ceiling, in BAND_LABELS order
+    preview_keep: Vec<bool>, // build_mask result, recomputed each frame
+}
+
+/// A button action collected while rendering the cleanup panel, applied after its borrows end.
+#[derive(PartialEq)]
+enum CleanupAction {
+    None,
+    Apply,
+    Undo,
+    Close,
+}
+
 struct EcmApp {
     state: ProjectState,
     canvas: CanvasView,
@@ -76,6 +118,8 @@ struct EcmApp {
     tex: Option<(usize, egui::TextureHandle)>,
     /// In-flight background tracking job (progress + cancel), if any.
     track_job: Option<TrackJob>,
+    /// Open cleanup panel session (metrics + thresholds + preview), if any.
+    cleanup: Option<CleanupState>,
     status: String,
     smoke: bool,
 }
@@ -99,6 +143,7 @@ impl EcmApp {
             roi_draft_start: None,
             tex: None,
             track_job: None,
+            cleanup: None,
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
@@ -158,6 +203,68 @@ impl EcmApp {
         self.state.result = None;
         self.state.active_mask = None;
         self.state.undo_stack.clear();
+        self.cleanup = None; // metrics referenced the old result
+    }
+
+    /// Open the cleanup session: compute per-point metrics once and record each band's data
+    /// ceiling for the drag clamps. Bands start permissive (`hi` = ceiling) and disabled, so a
+    /// freshly enabled band keeps everything until the user tightens it. Mirrors `_open_cleanup`.
+    fn open_cleanup(&mut self) {
+        let Some(result) = self.state.result.as_ref() else {
+            return;
+        };
+        let image_size = match self.state.image_size() {
+            Ok(Some(size)) => size,
+            _ => return,
+        };
+        let metrics = match cleanup::compute_metrics(result, self.state.roi.as_ref(), image_size) {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = format!("Cleanup metrics error: {e}");
+                return;
+            }
+        };
+        let caps = [
+            metrics.fail_count_fw.iter().copied().max().unwrap_or(0) as f64,
+            metrics.fail_count_bw.iter().copied().max().unwrap_or(0) as f64,
+            finite_max(&metrics.max_err_fw),
+            finite_max(&metrics.mean_err_fw),
+            finite_max(&metrics.fb_mean),
+            finite_max(&metrics.fb_max),
+            finite_max(&metrics.max_step),
+        ];
+        let mut thresholds = cleanup::default_thresholds();
+        for (band, &cap) in [
+            &mut thresholds.fw_failures,
+            &mut thresholds.bw_failures,
+            &mut thresholds.opencv_error,
+            &mut thresholds.mean_error,
+            &mut thresholds.fb_mean,
+            &mut thresholds.fb_max,
+            &mut thresholds.distance,
+        ]
+        .into_iter()
+        .zip(caps.iter())
+        {
+            band.hi = cap;
+            band.cap = cap;
+        }
+        self.cleanup = Some(CleanupState { metrics, thresholds, caps, preview_keep: Vec::new() });
+    }
+
+    /// Filter the active point set by a full-length keep mask, undoably: snapshot the current
+    /// mask onto the undo stack, then AND in `keep` (points only ever leave the active set).
+    /// Mirrors `MainWindow.apply_keep_mask` (the shared mask-mutation path).
+    fn apply_keep_mask(&mut self, keep: &[bool]) {
+        let Some(active) = self.state.active_mask.clone() else {
+            return;
+        };
+        if active.len() != keep.len() {
+            return;
+        }
+        self.state.undo_stack.push(active.clone());
+        let next: Vec<bool> = active.iter().zip(keep).map(|(&a, &k)| a && k).collect();
+        self.state.active_mask = Some(next);
     }
 
     fn clear_tracking(&mut self) {
@@ -296,6 +403,8 @@ impl EcmApp {
                 let (np, nf) = (result.n_points(), result.n_frames());
                 self.state.active_mask = Some(vec![true; np]);
                 self.state.result = Some(result);
+                self.state.undo_stack.clear();
+                self.cleanup = None; // a new result invalidates any open cleanup session
                 self.track_job = None;
                 self.status = format!("Tracked {np} points over {nf} frames.");
             }
@@ -399,6 +508,16 @@ impl eframe::App for EcmApp {
                     {
                         self.clear_tracking();
                     }
+                    if self.state.result.is_some() {
+                        let open = self.cleanup.is_some();
+                        if ui.selectable_label(open, "Cleanup").clicked() {
+                            if open {
+                                self.cleanup = None;
+                            } else {
+                                self.open_cleanup();
+                            }
+                        }
+                    }
                     ui.separator();
                     if ui.button("Fit").clicked() {
                         self.canvas.reset();
@@ -426,6 +545,120 @@ impl eframe::App for EcmApp {
             }
             ui.label(&self.status);
         });
+
+        // Cleanup side panel: per-metric band filters with a live green/red preview on the canvas.
+        // Added before the CentralPanel so the canvas fills the remaining width.
+        if self.cleanup.is_some() && self.state.result.is_none() {
+            self.cleanup = None; // defensive: the session must never outlive its result
+        }
+        let mut cleanup_action = CleanupAction::None;
+        if self.cleanup.is_some() {
+            egui::SidePanel::right("cleanup_panel")
+                .default_width(300.0)
+                .show(ctx, |ui| {
+                    let cs = self.cleanup.as_mut().unwrap();
+                    ui.heading("Cleanup — filter tracks");
+                    ui.label(
+                        "Enable a metric and set its [min, max] keep-band. Points outside any \
+                         enabled band are dropped. Preview updates live; Apply commits.",
+                    );
+                    ui.separator();
+
+                    egui::Grid::new("cleanup_grid")
+                        .num_columns(3)
+                        .spacing([8.0, 4.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Metric").strong());
+                            ui.label(egui::RichText::new("On").strong());
+                            ui.label(egui::RichText::new("Max").strong());
+                            ui.end_row();
+
+                            let caps = cs.caps;
+                            let band_row = |ui: &mut egui::Ui,
+                                            label: &str,
+                                            band: &mut cleanup::BandFilter,
+                                            cap: f64| {
+                                let cap = cap.max(1.0);
+                                ui.label(label);
+                                ui.checkbox(&mut band.enabled, "");
+                                ui.add(
+                                    egui::DragValue::new(&mut band.hi)
+                                        .speed(cap / 200.0)
+                                        .range(0.0..=cap),
+                                );
+                                ui.end_row();
+                            };
+                            let t = &mut cs.thresholds;
+                            band_row(ui, BAND_LABELS[0], &mut t.fw_failures, caps[0]);
+                            band_row(ui, BAND_LABELS[1], &mut t.bw_failures, caps[1]);
+                            band_row(ui, BAND_LABELS[2], &mut t.opencv_error, caps[2]);
+                            band_row(ui, BAND_LABELS[3], &mut t.mean_error, caps[3]);
+                            band_row(ui, BAND_LABELS[4], &mut t.fb_mean, caps[4]);
+                            band_row(ui, BAND_LABELS[5], &mut t.fb_max, caps[5]);
+                            band_row(ui, BAND_LABELS[6], &mut t.distance, caps[6]);
+                        });
+
+                    ui.separator();
+                    ui.checkbox(
+                        &mut cs.thresholds.drop_left_image,
+                        "Drop points that left the image",
+                    );
+                    ui.checkbox(
+                        &mut cs.thresholds.drop_left_roi,
+                        "Drop points that left the ROI",
+                    );
+                    ui.separator();
+
+                    // Recompute the preview keep-mask from the (possibly just-edited) thresholds,
+                    // so both the survivor count below and the canvas overlay reflect this frame.
+                    cs.preview_keep = cleanup::build_mask(&cs.metrics, &cs.thresholds);
+
+                    let (kept, total) = match self.state.active_mask.as_deref() {
+                        Some(active) => {
+                            let total = active.iter().filter(|&&a| a).count();
+                            let kept = active
+                                .iter()
+                                .zip(&cs.preview_keep)
+                                .filter(|(&a, &k)| a && k)
+                                .count();
+                            (kept, total)
+                        }
+                        None => (0, 0),
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{kept} of {total} active points kept")).strong(),
+                    );
+                    ui.add_space(6.0);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply").clicked() {
+                            cleanup_action = CleanupAction::Apply;
+                        }
+                        let can_undo = !self.state.undo_stack.is_empty();
+                        if ui.add_enabled(can_undo, egui::Button::new("Undo")).clicked() {
+                            cleanup_action = CleanupAction::Undo;
+                        }
+                        if ui.button("Close").clicked() {
+                            cleanup_action = CleanupAction::Close;
+                        }
+                    });
+                });
+        }
+        match cleanup_action {
+            CleanupAction::Apply => {
+                if let Some(keep) = self.cleanup.as_ref().map(|cs| cs.preview_keep.clone()) {
+                    self.apply_keep_mask(&keep);
+                }
+            }
+            CleanupAction::Undo => {
+                if let Some(prev) = self.state.undo_stack.pop() {
+                    self.state.active_mask = Some(prev);
+                }
+            }
+            CleanupAction::Close => self.cleanup = None,
+            CleanupAction::None => {}
+        }
 
         self.ensure_texture(ctx);
         // Clone the cheap texture handle so the canvas closure doesn't borrow `self.tex`
@@ -468,11 +701,14 @@ impl eframe::App for EcmApp {
                                     (result.coords_fw[[cut, j, 0]], result.coords_fw[[cut, j, 1]])
                                 })
                                 .collect();
+                            let preview =
+                                self.cleanup.as_ref().map(|cs| cs.preview_keep.as_slice());
                             canvas::draw_tracks(
                                 &painter,
                                 &tf,
                                 &pts,
                                 self.state.active_mask.as_deref(),
+                                preview,
                                 marker_r,
                             );
                         }

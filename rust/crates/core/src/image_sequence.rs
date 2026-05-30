@@ -176,4 +176,24 @@ impl ImageSequence {
         imgproc::cvt_color_def(&bgr, &mut gray, imgproc::COLOR_BGR2GRAY)?;
         Ok(gray)
     }
+
+    /// Frame at `index` as tightly-packed RGBA bytes — a GUI-friendly form that keeps OpenCV
+    /// `Mat` out of the GUI layer (the egui canvas builds a texture straight from this).
+    pub fn load_rgba(&self, index: usize) -> Result<RgbaFrame, String> {
+        let bgr = self.load_bgr(index).map_err(|e| e.to_string())?;
+        let mut rgba = Mat::default();
+        imgproc::cvt_color_def(&bgr, &mut rgba, imgproc::COLOR_BGR2RGBA).map_err(|e| e.to_string())?;
+        let width = rgba.cols() as usize;
+        let height = rgba.rows() as usize;
+        let pixels = rgba.data_bytes().map_err(|e| e.to_string())?.to_vec();
+        Ok(RgbaFrame { width, height, pixels })
+    }
+}
+
+/// A decoded frame as RGBA bytes (row-major, `width*height*4`), for the GUI texture path.
+#[derive(Clone, Debug)]
+pub struct RgbaFrame {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<u8>,
 }

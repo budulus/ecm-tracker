@@ -11,5 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 ecm-core = { workspace = true }
-eframe = "0.30.0"
-# eframe + egui added via `cargo add` in the next step.
+eframe = "0.30.0"     # egui + native window/GL shell
+rfd = "0.17.2"        # native folder/file picker

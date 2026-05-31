@@ -7,10 +7,17 @@
 //! `Python::attach`. It is the first (and, for now, only) place the GUI touches embedded Python.
 
 use ecm_core::project_state::ProjectState;
-use ecm_pyhost::{discover as host_discover, ensure_embedded_site, launch as host_launch};
-use ecm_pyhost::{ContextSnapshot, PluginRecord};
+use ecm_pyhost::{discover as host_discover, ensure_embedded_site, has_overlay, instantiate};
+use ecm_pyhost::{overlay_commands, ContextSnapshot, DrawCommand, PluginRecord};
 use pyo3::prelude::*;
 use std::path::PathBuf;
+
+/// Result of launching a plugin: a message for the status bar, and — if the plugin draws an
+/// overlay — its retained instance (the GUI keeps it to re-invoke `overlay()` on canvas refresh).
+pub struct LaunchOutcome {
+    pub message: Option<String>,
+    pub overlay: Option<Py<PyAny>>,
+}
 
 /// Where the app looks for plugin packages: `ECM_PLUGINS_DIR` if set, else a `plugins/` folder
 /// next to the executable (the shipped layout), else `plugins/` relative to the working directory
@@ -76,15 +83,50 @@ pub fn discover() -> Vec<PluginRecord> {
     })
 }
 
-/// Launch a discovered plugin with a fresh context built from `snap`. Returns the plugin's
-/// `launch()` return value when it is a string (for the status bar), else `Ok(None)`; `Err` with a
-/// message when the plugin is unloaded or `launch()` raised.
-pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<Option<String>, String> {
+/// Launch a discovered plugin with a fresh context built from `snap`: instantiate it, call
+/// `launch()`, and report a string return (for the status bar). If the plugin defines `overlay()`,
+/// its instance is retained in the outcome so the GUI can re-invoke it on canvas refresh. `Err`
+/// with a message when the plugin is unloaded or `launch()` raised.
+pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutcome, String> {
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
-        match host_launch(py, record, snap) {
-            Ok(ret) => Ok(ret.bind(py).extract::<String>().ok()),
-            Err(e) => Err(format!("{e}")),
-        }
+        let instance = instantiate(py, record, snap).map_err(|e| format!("{e}"))?;
+        let message = match instance.call_method0(py, "launch") {
+            Ok(ret) => ret.bind(py).extract::<String>().ok(),
+            Err(e) => return Err(format!("{e}")),
+        };
+        let overlay = has_overlay(py, &instance).then_some(instance);
+        Ok(LaunchOutcome { message, overlay })
     })
+}
+
+/// Re-invoke every active overlay plugin's `overlay()` against the current `state`, concatenating
+/// their draw-commands. A plugin whose `overlay()` raises is skipped (its commands are dropped this
+/// refresh) rather than breaking the others.
+pub fn refresh_overlays(instances: &[Py<PyAny>], state: &ProjectState) -> Vec<DrawCommand> {
+    if instances.is_empty() {
+        return Vec::new();
+    }
+    Python::attach(|py| {
+        ensure_embedded_site(py).ok();
+        let mut cmds = Vec::new();
+        for inst in instances {
+            if let Ok(mut c) = overlay_commands(py, inst, snapshot(state)) {
+                cmds.append(&mut c);
+            }
+        }
+        cmds
+    })
+}
+
+/// Call `on_unload()` on each plugin instance (best-effort), e.g. when clearing overlays.
+pub fn unload(instances: &[Py<PyAny>]) {
+    if instances.is_empty() {
+        return;
+    }
+    Python::attach(|py| {
+        for inst in instances {
+            let _ = inst.call_method0(py, "on_unload");
+        }
+    });
 }

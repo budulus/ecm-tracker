@@ -4,6 +4,7 @@
 //! Overlay geometry is stored in *image* coordinates and mapped through `Transform` at paint
 //! time, so markers/handles stay constant-size under zoom (same approach as the Qt canvas).
 
+use ecm_pyhost::{DrawCommand, Rgba, Stroke as OvStroke};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
 
 /// Maps image pixels ↔ screen pixels for the current view.
@@ -203,5 +204,69 @@ pub fn draw_tracks(
         }
         let drop = preview.is_some_and(|pv| !pv.get(i).copied().unwrap_or(true));
         painter.circle_filled(t.image_to_screen(x, y), radius, if drop { drop_color } else { kept });
+    }
+}
+
+/// Render plugin-supplied overlay draw-commands (slice 3f). Geometry is in image coordinates and
+/// mapped to screen via `t`; radii/widths/text sizes are constant screen px (like the built-in
+/// overlays). Drawn last, so plugin overlays sit on top of the built-in markers.
+pub fn draw_overlay_commands(painter: &egui::Painter, t: &Transform, commands: &[DrawCommand]) {
+    let to_color = |c: Rgba| Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
+    let to_stroke = |s: OvStroke| Stroke::new(s.width as f32, to_color(s.color));
+    let to_screen = |pts: &[(f64, f64)]| -> Vec<Pos2> {
+        pts.iter()
+            .map(|&(x, y)| t.image_to_screen(x as f32, y as f32))
+            .collect()
+    };
+    for cmd in commands {
+        match cmd {
+            DrawCommand::Circle {
+                center,
+                radius,
+                fill,
+                stroke,
+            } => {
+                let c = t.image_to_screen(center.0 as f32, center.1 as f32);
+                if let Some(f) = fill {
+                    painter.circle_filled(c, *radius as f32, to_color(*f));
+                }
+                if let Some(s) = stroke {
+                    painter.circle_stroke(c, *radius as f32, to_stroke(*s));
+                }
+            }
+            DrawCommand::Polyline { points, stroke } => {
+                let pts = to_screen(points);
+                if pts.len() >= 2 {
+                    painter.add(egui::Shape::line(pts, to_stroke(*stroke)));
+                }
+            }
+            DrawCommand::Polygon {
+                points,
+                fill,
+                stroke,
+            } => {
+                let pts = to_screen(points);
+                if pts.len() >= 2 {
+                    let fill_c = fill.map_or(Color32::TRANSPARENT, |f| to_color(f));
+                    let stroke_s = stroke.map_or(Stroke::NONE, |s| to_stroke(s));
+                    painter.add(egui::Shape::convex_polygon(pts, fill_c, stroke_s));
+                }
+            }
+            DrawCommand::Text {
+                pos,
+                text,
+                color,
+                size,
+            } => {
+                let p = t.image_to_screen(pos.0 as f32, pos.1 as f32);
+                painter.text(
+                    p,
+                    egui::Align2::LEFT_TOP,
+                    text,
+                    egui::FontId::proportional(*size as f32),
+                    to_color(*color),
+                );
+            }
+        }
     }
 }

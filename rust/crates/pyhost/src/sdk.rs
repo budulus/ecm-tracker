@@ -9,6 +9,7 @@
 //! requires initializing the interpreter manually, before any `Python::attach`).
 
 use crate::context::PluginContext;
+use crate::overlay::OverlayPainter;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use std::ffi::CStr;
@@ -26,6 +27,9 @@ class TrackerPlugin:
     The host instantiates the class once with a PluginContext (as self.ctx), then calls
     launch() to run the plugin. Declare the plugin by assigning PLUGIN = YourClass in the
     package __init__.py (a lone TrackerPlugin subclass is auto-detected as a fallback).
+
+    Optionally define overlay(self, painter) to draw on the canvas: the host re-invokes it
+    when state changes, handing in an ecm_host.OverlayPainter (draw in image coordinates).
     """
 
     NAME = "Unnamed Plugin"
@@ -50,6 +54,7 @@ pub fn register_sdk(py: Python<'_>) -> PyResult<()> {
     }
     let module = PyModule::new(py, SDK_MODULE)?;
     module.add_class::<PluginContext>()?;
+    module.add_class::<OverlayPainter>()?;
     // Define TrackerPlugin into the module's namespace (globals = the module dict).
     py.run(TRACKER_PLUGIN_SRC, Some(&module.dict()), None)?;
     sys_modules.set_item(SDK_MODULE, &module)?;

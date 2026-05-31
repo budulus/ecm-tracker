@@ -23,8 +23,9 @@ use ecm_core::project_state::ProjectState;
 use ecm_core::result::TrackerResult;
 use ecm_core::roi::Roi;
 use ecm_core::settings;
-use ecm_pyhost::PluginRecord;
+use ecm_pyhost::{DrawCommand, PluginRecord};
 use eframe::egui;
+use pyo3::{Py, PyAny};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -147,6 +148,12 @@ struct EcmApp {
     dialog: Option<Dialog>,
     /// Discovered plugins, lazily populated on first Plugins-menu open (`None` until then).
     plugins: Option<Vec<PluginRecord>>,
+    /// Active overlay-providing plugin instances (retained so `overlay()` can be re-invoked).
+    overlay_plugins: Vec<Py<PyAny>>,
+    /// Cached plugin draw-commands (image space), refreshed when the state signature changes.
+    overlay_cmds: Vec<DrawCommand>,
+    /// State signature `(current_index, has_result, n_active)` of the cached overlay commands.
+    overlay_sig: Option<(usize, bool, usize)>,
     status: String,
     smoke: bool,
 }
@@ -227,6 +234,9 @@ impl EcmApp {
             cleanup: None,
             dialog: None,
             plugins: None,
+            overlay_plugins: Vec::new(),
+            overlay_cmds: Vec::new(),
+            overlay_sig: None,
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
@@ -241,19 +251,55 @@ impl EcmApp {
     }
 
     /// Launch the discovered plugin at index `i`: build a snapshot from the current state, run its
-    /// `launch()`, and report the outcome (a returned string, or a generic ran/error line) in the
-    /// status bar.
+    /// `launch()`, report the outcome in the status bar, and — if it draws an overlay — retain its
+    /// instance and force an overlay refresh.
     fn launch_plugin(&mut self, i: usize) {
         let snap = plugins::snapshot(&self.state);
         let (name, result) = {
             let record = &self.plugins.as_ref().expect("plugins discovered")[i];
             (record.name.clone(), plugins::launch(record, snap))
         };
-        self.status = match result {
-            Ok(Some(msg)) => msg,
-            Ok(None) => format!("{name} ran."),
-            Err(e) => format!("{name}: {e}"),
-        };
+        match result {
+            Ok(outcome) => {
+                self.status = outcome.message.unwrap_or_else(|| format!("{name} ran."));
+                if let Some(instance) = outcome.overlay {
+                    self.overlay_plugins.push(instance);
+                    self.overlay_sig = None; // force a refresh next frame
+                }
+            }
+            Err(e) => self.status = format!("{name}: {e}"),
+        }
+    }
+
+    /// Drop all active plugin overlays (best-effort `on_unload`), clearing the cached commands.
+    fn clear_overlays(&mut self) {
+        plugins::unload(&self.overlay_plugins);
+        self.overlay_plugins.clear();
+        self.overlay_cmds.clear();
+        self.overlay_sig = None;
+    }
+
+    /// Re-invoke active overlay plugins when the state signature `(current_index, has_result,
+    /// n_active)` changes (frame scrub, tracking, cleanup), caching the commands otherwise. Cheap
+    /// when nothing changed; the per-frame canvas render uses the cache.
+    fn refresh_overlays_if_dirty(&mut self) {
+        if self.overlay_plugins.is_empty() {
+            self.overlay_cmds.clear();
+            self.overlay_sig = None;
+            return;
+        }
+        let sig = (
+            self.state.current_index,
+            self.state.result.is_some(),
+            self.state
+                .active_mask
+                .as_ref()
+                .map_or(0, |m| m.iter().filter(|&&b| b).count()),
+        );
+        if self.overlay_sig != Some(sig) {
+            self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
+            self.overlay_sig = Some(sig);
+        }
     }
 
     fn open_dir(&mut self, dir: PathBuf) {
@@ -865,6 +911,7 @@ impl EcmApp {
 impl eframe::App for EcmApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_track_job(ctx);
+        self.refresh_overlays_if_dirty();
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -965,6 +1012,13 @@ impl eframe::App for EcmApp {
                         // Discover lazily on first open (boots embedded Python + imports plugins).
                         if self.plugins.is_none() {
                             self.plugins = Some(plugins::discover());
+                        }
+                        if !self.overlay_plugins.is_empty() {
+                            if ui.button("Clear overlays").clicked() {
+                                self.clear_overlays();
+                                ui.close_menu();
+                            }
+                            ui.separator();
                         }
                         let mut launch_idx = None;
                         {
@@ -1221,6 +1275,8 @@ impl eframe::App for EcmApp {
                         }
                     }
                 }
+                // Plugin overlays draw on top of the built-in markers (slice 3f).
+                canvas::draw_overlay_commands(&painter, &tf, &self.overlay_cmds);
             }
         });
 
@@ -1255,7 +1311,8 @@ impl eframe::App for EcmApp {
                 self.state.result.as_ref().map_or(0, |r| r.n_points()),
                 self.status,
             );
-            // Exercise the plugin pipeline headlessly: discover, then launch the first loaded plugin.
+            // Exercise the plugin pipeline headlessly: discover, launch each loaded plugin, then
+            // refresh any overlays they provide.
             let records = plugins::discover();
             let loaded: Vec<&str> = records
                 .iter()
@@ -1263,12 +1320,24 @@ impl eframe::App for EcmApp {
                 .map(|r| r.name.as_str())
                 .collect();
             eprintln!("[smoke] plugins_discovered={} loaded={loaded:?}", records.len());
-            if let Some(record) = records.iter().find(|r| r.cls.is_some()) {
+            let mut overlays = Vec::new();
+            for record in records.iter().filter(|r| r.cls.is_some()) {
                 match plugins::launch(record, plugins::snapshot(&self.state)) {
-                    Ok(msg) => eprintln!("[smoke] plugin_launch ok: {msg:?}"),
-                    Err(e) => eprintln!("[smoke] plugin_launch err: {e}"),
+                    Ok(outcome) => {
+                        eprintln!("[smoke] launched '{}': {:?}", record.name, outcome.message);
+                        if let Some(instance) = outcome.overlay {
+                            overlays.push(instance);
+                        }
+                    }
+                    Err(e) => eprintln!("[smoke] launch '{}' err: {e}", record.name),
                 }
             }
+            let cmds = plugins::refresh_overlays(&overlays, &self.state);
+            eprintln!(
+                "[smoke] overlay_plugins={} draw_commands={}",
+                overlays.len(),
+                cmds.len()
+            );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

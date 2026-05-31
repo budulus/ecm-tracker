@@ -12,6 +12,7 @@
 //! deliberately stateless (re-discovery / instance caching / window lifecycle stay in the GUI).
 
 use crate::context::{ContextSnapshot, PluginContext};
+use crate::overlay::{DrawCommand, OverlayPainter};
 use crate::sdk::{register_sdk, SDK_MODULE};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -76,9 +77,10 @@ pub fn discover(py: Python<'_>, dir: &Path) -> PyResult<Vec<PluginRecord>> {
         .collect())
 }
 
-/// Instantiate a discovered plugin's class with a fresh `PluginContext(snapshot)` and call its
-/// `launch()`, returning whatever `launch()` returns. Errors if the record failed to load.
-pub fn launch(
+/// Instantiate a discovered plugin: `cls(PluginContext(snapshot))`. Returns the plugin instance.
+/// Errors if the record failed to load. The caller keeps the instance to call `launch()` and
+/// (later) `overlay()` on it.
+pub fn instantiate(
     py: Python<'_>,
     record: &PluginRecord,
     snapshot: ContextSnapshot,
@@ -91,8 +93,43 @@ pub fn launch(
         ))
     })?;
     let ctx = Py::new(py, PluginContext::new(snapshot))?;
-    let instance = cls.call1(py, (ctx,))?;
-    instance.call_method0(py, "launch")
+    cls.call1(py, (ctx,))
+}
+
+/// Instantiate a plugin and call its `launch()`, returning whatever `launch()` returns. Errors if
+/// the record failed to load.
+pub fn launch(
+    py: Python<'_>,
+    record: &PluginRecord,
+    snapshot: ContextSnapshot,
+) -> PyResult<Py<PyAny>> {
+    instantiate(py, record, snapshot)?.call_method0(py, "launch")
+}
+
+/// Whether a launched plugin instance provides an `overlay()` method (i.e. draws on the canvas).
+pub fn has_overlay(py: Python<'_>, instance: &Py<PyAny>) -> bool {
+    instance.bind(py).hasattr("overlay").unwrap_or(false)
+}
+
+/// Re-invoke a plugin instance's `overlay(self, painter)` to collect its current draw-commands.
+/// Refreshes the instance's `ctx` to `snapshot` first so the overlay reflects current state, then
+/// hands it a fresh [`OverlayPainter`] and returns the accumulated commands. Empty if the instance
+/// has no `overlay` method.
+pub fn overlay_commands(
+    py: Python<'_>,
+    instance: &Py<PyAny>,
+    snapshot: ContextSnapshot,
+) -> PyResult<Vec<DrawCommand>> {
+    let bound = instance.bind(py);
+    if !bound.hasattr("overlay")? {
+        return Ok(Vec::new());
+    }
+    let ctx = Py::new(py, PluginContext::new(snapshot))?;
+    bound.setattr("ctx", ctx)?;
+    let painter = Bound::new(py, OverlayPainter::default())?;
+    bound.call_method1("overlay", (&painter,))?;
+    let commands = painter.borrow().commands.clone();
+    Ok(commands)
 }
 
 /// Import one package by name and resolve its plugin class, isolating any failure into the record.
@@ -333,5 +370,55 @@ mod tests {
         });
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An overlay-providing plugin: `overlay(self, painter)` draws onto the host's `OverlayPainter`,
+    /// and `overlay_commands` collects the resulting draw-commands (after refreshing the ctx).
+    #[test]
+    fn overlay_commands_collects_draw_commands() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            register_sdk(py).unwrap();
+            let src = cr#"
+import ecm_host
+
+class P(ecm_host.TrackerPlugin):
+    def launch(self):
+        return None
+
+    def overlay(self, painter):
+        painter.circle((1.0, 2.0), radius=3.0, fill=(0, 200, 255, 255))
+        painter.polyline([(0.0, 0.0), (10.0, 10.0)], color=(255, 0, 0), width=2.0)
+"#;
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(src, Some(&globals), None).unwrap();
+            let cls = globals.get_item("P").unwrap().unwrap();
+            let ctx = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let instance = cls.call1((ctx,)).unwrap().unbind();
+
+            assert!(has_overlay(py, &instance));
+            let cmds = overlay_commands(py, &instance, ContextSnapshot::default()).unwrap();
+            assert_eq!(cmds.len(), 2);
+            match &cmds[0] {
+                DrawCommand::Circle {
+                    center,
+                    radius,
+                    fill,
+                    ..
+                } => {
+                    assert_eq!(*center, (1.0, 2.0));
+                    assert_eq!(*radius, 3.0);
+                    assert!(fill.is_some());
+                }
+                other => panic!("expected Circle, got {other:?}"),
+            }
+            match &cmds[1] {
+                DrawCommand::Polyline { points, stroke } => {
+                    assert_eq!(points.len(), 2);
+                    assert_eq!(stroke.width, 2.0);
+                }
+                other => panic!("expected Polyline, got {other:?}"),
+            }
+        });
     }
 }

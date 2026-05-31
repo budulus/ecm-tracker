@@ -24,6 +24,34 @@ build environment, and the next steps. Companion docs:
   instantiate with a `PluginContext`, isolate import/launch errors). Then 3e Plugins menu + GUI
   wiring (`ProjectState` → `ContextSnapshot`), 3f overlays, 3g events + `apply_keep_mask` write-back.
 
+## Working method — use subagents, keep the main context lean
+
+This is a long, slice-by-slice port; the main context fills fast from reading reference files,
+grepping crate sources, and fetching docs. **Delegate context-heavy work to subagents (the `Agent`
+tool) and keep only their conclusions.** Each slice, before/while coding:
+
+1. **Contract reading → subagent.** To learn what a slice must port (e.g. `app/plugins/manager.py`,
+   `app/gui/*.py`), spawn a subagent (`Explore` or `general-purpose`) to read it and return a
+   **compact contract** — method signatures, behaviors, edge cases — not the file text.
+2. **API verification → subagent (do this every slice — it's why builds rarely round-trip here).**
+   Spawn a subagent to confirm exact crate APIs before coding: grep the local registry source
+   (`~/.cargo/registry/src/index.crates.io-*/<crate>-<ver>/src/`) and/or WebFetch docs.rs, and have
+   it return **only** the verified signatures + a tiny usage snippet + gotchas. Fold those into the
+   Gotchas section. When checking several crates/files, launch the subagents **in parallel** (one
+   message, multiple `Agent` calls).
+3. **Build/test → background + Grep, never full-log reads.** Run `cargoenv.ps1` test/build as a
+   background task teeing to a log; pull results with **Grep** (`test result`, `warning:`,
+   `error\[`), don't `Read` the whole log. Hand a genuinely failing log to a subagent for root-cause
+   and get back the diagnosis only.
+4. **Optional — delegate a whole well-specified slice.** When a slice is fully spelled out below,
+   you may hand the entire implement→build→test loop to one subagent (it edits, runs the cargoenv
+   tests, returns the diff + results); the main loop then reviews, updates this file, and commits.
+5. **Stays in the main loop:** slice planning + design decisions, the commit/push, and this file's
+   updates — so the durable record and your judgment stay in context.
+
+Rule of thumb: if a step means reading more than ~100 lines you won't edit, delegate it and keep the
+conclusion. (See `MEMORY.md` → the matching feedback note.)
+
 ## Status
 
 | Phase | State | Commit |

@@ -135,7 +135,13 @@ startup). Verify a clean-machine launch + `ECM_SMOKE`. Details in the strategy p
 | 4a — custom_exporter (native PyQt window) | ✅ done | `cb5740c` |
 | 4b — displacement_overlay (egui overlay + panel) | ✅ done | `377c67a` |
 | 4c — affine_zones (PyQt + matplotlib window) | ✅ done | `57c2401` |
-| 5 — packaging (cargo-packager) | ⬜ todo | |
+| 5 — packaging (portable bundle + exe self-bootstrap; `package.ps1`) | ✅ done | `8eb0297` |
+
+**🎉 ALL PHASES COMPLETE.** The rewrite is done: Phases 0–5 ✅, `ECM_SMOKE` exercises all three ported
+plugins, 25 workspace tests green, everything pushed to `origin/main`, and the app launches packaged
+(self-contained portable bundle via `package.ps1`) from a clean environment with no cargoenv. A native
+installer (`cargo-packager` `.msi`/`.dmg`) is an optional thin wrapper over the verified portable
+layout. macOS packaging when the Mac port runs (`README.md` "macOS (later)").
 
 ## Done-definition
 

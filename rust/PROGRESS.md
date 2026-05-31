@@ -93,6 +93,10 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 4a — custom_exporter ported (native PyQt export window + child→host settings outbox) | ✅ done | `cb5740c` |
 | 4b — displacement_overlay ported (in-process egui strain overlay + panel, numpy JET) | ✅ done | `377c67a` |
 | 4c — affine_zones ported (native PyQt+matplotlib zone tool, numpy RANSAC, keep-mask outbox) | ✅ done | `57c2401` |
+| 5 — packaging: self-contained portable bundle + exe self-bootstrap (`package.ps1`) | ✅ done | `8eb0297` |
+
+> **🎉 REWRITE COMPLETE (Phases 0–5).** Clean-env bundle launch verified (ECM_SMOKE runs all 7
+> plugins with PYTHONHOME/ECM_PY_SITE/ECM_PLUGINS_DIR unset). 25 workspace tests green.
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push

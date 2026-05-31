@@ -89,6 +89,7 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ✅ done | `c62ed50` |
 | 3g-c — declared egui control panels (`panel()` + `on_control`) | ✅ done | `8bf6b32` |
 | 3g-d — plugin settings persistence (`get_settings`/`save_settings`) | ✅ done | `439ccdb` |
+| 4-prep — host image paths (`frame_path`/`sequence_paths`) for native-window plugins | ✅ done | `5b6bb9b` |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push

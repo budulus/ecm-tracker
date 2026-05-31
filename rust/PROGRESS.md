@@ -80,7 +80,7 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3e — Plugins menu in GUI + `ProjectState`→`ContextSnapshot` wiring | ✅ done | `85915fe` |
 | 3f — overlays as host-rendered draw-commands + canvas integration | ✅ done | `818e837` |
 | 3g-a — reactive event hub (`on_*` hooks, replaces 3f overlay poll) | ✅ done | `db8a3f8` |
-| 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ✅ done | _this commit_ |
+| 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ✅ done | `c62ed50` |
 | 3g-c — declared egui control panels | ⬜ next | — |
 | 3g-d — plugin settings persistence | ⬜ | — |
 

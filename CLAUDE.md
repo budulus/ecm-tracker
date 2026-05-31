@@ -45,6 +45,44 @@ Set-Content -Path '.venv:com.dropbox.ignored' -Value 1
 
 If you ever hit the `encodings` crash, the venv has been re-synced: `rm -rf .venv && uv sync`, then re-apply the ignore marker. `pyproject.toml`, `uv.lock`, and `.python-version` are platform-independent and are fine to sync.
 
+## Building a distributable exe (Nuitka)
+
+`build.py` (repo root) packages the app for clients with **Nuitka**, run from the project root:
+
+```powershell
+uv run python build.py     # bump `version` in pyproject.toml first to stamp a release
+```
+
+It compiles the app into a standalone Windows binary and writes **two** artifacts to `dist/`:
+`ECMTracker-<version>-win64.zip` (unzip and run `ECMTracker.exe`) and
+`ECMTracker-<version>-setup.exe` (a per-user Inno Setup installer — only produced if `ISCC.exe` is
+on the machine; otherwise the zip is still made and the `.iss` plus instructions are printed). The
+first run downloads Nuitka's MinGW64 toolchain (minutes); later rebuilds reuse its cache. This is a
+release-only step and never touches the normal `uv run python -m app.main` dev loop.
+
+**The core design: the app is compiled, the plugins are not.** Nuitka embeds CPython, so the frozen
+exe still interprets the loose `plugins/` folder shipped *next to* it — clients can read the SDK and
+write/edit plugins, which import the compiled `app` package at runtime (there is exactly one, so
+`issubclass(cls, TrackerPlugin)` identity holds). `build.py` deliberately does **not** compile
+`plugins/`; it copies the source into the dist beside the exe.
+
+Things that make or break the build (all encoded in `build.py` / `run.py` / `manager.py` — change
+them together):
+
+- **Entry point is `run.py`**, a root-level shim that imports `app.main`. Pointing Nuitka straight at
+  `app/main.py` mis-resolves the `from app...` absolute imports.
+- **`manager.py` anchors `PROJECT_ROOT` on the exe dir when frozen** (`__compiled__.containing_dir`;
+  Nuitka does *not* set `sys.frozen`). `discover()` then `sys.path.insert`s it so the loose plugins
+  import — standalone Nuitka wipes `sys.path` and ignores `PYTHONPATH`.
+- **scipy + matplotlib are force-included** (`--include-package=...`). The compiled core never imports
+  them — only the loose plugins do — so Nuitka can't follow them. Any new plugin-only dependency must
+  be force-included the same way. There is no `pip` in the frozen app: plugins may use the stdlib plus
+  whatever is bundled, nothing else.
+- **Compile scratch lives in `%TEMP%`, never the Dropbox tree.** Dropbox locks Nuitka's intermediates
+  mid-build → `WinError 32`. Same hazard as the `.venv` sync rule above. Only the final `dist/`
+  artifacts stay in the repo (`build/`, `dist/`, `build_log.txt` are gitignored).
+- **Run one build at a time** — two concurrent Nuitka runs collide on the shared output dir and cache.
+
 ## Architecture
 
 Three layers under `app/`, with a strict dependency direction `gui → models → core` and a hard rule: **`app/core/` and `app/core/settings.py` are Qt-free** so the whole pipeline can be exercised headlessly. Do not import PyQt5 into `core`.

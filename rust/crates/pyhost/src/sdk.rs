@@ -10,6 +10,7 @@
 
 use crate::context::PluginContext;
 use crate::overlay::OverlayPainter;
+use crate::panel::PanelBuilder;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use std::ffi::CStr;
@@ -30,6 +31,10 @@ class TrackerPlugin:
 
     Optionally define overlay(self, painter) to draw on the canvas: the host re-invokes it
     when state changes, handing in an ecm_host.OverlayPainter (draw in image coordinates).
+
+    Optionally define panel(self, builder) to declare a control panel: call builder.slider /
+    .checkbox / .button / .label (an ecm_host.PanelBuilder) to declare controls. The host renders
+    them as a window and reports changes back via on_control(self, key, value).
 
     Optionally define on_sequence_changed / on_frame_changed(global_index) / on_result_changed /
     on_mask_changed / on_roi_changed to react to state changes (the host calls them with self.ctx
@@ -65,6 +70,12 @@ class TrackerPlugin:
 
     def on_roi_changed(self):
         pass
+
+    # Optional control-panel callback — the host calls this when a control declared in panel()
+    # changes: value is a float (slider), a bool (checkbox), or None (button click). Defaults to a
+    # no-op. self.ctx is refreshed to current state before the call (so apply_keep_mask works here).
+    def on_control(self, key, value):
+        pass
 "#;
 
 /// Ensure the `ecm_host` SDK module exists in `sys.modules` (idempotent) so plugin code can
@@ -77,6 +88,7 @@ pub fn register_sdk(py: Python<'_>) -> PyResult<()> {
     let module = PyModule::new(py, SDK_MODULE)?;
     module.add_class::<PluginContext>()?;
     module.add_class::<OverlayPainter>()?;
+    module.add_class::<PanelBuilder>()?;
     // Define TrackerPlugin into the module's namespace (globals = the module dict).
     py.run(TRACKER_PLUGIN_SRC, Some(&module.dict()), None)?;
     sys_modules.set_item(SDK_MODULE, &module)?;

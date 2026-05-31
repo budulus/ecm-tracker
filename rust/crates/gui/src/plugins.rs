@@ -8,18 +8,22 @@
 
 use ecm_core::project_state::ProjectState;
 use ecm_pyhost::{
-    discover as host_discover, dispatch_event, ensure_embedded_site, has_overlay, instantiate,
-    take_keep_mask,
+    discover as host_discover, dispatch_control as host_dispatch_control, dispatch_event,
+    ensure_embedded_site, has_overlay, has_panel, instantiate,
+    panel_controls as host_panel_controls, take_keep_mask,
 };
-use ecm_pyhost::{overlay_commands, ContextSnapshot, DrawCommand, PluginRecord};
+use ecm_pyhost::{
+    overlay_commands, ContextSnapshot, Control, ControlValue, DrawCommand, PluginRecord,
+};
 use pyo3::prelude::*;
 use std::path::PathBuf;
 
-/// Result of launching a plugin: a message for the status bar, and — if the plugin draws an
-/// overlay — its retained instance (the GUI keeps it to re-invoke `overlay()` on canvas refresh).
+/// Result of launching a plugin: a message for the status bar, and — if the plugin provides an
+/// ongoing surface (an `overlay()` and/or a `panel()`) — its retained instance (the GUI keeps it to
+/// re-invoke `overlay()`/`on_control()` and dispatch events).
 pub struct LaunchOutcome {
     pub message: Option<String>,
-    pub overlay: Option<Py<PyAny>>,
+    pub instance: Option<Py<PyAny>>,
     /// A full-length keep-mask the plugin recorded via `ctx.apply_keep_mask` during `launch()`,
     /// for the GUI to apply through its undoable mask path (slice 3g-b). `None` if it recorded none.
     pub keep_mask: Option<Vec<bool>>,
@@ -135,9 +139,10 @@ pub fn discover() -> Vec<PluginRecord> {
 }
 
 /// Launch a discovered plugin with a fresh context built from `snap`: instantiate it, call
-/// `launch()`, and report a string return (for the status bar). If the plugin defines `overlay()`,
-/// its instance is retained in the outcome so the GUI can re-invoke it on canvas refresh. `Err`
-/// with a message when the plugin is unloaded or `launch()` raised.
+/// `launch()`, and report a string return (for the status bar). If the plugin provides an ongoing
+/// surface (`overlay()` and/or `panel()`), its instance is retained in the outcome so the GUI can
+/// re-invoke it and dispatch events/controls. `Err` with a message when the plugin is unloaded or
+/// `launch()` raised.
 pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutcome, String> {
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
@@ -148,8 +153,38 @@ pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutc
         };
         // Collect any keep-mask the plugin recorded in launch() — before `instance` is moved below.
         let keep_mask = take_keep_mask(py, &instance);
-        let overlay = has_overlay(py, &instance).then_some(instance);
-        Ok(LaunchOutcome { message, overlay, keep_mask })
+        let retain = has_overlay(py, &instance) || has_panel(py, &instance);
+        let instance = retain.then_some(instance);
+        Ok(LaunchOutcome { message, instance, keep_mask })
+    })
+}
+
+/// Collect a plugin instance's declared control panel against the current `state` (slice 3g-c).
+/// Empty if the plugin defines no `panel()` (or its `panel()` raised). The GUI renders these as an
+/// egui window and owns the live values from there.
+pub fn panel_controls(instance: &Py<PyAny>, state: &ProjectState) -> Vec<Control> {
+    Python::attach(|py| {
+        ensure_embedded_site(py).ok();
+        host_panel_controls(py, instance, snapshot(state)).unwrap_or_default()
+    })
+}
+
+/// Deliver a control change to the retained plugin at `idx` (calling its `on_control` hook with the
+/// current `state`), and return any keep-mask it recorded via `ctx.apply_keep_mask` so the GUI can
+/// apply it through the undoable path. `None` if the index is out of range, the hook raised, or
+/// nothing was recorded.
+pub fn dispatch_control(
+    instances: &[Py<PyAny>],
+    idx: usize,
+    key: &str,
+    value: ControlValue,
+    state: &ProjectState,
+) -> Option<Vec<bool>> {
+    let instance = instances.get(idx)?;
+    Python::attach(|py| {
+        ensure_embedded_site(py).ok();
+        host_dispatch_control(py, instance, key, value, snapshot(state)).ok()?;
+        take_keep_mask(py, instance)
     })
 }
 

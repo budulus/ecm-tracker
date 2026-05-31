@@ -13,6 +13,7 @@
 
 use crate::context::{ContextSnapshot, PluginContext};
 use crate::overlay::{DrawCommand, OverlayPainter};
+use crate::panel::{Control, ControlValue, PanelBuilder};
 use crate::sdk::{register_sdk, SDK_MODULE};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -140,6 +141,53 @@ pub fn take_keep_mask(py: Python<'_>, instance: &Py<PyAny>) -> Option<Vec<bool>>
     let ctx_obj = instance.bind(py).getattr("ctx").ok()?;
     let ctx = ctx_obj.cast::<PluginContext>().ok()?;
     ctx.borrow_mut().take_pending_keep()
+}
+
+/// Whether a launched plugin instance declares a control panel (i.e. defines a `panel()` method).
+pub fn has_panel(py: Python<'_>, instance: &Py<PyAny>) -> bool {
+    instance.bind(py).hasattr("panel").unwrap_or(false)
+}
+
+/// Collect a plugin's declared controls by invoking its `panel(self, builder)` (slice 3g-c).
+/// Refreshes the instance's `ctx` to `snapshot` first (so initial control values can reflect
+/// current state), hands it a fresh [`PanelBuilder`], and returns the accumulated [`Control`]s.
+/// Empty if the instance has no `panel` method.
+pub fn panel_controls(
+    py: Python<'_>,
+    instance: &Py<PyAny>,
+    snapshot: ContextSnapshot,
+) -> PyResult<Vec<Control>> {
+    let bound = instance.bind(py);
+    if !bound.hasattr("panel")? {
+        return Ok(Vec::new());
+    }
+    let ctx = Py::new(py, PluginContext::new(snapshot))?;
+    bound.setattr("ctx", ctx)?;
+    let builder = Bound::new(py, PanelBuilder::default())?;
+    bound.call_method1("panel", (&builder,))?;
+    let controls = builder.borrow().controls.clone();
+    Ok(controls)
+}
+
+/// Deliver a control change to a plugin instance by calling `on_control(self, key, value)` (slice
+/// 3g-c). Refreshes the instance's `ctx` to `snapshot` first (so the handler can read current state
+/// and call `ctx.apply_keep_mask`), then calls the hook with `value` as a float / bool / `None`. The
+/// base hook is a no-op, so this is safe for any instance. An error raised by the hook propagates.
+pub fn dispatch_control(
+    py: Python<'_>,
+    instance: &Py<PyAny>,
+    key: &str,
+    value: ControlValue,
+    snapshot: ContextSnapshot,
+) -> PyResult<()> {
+    let bound = instance.bind(py);
+    let ctx = Py::new(py, PluginContext::new(snapshot))?;
+    bound.setattr("ctx", ctx)?;
+    match value {
+        ControlValue::Float(f) => bound.call_method1("on_control", (key, f)).map(|_| ()),
+        ControlValue::Bool(b) => bound.call_method1("on_control", (key, b)).map(|_| ()),
+        ControlValue::Click => bound.call_method1("on_control", (key, py.None())).map(|_| ()),
+    }
 }
 
 /// Deliver a state-change event to a plugin instance by calling its `on_<event>` hook (the port of
@@ -505,6 +553,77 @@ class P(ecm_host.TrackerPlugin):
                 .getattr("current_index").unwrap()
                 .extract().unwrap();
             assert_eq!(cur, 0);
+        });
+    }
+
+    /// A panel-declaring plugin: `panel()` builds controls onto the host's `PanelBuilder`
+    /// (collected by `panel_controls`), and `dispatch_control` delivers changes to `on_control` —
+    /// where a slider/checkbox are recorded and an "apply" button records a keep-mask the host then
+    /// takes via `take_keep_mask`.
+    #[test]
+    fn panel_controls_collects_and_dispatch_control_delivers() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            crate::ensure_embedded_site(py).unwrap(); // apply_keep_mask uses numpy
+            register_sdk(py).unwrap();
+            let src = cr#"
+import ecm_host
+
+class P(ecm_host.TrackerPlugin):
+    def __init__(self, ctx):
+        super().__init__(ctx)
+        self.last = None
+    def launch(self):
+        return None
+    def panel(self, ui):
+        ui.label("hint")
+        ui.slider("gain", "Gain", 2.0, 0.0, 10.0)
+        ui.checkbox("flag", "Flag", True)
+        ui.button("apply", "Apply")
+    def on_control(self, key, value):
+        self.last = (key, value)
+        if key == "apply":
+            self.ctx.apply_keep_mask([True, False, True, False])
+"#;
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(src, Some(&globals), None).unwrap();
+            let cls = globals.get_item("P").unwrap().unwrap();
+            let ctx = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let instance = cls.call1((ctx,)).unwrap().unbind();
+
+            // A snapshot with a result, so apply_keep_mask records (P=4, all active).
+            let snap = || ContextSnapshot {
+                has_result: true,
+                point_count: 4,
+                n_active: 4,
+                active_mask: Some(vec![true; 4]),
+                ..Default::default()
+            };
+
+            // panel() is detected and its controls collected in declaration order.
+            assert!(has_panel(py, &instance));
+            let controls = panel_controls(py, &instance, snap()).unwrap();
+            assert_eq!(controls.len(), 4);
+            assert!(matches!(&controls[0], Control::Label { text } if text == "hint"));
+            match &controls[1] {
+                Control::Slider { key, value, min, max, .. } => {
+                    assert_eq!(key, "gain");
+                    assert_eq!((*value, *min, *max), (2.0, 0.0, 10.0));
+                }
+                other => panic!("expected Slider, got {other:?}"),
+            }
+            assert!(matches!(&controls[2], Control::Checkbox { key, value, .. } if key == "flag" && *value));
+            assert!(matches!(&controls[3], Control::Button { key, .. } if key == "apply"));
+
+            // A slider change is delivered to on_control as a float.
+            dispatch_control(py, &instance, "gain", ControlValue::Float(7.5), snap()).unwrap();
+            let last: (String, f64) = instance.bind(py).getattr("last").unwrap().extract().unwrap();
+            assert_eq!(last, ("gain".to_string(), 7.5));
+
+            // The "apply" button (Click → None) records a keep-mask the host takes.
+            dispatch_control(py, &instance, "apply", ControlValue::Click, snap()).unwrap();
+            assert_eq!(take_keep_mask(py, &instance), Some(vec![true, false, true, false]));
+            assert_eq!(take_keep_mask(py, &instance), None); // taken once, then cleared
         });
     }
 }

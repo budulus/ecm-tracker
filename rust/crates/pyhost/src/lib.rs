@@ -10,13 +10,15 @@ use pyo3::prelude::*;
 pub mod context;
 pub mod host;
 pub mod overlay;
+pub mod panel;
 pub mod sdk;
 pub use context::{ContextSnapshot, PluginContext};
 pub use host::{
-    discover, dispatch_event, has_overlay, instantiate, launch, overlay_commands, take_keep_mask,
-    PluginRecord,
+    discover, dispatch_control, dispatch_event, has_overlay, has_panel, instantiate, launch,
+    overlay_commands, panel_controls, take_keep_mask, PluginRecord,
 };
 pub use overlay::{DrawCommand, OverlayPainter, Rgba, Stroke};
+pub use panel::{Control, ControlValue, PanelBuilder};
 pub use sdk::{register_sdk, SDK_MODULE};
 
 /// Boot the embedded interpreter, make the bundled site-packages importable,

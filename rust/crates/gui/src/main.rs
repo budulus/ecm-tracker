@@ -23,7 +23,7 @@ use ecm_core::project_state::ProjectState;
 use ecm_core::result::TrackerResult;
 use ecm_core::roi::Roi;
 use ecm_core::settings;
-use ecm_pyhost::{DrawCommand, PluginRecord};
+use ecm_pyhost::{Control, ControlValue, DrawCommand, PluginRecord};
 use eframe::egui;
 use pyo3::{Py, PyAny};
 use std::path::{Path, PathBuf};
@@ -148,8 +148,11 @@ struct EcmApp {
     dialog: Option<Dialog>,
     /// Discovered plugins, lazily populated on first Plugins-menu open (`None` until then).
     plugins: Option<Vec<PluginRecord>>,
-    /// Active overlay-providing plugin instances (retained so `overlay()` can be re-invoked).
+    /// Retained plugin instances — those providing an ongoing surface (an `overlay()` and/or a
+    /// `panel()`). Kept so `overlay()`/`on_control()` can be re-invoked and events dispatched.
     overlay_plugins: Vec<Py<PyAny>>,
+    /// Open plugin control panels (slice 3g-c), each indexing into `overlay_plugins`.
+    panels: Vec<PluginPanel>,
     /// Cached plugin draw-commands (image space), refreshed when the state signature changes.
     overlay_cmds: Vec<DrawCommand>,
     /// Pending plugin events emitted by state transitions this frame; drained next `update()`
@@ -222,6 +225,42 @@ fn tool_button(
     ui.add_enabled(enabled, btn)
 }
 
+/// An open plugin control panel (slice 3g-c): the plugin's declared controls with host-owned live
+/// values, rendered as an egui window. `instance_idx` indexes [`EcmApp::overlay_plugins`] (the
+/// retained instances), so control changes can be dispatched to the right plugin's `on_control`.
+struct PluginPanel {
+    instance_idx: usize,
+    title: String,
+    open: bool,
+    /// Declared controls; the host owns the live values (egui mutates them in place).
+    controls: Vec<Control>,
+}
+
+/// Render one declared control as an egui widget, pushing a `(key, new value)` onto `changes` when
+/// the user changes it (slice 3g-c). Buttons report a `Click`; labels are static.
+fn render_control(ui: &mut egui::Ui, control: &mut Control, changes: &mut Vec<(String, ControlValue)>) {
+    match control {
+        Control::Slider { key, label, value, min, max } => {
+            if ui.add(egui::Slider::new(value, *min..=*max).text(label.as_str())).changed() {
+                changes.push((key.clone(), ControlValue::Float(*value)));
+            }
+        }
+        Control::Checkbox { key, label, value } => {
+            if ui.checkbox(value, label.as_str()).changed() {
+                changes.push((key.clone(), ControlValue::Bool(*value)));
+            }
+        }
+        Control::Button { key, label } => {
+            if ui.button(label.as_str()).clicked() {
+                changes.push((key.clone(), ControlValue::Click));
+            }
+        }
+        Control::Label { text } => {
+            ui.label(text.as_str());
+        }
+    }
+}
+
 impl EcmApp {
     fn new(smoke: bool) -> Self {
         let mut app = Self {
@@ -236,6 +275,7 @@ impl EcmApp {
             dialog: None,
             plugins: None,
             overlay_plugins: Vec::new(),
+            panels: Vec::new(),
             overlay_cmds: Vec::new(),
             events: Vec::new(),
             status: "Open a folder of images to begin.".into(),
@@ -268,8 +308,19 @@ impl EcmApp {
                 if let Some(keep) = outcome.keep_mask {
                     self.apply_keep_mask(&keep);
                 }
-                if let Some(instance) = outcome.overlay {
+                if let Some(instance) = outcome.instance {
                     self.overlay_plugins.push(instance);
+                    let idx = self.overlay_plugins.len() - 1;
+                    // Collect the plugin's declared control panel, if any (slice 3g-c).
+                    let controls = plugins::panel_controls(&self.overlay_plugins[idx], &self.state);
+                    if !controls.is_empty() {
+                        self.panels.push(PluginPanel {
+                            instance_idx: idx,
+                            title: name.clone(),
+                            open: true,
+                            controls,
+                        });
+                    }
                     // Render the just-launched overlay immediately (don't wait for an event).
                     self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
                 }
@@ -278,11 +329,55 @@ impl EcmApp {
         }
     }
 
-    /// Drop all active plugin overlays (best-effort `on_unload`), clearing the cached commands.
-    fn clear_overlays(&mut self) {
+    /// Drop all retained plugin instances (best-effort `on_unload`), clearing their cached
+    /// overlay commands and open control panels.
+    fn clear_plugins(&mut self) {
         plugins::unload(&self.overlay_plugins);
         self.overlay_plugins.clear();
+        self.panels.clear();
         self.overlay_cmds.clear();
+    }
+
+    /// Render the open plugin control panels and process any control changes the user made this
+    /// frame (slice 3g-c): each change is delivered to the plugin's `on_control`, then any
+    /// `apply_keep_mask` it recorded is applied undoably and the overlays refreshed. Closed windows
+    /// are dropped (the instance stays retained — closing a panel doesn't unload the plugin).
+    fn show_panels(&mut self, ctx: &egui::Context) {
+        if self.panels.is_empty() {
+            return;
+        }
+        // (instance_idx, key, new value) for each control the user changed this frame.
+        let mut changes: Vec<(usize, String, ControlValue)> = Vec::new();
+        for panel in &mut self.panels {
+            let mut open = panel.open;
+            egui::Window::new(panel.title.clone())
+                .open(&mut open)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let mut local: Vec<(String, ControlValue)> = Vec::new();
+                    for control in &mut panel.controls {
+                        render_control(ui, control, &mut local);
+                    }
+                    for (key, value) in local {
+                        changes.push((panel.instance_idx, key, value));
+                    }
+                });
+            panel.open = open;
+        }
+        self.panels.retain(|p| p.open);
+        for (idx, key, value) in changes {
+            self.dispatch_control(idx, &key, value);
+        }
+    }
+
+    /// Deliver one control change to the retained plugin at `idx`, applying any keep-mask it records
+    /// and refreshing overlays in case `on_control` changed overlay-affecting state (slice 3g-c).
+    fn dispatch_control(&mut self, idx: usize, key: &str, value: ControlValue) {
+        let keep = plugins::dispatch_control(&self.overlay_plugins, idx, key, value, &self.state);
+        if let Some(keep) = keep {
+            self.apply_keep_mask(&keep);
+        }
+        self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
     }
 
     /// Drain the plugin event queue (events emitted by state transitions): dispatch each to the
@@ -1023,8 +1118,8 @@ impl eframe::App for EcmApp {
                             self.plugins = Some(plugins::discover());
                         }
                         if !self.overlay_plugins.is_empty() {
-                            if ui.button("Clear overlays").clicked() {
-                                self.clear_overlays();
+                            if ui.button("Clear plugins").clicked() {
+                                self.clear_plugins();
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -1313,6 +1408,7 @@ impl eframe::App for EcmApp {
         }
 
         self.show_dialogs(ctx);
+        self.show_panels(ctx);
 
         if self.smoke {
             eprintln!(
@@ -1337,7 +1433,7 @@ impl eframe::App for EcmApp {
                 match plugins::launch(record, plugins::snapshot(&self.state)) {
                     Ok(outcome) => {
                         eprintln!("[smoke] launched '{}': {:?}", record.name, outcome.message);
-                        if let Some(instance) = outcome.overlay {
+                        if let Some(instance) = outcome.instance {
                             overlays.push(instance);
                         }
                     }
@@ -1350,13 +1446,16 @@ impl eframe::App for EcmApp {
                 overlays.len(),
                 cmds.len()
             );
+            // Shared active-point counter, and the full mask so each mutation demo starts fresh.
+            let count = |s: &ProjectState| {
+                s.active_mask.as_ref().map_or(0, |m| m.iter().filter(|&&b| b).count())
+            };
+            let full_mask = self.state.active_mask.clone();
+
             // Exercise the apply_keep_mask mutation (slice 3g-b): the decimate example records a
             // keep-mask in launch(); apply it through the real undoable path and report the drop.
             // (The launch-all loop above ignores keep masks, so the overlay counts stay at full P.)
             if let Some(rec) = records.iter().find(|r| r.id == "decimate_points") {
-                let count = |s: &ProjectState| {
-                    s.active_mask.as_ref().map_or(0, |m| m.iter().filter(|&&b| b).count())
-                };
                 let before = count(&self.state);
                 if let Ok(outcome) = plugins::launch(rec, plugins::snapshot(&self.state)) {
                     if let Some(keep) = outcome.keep_mask {
@@ -1364,6 +1463,29 @@ impl eframe::App for EcmApp {
                     }
                 }
                 eprintln!("[smoke] apply_keep_mask: n_active {before} -> {}", count(&self.state));
+            }
+
+            // Exercise the control-panel path (slice 3g-c): launch the panel example, collect its
+            // declared controls, then simulate clicking its "apply" button — which records a
+            // keep-mask via on_control → ctx.apply_keep_mask. Restore the full mask first so the
+            // reported drop is clean (independent of the decimate demo above).
+            self.state.active_mask = full_mask;
+            if let Some(rec) = records.iter().find(|r| r.id == "panel_filter") {
+                if let Ok(outcome) = plugins::launch(rec, plugins::snapshot(&self.state)) {
+                    if let Some(instance) = outcome.instance {
+                        self.overlay_plugins.push(instance);
+                        let idx = self.overlay_plugins.len() - 1;
+                        let controls =
+                            plugins::panel_controls(&self.overlay_plugins[idx], &self.state);
+                        let before = count(&self.state);
+                        self.dispatch_control(idx, "apply", ControlValue::Click);
+                        eprintln!(
+                            "[smoke] panel controls={} apply_keep_mask: n_active {before} -> {}",
+                            controls.len(),
+                            count(&self.state)
+                        );
+                    }
+                }
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }

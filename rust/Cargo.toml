@@ -11,3 +11,4 @@ rust-version = "1.80"
 # (eframe/egui, pyo3, ndarray, serde land in crate manifests via `cargo add`.)
 [workspace.dependencies]
 ecm-core = { path = "crates/core" }
+ecm-pyhost = { path = "crates/pyhost" }

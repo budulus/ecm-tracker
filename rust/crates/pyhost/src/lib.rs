@@ -45,14 +45,15 @@ pub(crate) fn interp_test_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Test-only: make the bundled interpreter's site-packages importable (idempotent).
+/// Make the bundled interpreter's site-packages importable (idempotent).
 ///
-/// The embedded CPython has no numpy on its default `sys.path`; the path comes from `ECM_PY_SITE`
-/// (set by `cargoenv.ps1`). Any test that imports numpy — directly or via rust-numpy's lazy
-/// array-API init — must call this itself: the suite shares one interpreter and test order isn't
-/// guaranteed, so a test can't rely on another having already added the path.
-#[cfg(test)]
-pub(crate) fn ensure_embedded_site(py: Python<'_>) -> PyResult<()> {
+/// The embedded CPython has no numpy/scipy on its default `sys.path`; during development the path
+/// comes from the `ECM_PY_SITE` env var (set by `cargoenv.ps1`), and this is a no-op if it's unset.
+/// The shipped app will instead derive the path from its install location (Phase 5 packaging). Call
+/// it before importing numpy — directly or via rust-numpy's lazy array-API init — since the
+/// embedded interpreter is shared and nothing else guarantees the path is present (the GUI calls it
+/// before `discover`/`launch`; tests call it before array ops, as order isn't guaranteed).
+pub fn ensure_embedded_site(py: Python<'_>) -> PyResult<()> {
     let Ok(site) = std::env::var("ECM_PY_SITE") else {
         return Ok(());
     };

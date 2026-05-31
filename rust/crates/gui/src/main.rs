@@ -11,6 +11,7 @@
 
 mod canvas;
 mod icons;
+mod plugins;
 mod theme;
 
 use canvas::CanvasView;
@@ -22,6 +23,7 @@ use ecm_core::project_state::ProjectState;
 use ecm_core::result::TrackerResult;
 use ecm_core::roi::Roi;
 use ecm_core::settings;
+use ecm_pyhost::PluginRecord;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -143,6 +145,8 @@ struct EcmApp {
     cleanup: Option<CleanupState>,
     /// Open parameter dialog window, if any.
     dialog: Option<Dialog>,
+    /// Discovered plugins, lazily populated on first Plugins-menu open (`None` until then).
+    plugins: Option<Vec<PluginRecord>>,
     status: String,
     smoke: bool,
 }
@@ -222,6 +226,7 @@ impl EcmApp {
             track_job: None,
             cleanup: None,
             dialog: None,
+            plugins: None,
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
@@ -233,6 +238,22 @@ impl EcmApp {
             }
         }
         app
+    }
+
+    /// Launch the discovered plugin at index `i`: build a snapshot from the current state, run its
+    /// `launch()`, and report the outcome (a returned string, or a generic ran/error line) in the
+    /// status bar.
+    fn launch_plugin(&mut self, i: usize) {
+        let snap = plugins::snapshot(&self.state);
+        let (name, result) = {
+            let record = &self.plugins.as_ref().expect("plugins discovered")[i];
+            (record.name.clone(), plugins::launch(record, snap))
+        };
+        self.status = match result {
+            Ok(Some(msg)) => msg,
+            Ok(None) => format!("{name} ran."),
+            Err(e) => format!("{name}: {e}"),
+        };
     }
 
     fn open_dir(&mut self, dir: PathBuf) {
@@ -940,6 +961,43 @@ impl eframe::App for EcmApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Plugins", |ui| {
+                        // Discover lazily on first open (boots embedded Python + imports plugins).
+                        if self.plugins.is_none() {
+                            self.plugins = Some(plugins::discover());
+                        }
+                        let mut launch_idx = None;
+                        {
+                            let records = self.plugins.as_ref().unwrap();
+                            if records.is_empty() {
+                                ui.add_enabled(false, egui::Button::new("(no plugins found)"));
+                            }
+                            for (i, record) in records.iter().enumerate() {
+                                // Loaded plugins are clickable; failed ones are greyed with the
+                                // load error as a tooltip.
+                                let resp = ui.add_enabled(
+                                    record.cls.is_some(),
+                                    egui::Button::new(record.name.as_str()),
+                                );
+                                if let Some(err) = &record.error {
+                                    resp.on_hover_text(format!("Failed to load: {err}"));
+                                } else {
+                                    let resp = if record.description.is_empty() {
+                                        resp
+                                    } else {
+                                        resp.on_hover_text(record.description.as_str())
+                                    };
+                                    if resp.clicked() {
+                                        launch_idx = Some(i);
+                                        ui.close_menu();
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(i) = launch_idx {
+                            self.launch_plugin(i);
+                        }
+                    });
                     ui.separator();
                     if tool_button(ui, ctx, &mut self.icons, "maximize", "Fit", false, false, true).clicked() {
                         self.canvas.reset();
@@ -1197,6 +1255,20 @@ impl eframe::App for EcmApp {
                 self.state.result.as_ref().map_or(0, |r| r.n_points()),
                 self.status,
             );
+            // Exercise the plugin pipeline headlessly: discover, then launch the first loaded plugin.
+            let records = plugins::discover();
+            let loaded: Vec<&str> = records
+                .iter()
+                .filter(|r| r.cls.is_some())
+                .map(|r| r.name.as_str())
+                .collect();
+            eprintln!("[smoke] plugins_discovered={} loaded={loaded:?}", records.len());
+            if let Some(record) = records.iter().find(|r| r.cls.is_some()) {
+                match plugins::launch(record, plugins::snapshot(&self.state)) {
+                    Ok(msg) => eprintln!("[smoke] plugin_launch ok: {msg:?}"),
+                    Err(e) => eprintln!("[smoke] plugin_launch err: {e}"),
+                }
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

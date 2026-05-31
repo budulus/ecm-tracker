@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 ecm-core = { workspace = true }
+ecm-pyhost = { workspace = true }   # embedded-Python plugin host (discover/launch)
+pyo3 = "0.27"         # Python::attach in the plugin glue (auto-initialize via ecm-pyhost)
 eframe = "0.30.0"     # egui + native window/GL shell
 rfd = "0.17.2"        # native folder/file picker
 resvg = "0.47.0"      # SVG → raster for toolbar icons (re-exports usvg + tiny-skia)

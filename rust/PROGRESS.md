@@ -107,7 +107,7 @@ Non-obvious build requirements (all encoded in `cargoenv.ps1`; full story in `RE
 ```powershell
 $CE = "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1"
 pwsh $CE build --workspace --manifest-path .\Cargo.toml     # build everything
-pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 18 tests incl. parity
+pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 20 tests incl. parity
 pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI window
 ```
 `cargoenv.ps1` changes the working dir, so when invoking it from elsewhere pass an **absolute**
@@ -116,10 +116,14 @@ pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI win
 `pwsh -NoProfile`. If interactive output capture looks empty/garbled, run the command as a
 background task that tees to a log file and read the log — that has been reliable here.
 
-Headless GUI smoke check (loads fixtures → detects corners → tracks → reports counts → exits):
-set `ECM_SMOKE=1` and `ECM_SMOKE_DIR=<rust>\crates\core\tests\fixtures\frames`, then run the built
-exe with the opencv `bin` (`%LOCALAPPDATA%\ecm-tracker\opencv\opencv\build\x64\vc16\bin`) on `PATH`.
-A pass prints `[smoke] frames=12 … tracked_points=267 …`.
+Headless GUI smoke check (loads fixtures → detects corners → tracks → discovers/launches plugins →
+refreshes overlays → reports counts → exits): set `ECM_SMOKE=1`, `ECM_SMOKE_DIR=<rust>\crates\core\
+tests\fixtures\frames`, and `ECM_PLUGINS_DIR=<rust>\plugins` (exercises the plugin+overlay path).
+**Easiest:** run via `pwsh $CE run -p ecm-tracker --manifest-path <abs>\Cargo.toml` (cargoenv provides
+the opencv + embedded-Python env); otherwise run the built exe with the opencv `bin`
+(`%LOCALAPPDATA%\ecm-tracker\opencv\opencv\build\x64\vc16\bin`) + the Python env on `PATH`. A pass
+prints `[smoke] frames=12 … tracked_points=267 …`, `[smoke] plugins_discovered=2 loaded=[…]`, and
+`[smoke] overlay_plugins=1 draw_commands=267`.
 
 Regenerate the parity fixture (uses the app's `.venv`, which has the real `cv2`), from repo root:
 ```
@@ -331,8 +335,33 @@ rust/crates/
 > event-driven (the reactive event hub is 3g — until then a mid-session change refreshes on the next
 > frame scrub); polygon fill assumes convex (egui), stroke is always exact.
 
-1. **Slice 3g — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
-   `apply_keep_mask` write-back command, declared egui control panels, plugin settings persistence.
+1. **Slice 3g — events + mutation + panels + settings (bundles four things — likely sub-slice it
+   3g-a..d).** Port the reactive layer of the Python plugin system. **First, delegate a
+   contract-read** (per the Working method) of `app/gui/main_window.py` (the `PluginSignals` hub +
+   `apply_keep_mask`) and `app/plugins/api.py` (overlay/panel/settings/event surface) to a subagent.
+   The four parts:
+   - **(a) Event hub** replacing Qt `PluginSignals` (`sequence_changed`, `frame_changed(int)`,
+     `result_changed`, `mask_changed`, `roi_changed`). Emit at the existing state transitions in
+     `main.rs` (open_dir, frame scrub, tracking done, cleanup apply, ROI change) so overlays/panels
+     refresh **reactively** — this **replaces the 3f state-signature poll** (`refresh_overlays_if_dirty`
+     + the `overlay_sig` field) with real events; a plugin/overlay refreshes only on the events it
+     cares about.
+   - **(b) `apply_keep_mask` write-back** — the single plugin mutation. `PluginContext` is a
+     read-only snapshot, so the write is a **host-applied command**: `ctx.apply_keep_mask(keep)`
+     records a mask (a new method on the pyclass, collected like overlay commands); after the plugin
+     call the GUI applies it through the **existing undoable path** (mirror `MainWindow.apply_keep_mask`:
+     snapshot onto an undo stack → `active_mask &= keep` → emit `mask_changed`). Shared by the Cleanup
+     dialog and plugins. (`ProjectState` already has the `active_mask` + undo machinery — check
+     `core::project_state` for the snapshot/undo helpers before adding new ones.)
+   - **(c) Declared egui control panels** — plugins declare controls (a serializable widget spec the
+     host renders as egui — e.g. sliders/checkboxes/buttons), replacing the embedded-Qt panels; wire
+     control-value changes back to the plugin (a callback or a re-read each change). Keep the first
+     cut small (a few widget kinds) — the example plugins (Phase 4) will show what's actually needed.
+   - **(d) Plugin settings persistence** — per-plugin JSON via `core::settings` (same dir/merge model
+     as the param dialogs); expose load/save on `PluginContext`.
+   Verify with a pyhost unit test (event delivery / apply_keep_mask command) + extend `ECM_SMOKE`
+   (e.g. a plugin that calls `apply_keep_mask` and asserts `n_active` dropped). Update the
+   `point_overlay`/`session_summary` examples or add one exercising (b)/(c)/(d).
 2. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)

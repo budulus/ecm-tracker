@@ -32,6 +32,8 @@ from app.core.image_sequence import ImageSequence, discover
 from app.core.roi import ROI
 from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
+from app.gui.point_tools import AddPointsTool, DeletePointsTool
+from app.gui.point_manager import PointManagerDialog, PointSelectInteraction
 from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
@@ -103,7 +105,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("ECM Tracker")
-        self.resize(1200, 850)
+        self.resize(1400, 850)
 
         self.state = ProjectState()
         self.canvas = CanvasView(self.state)
@@ -114,6 +116,7 @@ class MainWindow(QMainWindow):
         self._cleanup_dialog = None
         self._cleanup_metrics = None
         self._preview_keep = None
+        self._point_manager = None
 
         self.current_slider = LabeledSlider("Current")
         self.reference_slider = LabeledSlider("Reference")
@@ -155,6 +158,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.splitter)
 
         self._restore_pane_width()
+
+        self._activating_point_tool = False  # reentrancy guard for Add/Delete mutual exclusivity
 
         self._build_menus()
         self._build_toolbar()
@@ -249,6 +254,24 @@ class MainWindow(QMainWindow):
         self.detect_grid_action = QAction(load_icon("grid"), "Grid", self)
         self.detect_grid_action.setToolTip("Regular grid of points inside the ROI")
         self.detect_grid_action.triggered.connect(self._detect_grid)
+
+        self.add_points_action = QAction(load_icon("circle-plus"), "Add", self)
+        self.add_points_action.setCheckable(True)
+        self.add_points_action.setToolTip("Click the image to add seed points")
+        self.add_points_action.toggled.connect(self._on_add_points_toggled)
+
+        self.delete_points_action = QAction(load_icon("circle-minus"), "Delete", self)
+        self.delete_points_action.setCheckable(True)
+        self.delete_points_action.setToolTip(
+            "Click a point to remove it (a seed point, or a tracked point after tracking)"
+        )
+        self.delete_points_action.toggled.connect(self._on_delete_points_toggled)
+
+        self.point_manager_action = QAction(load_icon("list"), "Manage", self)
+        self.point_manager_action.setToolTip(
+            "Open the Point Manager: list, select, and delete points"
+        )
+        self.point_manager_action.triggered.connect(self._open_point_manager)
 
         self.run_tracking_action = QAction(load_icon("play", ACCENT), "Run", self)
         self.run_tracking_action.setToolTip("Track features forward and backward")
@@ -346,6 +369,17 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(
             self._toolbar_group(
                 "DETECT", [self.detect_corners_action, self.detect_grid_action]
+            )
+        )
+        toolbar.addSeparator()
+        toolbar.addWidget(
+            self._toolbar_group(
+                "POINTS",
+                [
+                    self.add_points_action,
+                    self.delete_points_action,
+                    self.point_manager_action,
+                ],
             )
         )
         toolbar.addSeparator()
@@ -523,7 +557,59 @@ class MainWindow(QMainWindow):
     def _on_pan_tool_toggled(self, checked: bool) -> None:
         self.canvas.set_pan_tool(checked)
         if checked:
+            self._deactivate_point_tools()
             self._cancel_roi_definition()
+
+    # ---- point editing tools -------------------------------------------
+    def _on_add_points_toggled(self, checked: bool) -> None:
+        self._on_point_tool_toggled(self.add_points_action, AddPointsTool, checked)
+
+    def _on_delete_points_toggled(self, checked: bool) -> None:
+        self._on_point_tool_toggled(self.delete_points_action, DeletePointsTool, checked)
+
+    def _on_point_tool_toggled(self, action, tool_cls, checked: bool) -> None:
+        """Drive a point tool from its QAction's checked state (the single source of truth).
+
+        On activate, deactivate every competing tool (the other point tool, Pan, an in-progress ROI
+        definition) under a reentrancy guard, then install the canvas interaction. On deactivate,
+        drop the interaction. Cascaded ``setChecked(False)`` calls re-enter the point-tool handlers,
+        but only ever on the deactivate path, so this cannot recurse.
+        """
+        if checked:
+            if not self._activating_point_tool:
+                self._activating_point_tool = True
+                try:
+                    sibling = (
+                        self.delete_points_action
+                        if action is self.add_points_action
+                        else self.add_points_action
+                    )
+                    sibling.setChecked(False)            # tears down its interaction first
+                    self.pan_tool_action.setChecked(False)
+                    self._cancel_roi_definition()        # no-op unless mid-definition
+                finally:
+                    self._activating_point_tool = False
+            self.canvas.set_interaction(tool_cls(self))
+            self.canvas.setCursor(Qt.CrossCursor)
+        else:
+            # Only clear if THIS family owns the current interaction (guards a foreign handler, e.g.
+            # an ROI tool or plugin, that may have replaced ours).
+            if isinstance(self.canvas._interaction, (AddPointsTool, DeletePointsTool)):
+                self.canvas.clear_interaction()
+            self.canvas.unsetCursor()
+
+    def _deactivate_point_tool(self, action) -> None:
+        """Uncheck one point tool (its toggled handler clears the interaction). Guarded so the
+        cascade stays pure teardown."""
+        self._activating_point_tool = True
+        try:
+            action.setChecked(False)
+        finally:
+            self._activating_point_tool = False
+
+    def _deactivate_point_tools(self) -> None:
+        self._deactivate_point_tool(self.add_points_action)
+        self._deactivate_point_tool(self.delete_points_action)
 
     def _begin_roi_definition(self, shape: str) -> None:
         """Start defining an ROI of the given shape on the reference frame."""
@@ -531,6 +617,7 @@ class MainWindow(QMainWindow):
             return
         if self.pan_tool_action.isChecked():
             self.pan_tool_action.setChecked(False)
+        self._deactivate_point_tools()
         if not self._confirm_discard_tracking():
             return
         self._cancel_roi_definition(silent=True)
@@ -805,6 +892,73 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_tool_states()
 
+    # ---- point manager --------------------------------------------------
+    def _open_point_manager(self) -> None:
+        has_seed = self.state.features is not None and len(self.state.features) > 0
+        if not (has_seed or self.state.result is not None):
+            return
+        if self._point_manager is not None:
+            self._point_manager.raise_()
+            self._point_manager.activateWindow()
+            return
+        # Stand down conflicting canvas modes so our selection interaction owns the slot.
+        self._deactivate_point_tools()
+        if self.pan_tool_action.isChecked():
+            self.pan_tool_action.setChecked(False)
+        self._cancel_roi_definition()
+        dialog = PointManagerDialog(self)
+        dialog.deleteRequested.connect(self._point_manager_delete)
+        dialog.finished.connect(self._point_manager_closed)
+        # Reactive refresh: rebuild on any change to the point set or result mode.
+        self.signals.mask_changed.connect(dialog.rebuild)
+        self.signals.result_changed.connect(dialog.rebuild)
+        self.signals.sequence_changed.connect(dialog.rebuild)
+        self._point_manager = dialog
+        self.canvas.add_overlay(dialog._paint_selected)
+        self.canvas.set_interaction(PointSelectInteraction(dialog))
+        dialog.rebuild()
+        dialog.show()
+
+    def _point_manager_delete(self) -> None:
+        dialog = self._point_manager
+        if dialog is None:
+            return
+        indices = dialog.selected_point_indices()
+        if not indices:
+            return
+        if self.state.result is not None:
+            keep = np.ones(self.state.result.n_points, dtype=bool)
+            keep[indices] = False
+            self.apply_keep_mask(keep)  # emits mask_changed -> dialog.rebuild
+        else:
+            feats = self.state.features
+            if feats is None:
+                return
+            feats = np.delete(feats, indices, axis=0)
+            self.state.features = feats if len(feats) else None  # match detection's empty convention
+            self.canvas.update()
+            self._update_tool_states()
+            dialog.rebuild()  # no signal fires for seed edits
+
+    def _point_manager_closed(self, _result=None) -> None:
+        dialog = self._point_manager
+        self._point_manager = None
+        if dialog is not None:
+            for sig in (
+                self.signals.mask_changed,
+                self.signals.result_changed,
+                self.signals.sequence_changed,
+            ):
+                try:
+                    sig.disconnect(dialog.rebuild)
+                except TypeError:
+                    pass
+            self.canvas.remove_overlay(dialog._paint_selected)
+        # Only release the slot if we still own it (a tool may have reclaimed it while open).
+        if isinstance(self.canvas._interaction, PointSelectInteraction):
+            self.canvas.clear_interaction()
+        self.canvas.update()
+
     # ---- export ---------------------------------------------------------
     def _export_target(self, default_name: str, caption: str, file_filter: str):
         """Shared export precondition + save dialog. Returns ``(out_dir, filename)``, or ``None``
@@ -877,6 +1031,16 @@ class MainWindow(QMainWindow):
         self.clear_roi_action.setEnabled(has and self.state.roi is not None)
         self.detect_corners_action.setEnabled(roi_ready)
         self.detect_grid_action.setEnabled(roi_ready)
+        # Add edits seed points (reference frame, pre-track); Delete also removes individual tracked
+        # points once a result exists (current frame must be in the tracked range).
+        pre_track_edit = has and on_ref and not has_result
+        post_track_delete = has_result and self.state.current_in_range
+        self.add_points_action.setEnabled(pre_track_edit)
+        self.delete_points_action.setEnabled(pre_track_edit or post_track_delete)
+        self.point_manager_action.setEnabled(has_features or has_result)
+        for act in (self.add_points_action, self.delete_points_action):
+            if act.isChecked() and not act.isEnabled():
+                self._deactivate_point_tool(act)
         self.run_tracking_action.setEnabled(has_features)
         self.clear_tracking_action.setEnabled(has_result)
         self.cleanup_action.setEnabled(has_result)

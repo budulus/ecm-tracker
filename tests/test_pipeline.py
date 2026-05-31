@@ -482,6 +482,152 @@ def test_navigation_buttons():
         assert sc.context() == Qt.WidgetWithChildrenShortcut
 
 
+def test_point_tools():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
+    assert app is not None
+    src, _ = _sequence()
+    from app.gui.main_window import MainWindow
+    from app.gui.point_tools import AddPointsTool, DeletePointsTool
+
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    w._load_paths(discover(src), src)
+
+    # On the reference frame, before tracking: both tools available.
+    assert w.add_points_action.isEnabled() and w.delete_points_action.isEnabled()
+    assert not w.run_tracking_action.isEnabled()  # no seed points yet
+
+    # Add: each click appends one seed point (anywhere — no ROI required).
+    add = AddPointsTool(w)
+    for p in [(80, 60), (120, 90), (200, 150)]:
+        add.on_press(QPointF(*p), None)
+    assert w.state.features is not None and len(w.state.features) == 3
+    assert tuple(w.state.features[-1]) == (200.0, 150.0)
+    assert w.run_tracking_action.isEnabled()  # the first add enabled Run
+
+    # Delete (seed mode): removes the nearest point; a click far from any point is a no-op.
+    dele = DeletePointsTool(w)
+    dele.on_press(QPointF(120, 90), None)
+    assert len(w.state.features) == 2
+    assert all(tuple(pt) != (120.0, 90.0) for pt in w.state.features)
+    dele.on_press(QPointF(5, 5), None)
+    assert len(w.state.features) == 2
+
+    # Mutual exclusivity via the real activation path (the QActions).
+    w.add_points_action.setChecked(True)
+    assert isinstance(w.canvas._interaction, AddPointsTool)
+    w.delete_points_action.setChecked(True)
+    assert not w.add_points_action.isChecked()
+    assert isinstance(w.canvas._interaction, DeletePointsTool)
+
+    # Beginning an ROI definition deactivates the point tools (and drops their interaction).
+    w._begin_roi_definition("ngon")
+    assert not w.add_points_action.isChecked() and not w.delete_points_action.isChecked()
+    assert not isinstance(w.canvas._interaction, (AddPointsTool, DeletePointsTool))
+    w._cancel_roi_definition()
+
+    # A tracking result disables AND deactivates Add, but Delete stays live for tracked points.
+    w.add_points_action.setChecked(True)
+    w._run_tracking()
+    assert w.state.result is not None
+    assert not w.add_points_action.isEnabled() and not w.add_points_action.isChecked()
+    assert w.delete_points_action.isEnabled()  # current frame is in the tracked range
+
+    # Delete (tracked mode): clicking a tracked point drops it via the undoable mask path.
+    before = int(w.state.active_mask.sum())
+    undo_before = len(w.state.undo_stack)
+    DeletePointsTool(w).on_press(QPointF(80, 60), None)  # cut 0 coords == the seed positions
+    assert int(w.state.active_mask.sum()) == before - 1
+    assert len(w.state.undo_stack) == undo_before + 1
+
+
+def test_point_manager():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PyQt5.QtCore import Qt, QPointF
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
+    assert app is not None
+    src, _ = _sequence()
+    from app.gui.main_window import MainWindow
+    from app.gui.point_tools import AddPointsTool
+    from app.gui.point_manager import PointSelectInteraction
+
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    w._load_paths(discover(src), src)
+
+    # --- pre-track: seed points, single "i / N" column, no error metrics ----
+    add = AddPointsTool(w)
+    for p in [(80, 60), (120, 90), (200, 150)]:
+        add.on_press(QPointF(*p), None)
+    assert w.point_manager_action.isEnabled()
+
+    w._open_point_manager()
+    dlg = w._point_manager
+    assert dlg is not None
+    assert dlg.table.rowCount() == 3
+    assert dlg.table.columnCount() == 1  # no error columns before tracking
+    assert isinstance(w.canvas._interaction, PointSelectInteraction)  # owns the slot
+
+    # canvas -> list: clicking the middle seed selects its row (and only its row).
+    dlg.handle_canvas_click(QPointF(120, 90), Qt.NoModifier)
+    assert dlg.selected_point_indices() == [1]
+
+    # list -> delete: select two rows, delete removes those seeds directly (not undoable).
+    dlg._select_rows([0, 2])
+    assert set(dlg.selected_point_indices()) == {0, 2}
+    w._point_manager_delete()
+    assert len(w.state.features) == 1
+    assert tuple(w.state.features[0]) == (120.0, 90.0)  # the unselected seed survived
+    assert dlg.table.rowCount() == 1  # rebuilt
+
+    w._point_manager.reject()
+    app.processEvents()
+    assert w._point_manager is None
+    assert not isinstance(w.canvas._interaction, PointSelectInteraction)  # slot released
+
+    # --- post-track: tracked points, three columns, undoable delete ---------
+    w.state.features = None
+    for p in [(80, 60), (120, 90), (200, 150)]:
+        add.on_press(QPointF(*p), None)
+    w._run_tracking()
+    assert w.state.result is not None
+
+    w._open_point_manager()
+    dlg = w._point_manager
+    assert dlg.table.columnCount() == 3  # Point, FB mean, OpenCV mean
+    assert dlg.table.rowCount() == int(w.state.active_mask.sum())
+
+    # canvas -> list selects a tracked point (cut 0 coords == seed positions)...
+    dlg.handle_canvas_click(QPointF(80, 60), Qt.NoModifier)
+    assert len(dlg.selected_point_indices()) == 1
+    # ...and Delete drops it via the undoable mask path; mask_changed rebuilds the table.
+    before = int(w.state.active_mask.sum())
+    undo_before = len(w.state.undo_stack)
+    w._point_manager_delete()
+    assert int(w.state.active_mask.sum()) == before - 1
+    assert len(w.state.undo_stack) == undo_before + 1
+    assert dlg.table.rowCount() == before - 1
+
+    # Ctrl-click on the canvas extends the selection (no signal loop / crash).
+    dlg.handle_canvas_click(QPointF(120, 90), Qt.NoModifier)
+    dlg.handle_canvas_click(QPointF(200, 150), Qt.ControlModifier)
+    assert len(dlg.selected_point_indices()) == 2
+
+    w._point_manager.reject()
+    app.processEvents()
+    assert w._point_manager is None
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -262,6 +262,7 @@ mod tests {
     /// read API is actually exposed to embedded Python, and that the snapshot/index math is right.
     #[test]
     fn context_read_api_from_python() {
+        let _g = crate::interp_test_lock();
         Python::attach(|py| {
             let ctx = Py::new(py, PluginContext::new(sample())).unwrap();
             let b = ctx.bind(py);
@@ -294,6 +295,7 @@ mod tests {
     /// current_cut is None when the current frame is outside the tracked range.
     #[test]
     fn current_cut_none_out_of_range() {
+        let _g = crate::interp_test_lock();
         let mut snap = sample();
         snap.current_index = 18; // > last_index (13)
         Python::attach(|py| {
@@ -307,7 +309,11 @@ mod tests {
     /// and active_only selects the kept columns ([0, 2, 3]) in order.
     #[test]
     fn tracked_arrays_from_python() {
+        let _g = crate::interp_test_lock();
         Python::attach(|py| {
+            // Self-sufficient: ensure numpy is importable (rust-numpy's lazy array-API init imports
+            // it) rather than relying on another test having added the embedded site to sys.path.
+            crate::ensure_embedded_site(py).unwrap();
             let ctx = Py::new(py, PluginContext::new(sample_with_arrays())).unwrap();
             let b = ctx.bind(py);
 
@@ -344,6 +350,7 @@ mod tests {
     /// With no result, every array accessor returns Python None.
     #[test]
     fn no_result_arrays_are_none() {
+        let _g = crate::interp_test_lock();
         Python::attach(|py| {
             let ctx = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
             let b = ctx.bind(py);

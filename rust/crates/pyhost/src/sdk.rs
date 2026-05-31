@@ -66,6 +66,7 @@ mod tests {
     /// registration is a no-op.
     #[test]
     fn sdk_module_is_importable() {
+        let _g = crate::interp_test_lock();
         Python::attach(|py| {
             register_sdk(py).unwrap();
             register_sdk(py).unwrap(); // idempotent — already in sys.modules
@@ -79,6 +80,7 @@ mod tests {
     /// receives a `PluginContext`, and reads tracked data from it in `launch()`.
     #[test]
     fn sdk_subclass_receives_and_reads_context() {
+        let _g = crate::interp_test_lock();
         Python::attach(|py| {
             register_sdk(py).unwrap();
             // A minimal plugin: launch() returns a value read off the context.

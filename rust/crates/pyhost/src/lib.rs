@@ -74,6 +74,46 @@ pub fn ensure_embedded_site(py: Python<'_>) -> PyResult<()> {
     Ok(())
 }
 
+/// Make a shipped (packaged) layout self-contained (Phase 5 packaging). When the executable sits
+/// next to a bundled `python/` runtime, point the embedded interpreter at it: set `PYTHONHOME` (the
+/// interpreter home — stdlib under `python/Lib`) and `ECM_PY_SITE` (`python/Lib/site-packages`), and
+/// prepend the exe directory to `PATH` so the loader finds `python3xx.dll` + the OpenCV runtime DLLs
+/// shipped beside the exe.
+///
+/// A **no-op in development**: an existing `PYTHONHOME`/`ECM_PY_SITE` (set by `cargoenv.ps1`) is never
+/// overridden, and when no bundled `python/` exists the function returns immediately. Call once at
+/// process start, **before any `Python::attach`**, so the values are in place when CPython initializes.
+pub fn bootstrap_embedded_env() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let py_home = dir.join("python");
+    if !py_home.is_dir() {
+        return; // not a packaged layout — leave the env as cargoenv set it (dev run)
+    }
+    set_env_if_unset("PYTHONHOME", py_home.as_os_str());
+    let site = py_home.join("Lib").join("site-packages");
+    if site.is_dir() {
+        set_env_if_unset("ECM_PY_SITE", site.as_os_str());
+    }
+    // Prepend the exe dir to PATH so python3xx.dll + opencv_world*.dll (shipped beside the exe) load.
+    let cur = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&cur));
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
+fn set_env_if_unset(key: &str, val: &std::ffi::OsStr) {
+    if std::env::var_os(key).is_none() {
+        std::env::set_var(key, val);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

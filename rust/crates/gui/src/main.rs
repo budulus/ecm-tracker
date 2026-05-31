@@ -33,6 +33,10 @@ use std::sync::Arc;
 use std::thread;
 
 fn main() -> eframe::Result<()> {
+    // Packaged-layout self-bootstrap: when the exe ships beside a bundled `python/` runtime, point
+    // the embedded interpreter at it (PYTHONHOME / ECM_PY_SITE / PATH). No-op in dev (cargoenv's env
+    // wins). Must run before any `Python::attach` so CPython sees it at init.
+    ecm_pyhost::bootstrap_embedded_env();
     let smoke = std::env::var_os("ECM_SMOKE").is_some();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1100.0, 720.0])

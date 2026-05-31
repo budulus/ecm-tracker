@@ -30,7 +30,9 @@ def _child_python():
     """Resolve the interpreter for the window subprocess (venv python beside ``sys.prefix``; the
     embedded host's ``sys.executable`` is the host exe)."""
     for c in (
-        os.path.join(sys.prefix, "Scripts", "pythonw.exe"),
+        os.path.join(sys.prefix, "pythonw.exe"),  # python-build-standalone base (packaged layout)
+        os.path.join(sys.prefix, "python.exe"),
+        os.path.join(sys.prefix, "Scripts", "pythonw.exe"),  # Windows venv (dev layout)
         os.path.join(sys.prefix, "Scripts", "python.exe"),
         os.path.join(sys.prefix, "bin", "python"),
     ):

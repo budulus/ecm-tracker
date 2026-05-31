@@ -19,3 +19,8 @@ python-preference = "only-managed"  # always use uv's own CPython, never system
 required-environments = [
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
+
+[dependency-groups]
+dev = [
+    "nuitka>=4.1.2",
+]

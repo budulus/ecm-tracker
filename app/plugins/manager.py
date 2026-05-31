@@ -22,8 +22,24 @@ from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
 
 from app.plugins.api import PluginContext, TrackerPlugin
 
-# project root = .../tracker ; this file is .../tracker/app/plugins/manager.py
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _project_root() -> Path:
+    """Locate the directory that holds the ``plugins/`` folder.
+
+    In a source checkout that's the repo root, two levels up from this file
+    (.../tracker/app/plugins/manager.py -> .../tracker). In a Nuitka-standalone
+    build the source tree is gone and ``plugins/`` ships next to the executable,
+    so anchor on the compiled binary's directory (``__compiled__.containing_dir``)
+    — a compiled module's ``__file__`` points inside the baked-in package tree,
+    not the dist folder. Nuitka does not set ``sys.frozen``, hence the
+    ``__compiled__`` probe.
+    """
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        return Path(compiled.containing_dir)
+    return Path(__file__).resolve().parents[2]
+
+
+PROJECT_ROOT = _project_root()
 PLUGINS_DIR = PROJECT_ROOT / "plugins"
 
 

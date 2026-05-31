@@ -32,6 +32,10 @@ pub struct ContextSnapshot {
     pub has_result: bool,
     /// `(height, width)` of the frames, if a sequence is loaded.
     pub image_size: Option<(usize, usize)>,
+    /// Absolute paths to every frame in the full loaded folder, global-indexed (`[global_i]`).
+    /// Empty if no sequence is loaded. Lets native-window plugins load the frame image to draw on
+    /// (the paths-only, Qt-free equivalent of the old `api.py` `frame_rgb`).
+    pub image_paths: Vec<String>,
     pub reference_index: usize,
     pub last_index: usize,
     pub current_index: usize,
@@ -119,6 +123,17 @@ impl PluginContext {
     /// `(height, width)` of the frames, or `None` if no sequence is loaded.
     fn image_size(&self) -> Option<(usize, usize)> {
         self.snap.image_size
+    }
+
+    /// Absolute filesystem path of the frame at `global_i`, or `None` if no sequence is loaded or
+    /// the index is out of range. Native-window plugins use it to load the image to draw on.
+    fn frame_path(&self, global_i: usize) -> Option<String> {
+        self.snap.image_paths.get(global_i).cloned()
+    }
+
+    /// All frame image paths in the full loaded folder, global-indexed (empty if no sequence).
+    fn sequence_paths(&self) -> Vec<String> {
+        self.snap.image_paths.clone()
     }
 
     // ---- frame indices --------------------------------------------------
@@ -315,6 +330,11 @@ mod tests {
             has_sequence: true,
             has_result: true,
             image_size: Some((480, 640)),
+            image_paths: vec![
+                "/seq/frame_000.png".to_string(),
+                "/seq/frame_001.png".to_string(),
+                "/seq/frame_002.png".to_string(),
+            ],
             reference_index: 2,
             last_index: 13,
             current_index: 5,
@@ -338,6 +358,7 @@ mod tests {
         ContextSnapshot {
             n_total_images: 8,
             has_sequence: true,
+            image_paths: vec![],
             has_result: true,
             image_size: Some((48, 64)),
             reference_index: 0,
@@ -398,6 +419,27 @@ mod tests {
             let ctx = Py::new(py, PluginContext::new(snap)).unwrap();
             let cc: Option<i64> = ctx.bind(py).getattr("current_cut").unwrap().extract().unwrap();
             assert_eq!(cc, None);
+        });
+    }
+
+    /// frame_path / sequence_paths expose the global-indexed image paths to Python; an out-of-range
+    /// frame_path is None.
+    #[test]
+    fn image_paths_from_python() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            let ctx = Py::new(py, PluginContext::new(sample())).unwrap();
+            let b = ctx.bind(py);
+
+            let p1: String = b.call_method1("frame_path", (1,)).unwrap().extract().unwrap();
+            assert_eq!(p1, "/seq/frame_001.png");
+            let oob: Option<String> =
+                b.call_method1("frame_path", (99,)).unwrap().extract().unwrap();
+            assert_eq!(oob, None);
+
+            let all: Vec<String> = b.call_method0("sequence_paths").unwrap().extract().unwrap();
+            assert_eq!(all.len(), 3);
+            assert_eq!(all[0], "/seq/frame_000.png");
         });
     }
 

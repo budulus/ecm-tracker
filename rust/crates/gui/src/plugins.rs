@@ -112,6 +112,12 @@ pub fn snapshot(state: &ProjectState) -> ContextSnapshot {
             .ok()
             .flatten()
             .map(|(h, w)| (h as usize, w as usize)),
+        image_paths: state.sequence.as_ref().map_or_else(Vec::new, |seq| {
+            seq.paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        }),
         reference_index: state.reference_index,
         last_index: state.last_index,
         current_index: state.current_index,

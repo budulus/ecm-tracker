@@ -12,7 +12,10 @@ pub mod host;
 pub mod overlay;
 pub mod sdk;
 pub use context::{ContextSnapshot, PluginContext};
-pub use host::{discover, dispatch_event, has_overlay, instantiate, launch, overlay_commands, PluginRecord};
+pub use host::{
+    discover, dispatch_event, has_overlay, instantiate, launch, overlay_commands, take_keep_mask,
+    PluginRecord,
+};
 pub use overlay::{DrawCommand, OverlayPainter, Rgba, Stroke};
 pub use sdk::{register_sdk, SDK_MODULE};
 

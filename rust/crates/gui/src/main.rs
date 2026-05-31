@@ -263,6 +263,11 @@ impl EcmApp {
         match result {
             Ok(outcome) => {
                 self.status = outcome.message.unwrap_or_else(|| format!("{name} ran."));
+                // A plugin may filter the active points via ctx.apply_keep_mask; apply it through
+                // the shared undoable path (snapshots undo, ANDs in keep, emits MaskChanged).
+                if let Some(keep) = outcome.keep_mask {
+                    self.apply_keep_mask(&keep);
+                }
                 if let Some(instance) = outcome.overlay {
                     self.overlay_plugins.push(instance);
                     // Render the just-launched overlay immediately (don't wait for an event).
@@ -1345,6 +1350,21 @@ impl eframe::App for EcmApp {
                 overlays.len(),
                 cmds.len()
             );
+            // Exercise the apply_keep_mask mutation (slice 3g-b): the decimate example records a
+            // keep-mask in launch(); apply it through the real undoable path and report the drop.
+            // (The launch-all loop above ignores keep masks, so the overlay counts stay at full P.)
+            if let Some(rec) = records.iter().find(|r| r.id == "decimate_points") {
+                let count = |s: &ProjectState| {
+                    s.active_mask.as_ref().map_or(0, |m| m.iter().filter(|&&b| b).count())
+                };
+                let before = count(&self.state);
+                if let Ok(outcome) = plugins::launch(rec, plugins::snapshot(&self.state)) {
+                    if let Some(keep) = outcome.keep_mask {
+                        self.apply_keep_mask(&keep);
+                    }
+                }
+                eprintln!("[smoke] apply_keep_mask: n_active {before} -> {}", count(&self.state));
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

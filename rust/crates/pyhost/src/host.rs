@@ -132,6 +132,16 @@ pub fn overlay_commands(
     Ok(commands)
 }
 
+/// Take any keep-mask a plugin recorded via `ctx.apply_keep_mask(...)` during the last call
+/// (the `pending_keep` on its `PluginContext`). The host applies it through its undoable mask path
+/// after the plugin method returns (slice 3g-b). `None` if the instance has no `ctx`, the `ctx`
+/// isn't a `PluginContext`, or nothing was recorded.
+pub fn take_keep_mask(py: Python<'_>, instance: &Py<PyAny>) -> Option<Vec<bool>> {
+    let ctx_obj = instance.bind(py).getattr("ctx").ok()?;
+    let ctx = ctx_obj.cast::<PluginContext>().ok()?;
+    ctx.borrow_mut().take_pending_keep()
+}
+
 /// Deliver a state-change event to a plugin instance by calling its `on_<event>` hook (the port of
 /// connecting to Qt's `PluginSignals`). Refreshes the instance's `ctx` to `snapshot` first so the
 /// handler sees current state via `self.ctx`, then calls `on_<event>`. `frame_index` is passed only

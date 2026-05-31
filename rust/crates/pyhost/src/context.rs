@@ -12,7 +12,8 @@
 //! Convert with `global_to_cut` / `cut_to_global`.
 
 use ndarray::{Array2, Array3, Axis};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, ToPyArray};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, ToPyArray};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Indices (into the full P points) where `mask` is true, in order — the kept-point columns.
@@ -57,13 +58,23 @@ pub struct ContextSnapshot {
 #[pyclass]
 pub struct PluginContext {
     snap: ContextSnapshot,
+    /// Keep-mask recorded by `apply_keep_mask` during a plugin call (full length P). The host
+    /// takes it after the call and applies it through its undoable mask path (slice 3g-b). The
+    /// context itself stays read-only — this is just an outbox, not a live mutation.
+    pending_keep: Option<Vec<bool>>,
 }
 
 impl PluginContext {
     /// Build a context over `snap`. Constructed by the host (Rust side) — plugins never make one,
     /// so there is no `#[new]`.
     pub fn new(snap: ContextSnapshot) -> Self {
-        Self { snap }
+        Self { snap, pending_keep: None }
+    }
+
+    /// Take the keep-mask recorded by `apply_keep_mask` during the last plugin call (full length
+    /// P), clearing it. Called host-side after a plugin method returns.
+    pub(crate) fn take_pending_keep(&mut self) -> Option<Vec<bool>> {
+        self.pending_keep.take()
     }
 }
 
@@ -207,6 +218,49 @@ impl PluginContext {
             .map(|(i, _)| i as i64)
             .collect();
         Some(idx.into_pyarray(py))
+    }
+
+    // ---- the one mutation: record a keep-mask (host applies it) ----------
+    /// Filter the active points by a boolean keep-mask (the single plugin mutation). `keep` is a
+    /// bool sequence/array of length `point_count` (all P points) or `n_active` (current kept
+    /// points only); points marked False leave the active set. The context is a read-only
+    /// snapshot, so this only *records* the mask — the host applies it through its undoable mask
+    /// path after the plugin call returns (batched + undoable). No-op if there is no result.
+    /// Raises `ValueError` if the length is neither P nor n_active. Mirrors
+    /// `app/plugins/api.py:PluginContext.apply_keep_mask` (which we ravel to 1-D, as it assumes).
+    fn apply_keep_mask(&mut self, py: Python<'_>, keep: &Bound<'_, PyAny>) -> PyResult<()> {
+        // No result → nothing to filter (matches the Python no-op).
+        let Some(active) = self.snap.active_mask.as_ref() else {
+            return Ok(());
+        };
+        // Coerce to a 1-D bool array: np.asarray(keep).astype(bool).ravel().
+        let np = py.import("numpy")?;
+        let arr = np.call_method1("asarray", (keep,))?;
+        let arr = arr.call_method1("astype", ("bool",))?;
+        let arr = arr.call_method0("ravel")?;
+        let flat: Vec<bool> = arr.extract::<PyReadonlyArray1<bool>>()?.as_array().to_vec();
+
+        let p = self.snap.point_count;
+        let full = if flat.len() == p {
+            flat
+        } else if flat.len() == self.snap.n_active {
+            // Expand an n_active-length mask to full length P, placing values at the kept columns
+            // (inactive points stay False — they're dropped by the host's `active & keep` anyway).
+            let mut full = vec![false; p];
+            for (slot, &k) in kept_indices(active).into_iter().zip(flat.iter()) {
+                full[slot] = k;
+            }
+            full
+        } else {
+            return Err(PyValueError::new_err(format!(
+                "keep mask length {} is neither P={} nor n_active={}",
+                flat.len(),
+                p,
+                self.snap.n_active
+            )));
+        };
+        self.pending_keep = Some(full);
+        Ok(())
     }
 }
 
@@ -358,6 +412,39 @@ mod tests {
             assert!(b.call_method1("track_status", (false,)).unwrap().is_none());
             assert!(b.getattr("active_mask").unwrap().is_none());
             assert!(b.call_method0("point_indices").unwrap().is_none());
+        });
+    }
+
+    /// apply_keep_mask records a full-length keep-mask: the n_active-length path expands at the
+    /// kept columns, the P-length path passes through, a wrong length raises ValueError, and a
+    /// no-result context records nothing. The recorded mask is taken (and cleared) host-side.
+    #[test]
+    fn apply_keep_mask_records_and_validates() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            crate::ensure_embedded_site(py).unwrap(); // apply_keep_mask uses numpy
+            // P=4, n_active=3, active = [T, F, T, T] → kept columns [0, 2, 3].
+            let ctx = Py::new(py, PluginContext::new(sample_with_arrays())).unwrap();
+            let b = ctx.bind(py);
+
+            // n_active-length (3) mask [T, F, T] expands at slots 0,2,3 → full P [T, F, F, T].
+            b.call_method1("apply_keep_mask", (vec![true, false, true],)).unwrap();
+            assert_eq!(b.borrow_mut().take_pending_keep(), Some(vec![true, false, false, true]));
+            // Taken once, it's cleared.
+            assert_eq!(b.borrow_mut().take_pending_keep(), None);
+
+            // P-length (4) mask passes straight through.
+            b.call_method1("apply_keep_mask", (vec![false, true, true, false],)).unwrap();
+            assert_eq!(b.borrow_mut().take_pending_keep(), Some(vec![false, true, true, false]));
+
+            // A length that is neither P nor n_active raises ValueError.
+            assert!(b.call_method1("apply_keep_mask", (vec![true, false],)).is_err());
+
+            // No result → no-op (records nothing).
+            let empty = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let eb = empty.bind(py);
+            eb.call_method1("apply_keep_mask", (vec![true],)).unwrap();
+            assert_eq!(eb.borrow_mut().take_pending_keep(), None);
         });
     }
 }

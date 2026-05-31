@@ -7,7 +7,10 @@
 //! `Python::attach`. It is the first (and, for now, only) place the GUI touches embedded Python.
 
 use ecm_core::project_state::ProjectState;
-use ecm_pyhost::{discover as host_discover, dispatch_event, ensure_embedded_site, has_overlay, instantiate};
+use ecm_pyhost::{
+    discover as host_discover, dispatch_event, ensure_embedded_site, has_overlay, instantiate,
+    take_keep_mask,
+};
 use ecm_pyhost::{overlay_commands, ContextSnapshot, DrawCommand, PluginRecord};
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -17,6 +20,9 @@ use std::path::PathBuf;
 pub struct LaunchOutcome {
     pub message: Option<String>,
     pub overlay: Option<Py<PyAny>>,
+    /// A full-length keep-mask the plugin recorded via `ctx.apply_keep_mask` during `launch()`,
+    /// for the GUI to apply through its undoable mask path (slice 3g-b). `None` if it recorded none.
+    pub keep_mask: Option<Vec<bool>>,
 }
 
 /// Plugin-facing state-change events — the reactive hub that replaces the 3f overlay
@@ -140,8 +146,10 @@ pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutc
             Ok(ret) => ret.bind(py).extract::<String>().ok(),
             Err(e) => return Err(format!("{e}")),
         };
+        // Collect any keep-mask the plugin recorded in launch() — before `instance` is moved below.
+        let keep_mask = take_keep_mask(py, &instance);
         let overlay = has_overlay(py, &instance).then_some(instance);
-        Ok(LaunchOutcome { message, overlay })
+        Ok(LaunchOutcome { message, overlay, keep_mask })
     })
 }
 

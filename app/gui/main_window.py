@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -16,6 +17,7 @@ from PyQt5.QtWidgets import (
     QShortcut,
     QSlider,
     QSpinBox,
+    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -50,15 +52,20 @@ class LabeledSlider(QWidget):
     def __init__(self, label: str, parent=None):
         super().__init__(parent)
         self._label = QLabel(label)
-        self._label.setMinimumWidth(90)
         self.slider = QSlider(Qt.Horizontal)
         self.spin = QSpinBox()
 
-        layout = QHBoxLayout(self)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self.slider, stretch=1)
+        row.addWidget(self.spin)
+
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         layout.addWidget(self._label)
-        layout.addWidget(self.slider, stretch=1)
-        layout.addWidget(self.spin)
+        layout.addLayout(row)
 
         self.slider.valueChanged.connect(self._on_slider)
         self.spin.valueChanged.connect(self._on_spin)
@@ -96,7 +103,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("ECM Tracker")
-        self.resize(1100, 800)
+        self.resize(1200, 850)
 
         self.state = ProjectState()
         self.canvas = CanvasView(self.state)
@@ -115,19 +122,39 @@ class MainWindow(QMainWindow):
         self.reference_slider.valueChanged.connect(self._on_reference_changed)
         self.last_slider.valueChanged.connect(self._on_last_changed)
 
-        controls = QWidget()
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(8, 4, 8, 8)
-        controls_layout.addWidget(self.current_slider)
-        controls_layout.addWidget(self.reference_slider)
-        controls_layout.addWidget(self.last_slider)
+        # ---- left pane: titled cards --------------------------------------
+        range_card = QGroupBox("Frame Range")
+        range_layout = QVBoxLayout(range_card)
+        range_layout.setContentsMargins(10, 8, 10, 10)
+        range_layout.setSpacing(8)
+        range_layout.addWidget(self.current_slider)
+        range_layout.addWidget(self.reference_slider)
+        range_layout.addWidget(self.last_slider)
 
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.canvas, stretch=1)
-        layout.addWidget(controls)
-        self.setCentralWidget(container)
+        plugins_card = QGroupBox("Plugins")
+        plugins_layout = QVBoxLayout(plugins_card)
+        plugins_layout.setContentsMargins(10, 8, 10, 10)
+        plugins_layout.setSpacing(6)  # populated with launch buttons after plugin discovery
+
+        self.side_pane = QWidget()
+        pane_layout = QVBoxLayout(self.side_pane)
+        pane_layout.setContentsMargins(8, 8, 8, 8)
+        pane_layout.setSpacing(10)
+        pane_layout.addWidget(range_card)
+        pane_layout.addWidget(plugins_card)
+        pane_layout.addStretch(1)  # cards hug the top; future cards stack downward
+
+        # ---- splitter as central widget: [pane | canvas] ------------------
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.side_pane)
+        self.splitter.addWidget(self.canvas)
+        self.splitter.setStretchFactor(0, 0)   # pane keeps its size on window resize
+        self.splitter.setStretchFactor(1, 1)   # canvas absorbs extra space
+        self.splitter.setCollapsible(0, True)  # pane can be dragged shut
+        self.splitter.setCollapsible(1, False)  # never collapse the canvas
+        self.setCentralWidget(self.splitter)
+
+        self._restore_pane_width()
 
         self._build_menus()
         self._build_toolbar()
@@ -151,10 +178,11 @@ class MainWindow(QMainWindow):
             lambda: self._go_to_frame(self.state.current_index + 1)
         )
 
-        # Discover installed plugins and populate the Plugins menu.
+        # Discover installed plugins; populate the pane launch buttons + the utility menu.
         self.plugin_manager = PluginManager(self)
         self.plugin_manager.discover()
         self.plugin_manager.build_menu(self._plugins_menu)
+        self.plugin_manager.build_panel(plugins_layout)
 
         self._update_status()
         self._update_tool_states()
@@ -420,6 +448,22 @@ class MainWindow(QMainWindow):
         self._update_status()
         self._update_tool_states()
         self.signals.sequence_changed.emit()
+
+    # ---- left pane ------------------------------------------------------
+    def _restore_pane_width(self) -> None:
+        ui = settings.get_section("ui") or {}
+        try:
+            width = max(0, int(ui.get("left_pane_width", 280)))
+        except (TypeError, ValueError):
+            width = 280
+        total = max(self.width(), width + 100)  # window not yet shown -> sane fallback
+        self.splitter.setSizes([width, total - width])
+
+    def closeEvent(self, event) -> None:
+        sizes = self.splitter.sizes()
+        if sizes:
+            settings.update_section("ui", {"left_pane_width": int(sizes[0])})
+        super().closeEvent(event)
 
     def _configure_sliders(self) -> None:
         total = self.state.total_images

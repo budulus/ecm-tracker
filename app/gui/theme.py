@@ -154,6 +154,9 @@ QPushButton:default {
 QPushButton:default:hover { background: #1d4ed8; }
 QPushButton:disabled { background: #f0f1f3; color: #b3b9c0; border-color: #e3e6ea; }
 
+/* Plugin launch buttons (side-pane card): read as a left-aligned list. */
+QPushButton#pluginButton { text-align: left; padding: 7px 12px; }
+
 /* ---- Group boxes (cleanup dialog) ------------------------------------ */
 QGroupBox {
     background: #ffffff;
@@ -170,6 +173,10 @@ QGroupBox::title {
     color: #6b727a;
     font-weight: 600;
 }
+
+/* ---- Splitter handle -------------------------------------------------- */
+QSplitter::handle:horizontal { width: 6px; background: #f4f5f7; }
+QSplitter::handle:horizontal:hover { background: #e3e7ec; }
 
 /* ---- Checkboxes ------------------------------------------------------- */
 QCheckBox { spacing: 6px; }

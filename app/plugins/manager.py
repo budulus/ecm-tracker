@@ -18,13 +18,22 @@ from typing import Dict, List, Optional, Type
 
 from PyQt5.QtCore import QUrl
 from PyQt5.QtGui import QDesktopServices
-from PyQt5.QtWidgets import QMenu, QMessageBox, QWidget
+from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
 
 from app.plugins.api import PluginContext, TrackerPlugin
 
 # project root = .../tracker ; this file is .../tracker/app/plugins/manager.py
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = PROJECT_ROOT / "plugins"
+
+
+def _clear_layout(layout) -> None:
+    """Delete all widgets currently in a layout (used to rebuild the plugins panel)."""
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.deleteLater()
 
 
 @dataclass
@@ -47,6 +56,7 @@ class PluginManager:
         self._window = main_window
         self._records: Dict[str, PluginRecord] = {}
         self._menu: Optional[QMenu] = None
+        self._panel_layout = None
 
     # ---- discovery ------------------------------------------------------
     def discover(self) -> List[PluginRecord]:
@@ -95,29 +105,47 @@ class PluginManager:
 
     # ---- menu -----------------------------------------------------------
     def build_menu(self, menu: QMenu) -> None:
-        """Populate ``menu`` with one entry per plugin, plus folder/reload utilities."""
+        """Populate ``menu`` with the plugin utility actions (open folder, reload).
+
+        Launching is done from the per-plugin buttons in the side pane (see ``build_panel``).
+        """
         self._menu = menu
         menu.clear()
-        records = list(self._records.values())
-        if not records:
-            placeholder = menu.addAction("No plugins installed")
-            placeholder.setEnabled(False)
-        for rec in records:
-            action = menu.addAction(rec.name)
-            if rec.error is not None:
-                action.setEnabled(False)
-                action.setText(f"⚠ {rec.name} (failed to load)")
-                action.setToolTip(rec.error)
-            else:
-                action.setToolTip(rec.description)
-                action.triggered.connect(lambda _checked, pid=rec.plugin_id: self.launch(pid))
-        menu.addSeparator()
         menu.addAction("Open Plugins Folder…").triggered.connect(self._open_folder)
         menu.addAction("Reload Plugins").triggered.connect(self.reload)
 
     def _refresh_menu(self) -> None:
         if self._menu is not None:
             self.build_menu(self._menu)
+
+    # ---- side-pane panel ------------------------------------------------
+    def build_panel(self, layout) -> None:
+        """Populate a vertical layout with one launch button per plugin (the pane card)."""
+        self._panel_layout = layout
+        _clear_layout(layout)
+        records = list(self._records.values())
+        if not records:
+            empty = QLabel("No plugins installed")
+            empty.setEnabled(False)
+            layout.addWidget(empty)
+            return
+        for rec in records:
+            button = QPushButton(rec.name)
+            button.setObjectName("pluginButton")
+            if rec.error is not None:
+                button.setEnabled(False)
+                button.setText(f"⚠ {rec.name}")
+                button.setToolTip(rec.error)
+            else:
+                button.setToolTip(rec.description)
+                button.clicked.connect(
+                    lambda _checked=False, pid=rec.plugin_id: self.launch(pid)
+                )
+            layout.addWidget(button)
+
+    def _refresh_panel(self) -> None:
+        if self._panel_layout is not None:
+            self.build_panel(self._panel_layout)
 
     # ---- launch / lifecycle --------------------------------------------
     def launch(self, plugin_id: str) -> None:
@@ -151,6 +179,7 @@ class PluginManager:
             del sys.modules[name]
         self.discover()
         self._refresh_menu()
+        self._refresh_panel()
 
     @staticmethod
     def _unload(rec: PluginRecord) -> None:

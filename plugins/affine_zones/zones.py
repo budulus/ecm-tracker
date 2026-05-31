@@ -10,7 +10,6 @@ over frames.
 """
 import csv
 
-import cv2
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QBrush, QColor, QPen, QPolygonF
@@ -116,13 +115,67 @@ def principal_stretches(F):
     return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
 
 
-def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, max_iters=2000, confidence=0.99,
-                    valid=None):
+def _ransac_affine(src, dst, sample_size, reproj, max_iters, confidence):
+    """Custom RANSAC affine fit of ``src`` → ``dst`` using ``sample_size`` points per hypothesis.
+
+    Generalizes OpenCV's minimal-sample (3-point) RANSAC: each hypothesis is a least-squares affine
+    fit over ``sample_size`` randomly drawn correspondences (exact when ``sample_size == 3``, an
+    averaging fit when larger — less sensitive to noise on any single inlier, at the cost of needing
+    more iterations to draw an all-inlier sample). Inliers are points whose reprojection error is
+    ``<= reproj`` px; the best consensus set wins and the model is refit on it. The iteration count
+    adapts to the running best inlier ratio (capped at ``max_iters``) so ``confidence`` keeps
+    OpenCV's meaning. Deterministic (fixed seed) so the live preview is stable across re-runs.
+
+    Returns ``(M, inliers)``: ``M`` is the 2×3 affine (``None`` if no 3+-point consensus is found),
+    ``inliers`` a bool array aligned to the input rows. If there are too few points to separate
+    signal from noise (``n <= sample_size``), every point is an inlier (nothing to clean).
+    """
+    n = src.shape[0]
+    s = max(MIN_ZONE_POINTS, int(sample_size))
+    P = np.column_stack([src, np.ones(n)])  # homogeneous src, reused for every residual eval
+    if n <= s:
+        sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
+        return sol.T, np.ones(n, dtype=bool)
+
+    rng = np.random.default_rng(0)
+    thresh = float(reproj)
+    conf = min(max(float(confidence), 0.0), 1.0 - 1e-12)
+    best_inliers = np.zeros(n, dtype=bool)
+    best_count = 0
+    dynamic_iters = int(max_iters)
+
+    it = 0
+    while it < min(int(max_iters), dynamic_iters):
+        it += 1
+        idx = rng.choice(n, size=s, replace=False)
+        sol, *_ = np.linalg.lstsq(P[idx], dst[idx], rcond=None)  # 3×2
+        err = np.linalg.norm(P @ sol - dst, axis=1)
+        inliers = err <= thresh
+        count = int(inliers.sum())
+        if count > best_count:
+            best_count = count
+            best_inliers = inliers
+            w = count / n
+            if w >= 1.0:
+                break
+            denom = np.log1p(-(w ** s))  # log(1 - wᵏ), strictly < 0 for 0 < w < 1
+            dynamic_iters = int(np.ceil(np.log1p(-conf) / denom))
+
+    if best_count < MIN_ZONE_POINTS:
+        return None, best_inliers
+    sol, *_ = np.linalg.lstsq(P[best_inliers], dst[best_inliers], rcond=None)
+    return sol.T, best_inliers
+
+
+def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, sample_size=3, max_iters=2000,
+                    confidence=0.99, valid=None):
     """RANSAC affine fit for the points inside ``polygon`` (used by the cleaning dialog).
 
-    Returns ``(local_idx, M, inliers)`` where ``M`` is the 2×3 affine (or None) and ``inliers`` is
-    a bool array aligned to ``local_idx``. Returns ``None`` if the zone holds too few points.
-    ``valid`` (optional) excludes lost tracks before RANSAC, as in :func:`fit_zone_deformation`.
+    Uses a custom RANSAC (:func:`_ransac_affine`) with ``sample_size`` points per hypothesis fit
+    (3 = minimal exact sample, more = least-squares averaging). Returns ``(local_idx, M, inliers)``
+    where ``M`` is the 2×3 affine (or None) and ``inliers`` is a bool array aligned to ``local_idx``.
+    Returns ``None`` if the zone holds too few points. ``valid`` (optional) excludes lost tracks
+    before RANSAC, as in :func:`fit_zone_deformation`.
     """
     inside = points_in_polygon(polygon, ref_pts)
     if valid is not None:
@@ -130,16 +183,11 @@ def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, max_iters=2000, confi
     local_idx = np.where(inside)[0]
     if local_idx.size < MIN_ZONE_POINTS:
         return None
-    src = ref_pts[local_idx].astype(np.float32)
-    dst = cur_pts[local_idx].astype(np.float32)
-    M, inlier_col = cv2.estimateAffine2D(
-        src, dst, method=cv2.RANSAC,
-        ransacReprojThreshold=float(reproj), maxIters=int(max_iters), confidence=float(confidence),
-    )
-    inliers = (
-        inlier_col.ravel().astype(bool)
-        if inlier_col is not None
-        else np.zeros(local_idx.size, dtype=bool)
+    src = ref_pts[local_idx].astype(np.float64)
+    dst = cur_pts[local_idx].astype(np.float64)
+    M, inliers = _ransac_affine(
+        src, dst, sample_size=sample_size, reproj=reproj,
+        max_iters=max_iters, confidence=confidence,
     )
     return local_idx, M, inliers
 
@@ -495,6 +543,9 @@ class RansacDialog(QDialog):
         self.setWindowTitle("RANSAC zone cleaning")
         self.setWindowFlags(Qt.Window)
 
+        self.sample_size = QSpinBox()
+        self.sample_size.setRange(MIN_ZONE_POINTS, 50)
+        self.sample_size.setValue(6)
         self.reproj = QDoubleSpinBox()
         self.reproj.setRange(0.1, 50.0)
         self.reproj.setSingleStep(0.5)
@@ -510,6 +561,7 @@ class RansacDialog(QDialog):
         self.confidence.setValue(0.99)
 
         form = QFormLayout()
+        form.addRow("Points per fit", self.sample_size)
         form.addRow("Reproj threshold (px)", self.reproj)
         form.addRow("Max iterations", self.max_iters)
         form.addRow("Confidence", self.confidence)
@@ -529,8 +581,12 @@ class RansacDialog(QDialog):
         for w in (self.reproj, self.confidence):
             w.valueChanged.connect(self.preview)
         self.max_iters.valueChanged.connect(self.preview)
+        self.sample_size.valueChanged.connect(self.preview)
         self.ctx.signals.frame_changed.connect(self.preview)
         self.ctx.signals.mask_changed.connect(self.preview)
+        # Follow the zone table: clicking another row re-previews that zone with the current
+        # parameters, so the user can tune once and run through all zones without reopening.
+        self.owner.table.itemSelectionChanged.connect(self.preview)
 
     def _fit(self):
         z = self.owner.selected_zone_index()
@@ -540,7 +596,8 @@ class RansacDialog(QDialog):
             return None, None
         fit = fit_zone_affine(
             self.owner.zones[z].polygon, coords[0], coords[cut],
-            reproj=self.reproj.value(), max_iters=self.max_iters.value(),
+            reproj=self.reproj.value(), sample_size=self.sample_size.value(),
+            max_iters=self.max_iters.value(),
             confidence=self.confidence.value(), valid=self.owner._valid_at(cut),
         )
         return z, fit
@@ -578,6 +635,7 @@ class RansacDialog(QDialog):
         try:
             self.ctx.signals.frame_changed.disconnect(self.preview)
             self.ctx.signals.mask_changed.disconnect(self.preview)
+            self.owner.table.itemSelectionChanged.disconnect(self.preview)
         except (TypeError, RuntimeError):
             pass
         self.owner.on_ransac_closed()

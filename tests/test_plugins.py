@@ -12,7 +12,7 @@ os.environ.setdefault("TRACKER_CONFIG_DIR", tempfile.mkdtemp(prefix="cfg_"))
 import numpy as np
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QPushButton, QWidget
 
 from app.core.image_sequence import ImageSequence, discover
 from app.plugins import CanvasInteraction, PluginContext
@@ -69,9 +69,22 @@ def test_window_builds_plugin_menu():
     w = _tracked_window()
     ids = {r.plugin_id for r in w.plugin_manager._records.values()}
     assert EXPECTED_PLUGINS <= ids
-    # the &Plugins menu has an entry per plugin plus the two utility actions
+    # the &Plugins menu holds only the utility actions (launching is via the pane buttons)
     actions = [a.text() for a in w._plugins_menu.actions() if a.text()]
     assert any("Reload Plugins" in t for t in actions)
+
+
+def test_window_builds_plugin_buttons():
+    w = _tracked_window()
+    layout = w.plugin_manager._panel_layout
+    assert layout is not None
+    texts = [
+        layout.itemAt(i).widget().text()
+        for i in range(layout.count())
+        if isinstance(layout.itemAt(i).widget(), QPushButton)
+    ]
+    names = {r.name for r in w.plugin_manager._records.values()}
+    assert names <= set(texts)  # one launch button per plugin
 
 
 def test_context_accessors():
@@ -275,6 +288,38 @@ def test_zone_fit_excludes_lost_tracks():
     assert not np.allclose(F_bad, F, atol=1e-4)
 
 
+def test_ransac_zone_sample_size():
+    """Qt-free: the configurable points-per-fit RANSAC flags injected outliers for any sample size
+    and is deterministic (fixed seed), and degrades gracefully when a zone has too few points."""
+    from plugins.affine_zones.zones import fit_zone_affine
+
+    polygon = [(0, 0), (100, 0), (100, 100), (0, 100)]
+    rng = np.random.default_rng(42)
+    ref = rng.uniform(5, 95, size=(24, 2))
+    F = np.array([[1.4, 0.1], [-0.05, 0.85]])
+    cur = ref @ F.T + np.array([3.0, -2.0])
+    cur += rng.normal(0, 0.2, size=cur.shape)  # sub-pixel inlier noise
+    outliers = [4, 11, 19]
+    cur[outliers] += np.array([40.0, -35.0])   # gross errors, ~53 px off
+
+    ref32, cur32 = ref.astype(np.float32), cur.astype(np.float32)
+    for k in (3, 6, 10):  # minimal exact sample through least-squares-averaged samples
+        local_idx, M, inliers = fit_zone_affine(polygon, ref32, cur32, sample_size=k, reproj=2.0)
+        assert local_idx.size == ref.shape[0] and M is not None
+        for o in outliers:
+            assert not inliers[o], f"outlier {o} kept at sample_size={k}"
+        assert inliers.sum() >= ref.shape[0] - len(outliers) - 2  # clean points survive
+
+    # Deterministic: identical inlier sets across repeated calls (fixed RANSAC seed).
+    inl_a = fit_zone_affine(polygon, ref32, cur32, sample_size=6, reproj=2.0)[2]
+    inl_b = fit_zone_affine(polygon, ref32, cur32, sample_size=6, reproj=2.0)[2]
+    assert np.array_equal(inl_a, inl_b)
+
+    # Too few points to separate signal from noise → everything is an inlier (nothing to clean).
+    _li, _M, few = fit_zone_affine(polygon, ref32[:5], cur32[:5], sample_size=10, reproj=2.0)
+    assert few.all()
+
+
 def test_track_status_accessor():
     """ctx.track_status mirrors coords: (frames, points), reference frame all-valid."""
     w = _tracked_window()
@@ -301,6 +346,32 @@ def test_stretch_plot_opens():
 
     win.close()  # AffineZonesWindow.closeEvent must close the plot window too
     assert win._plot_window is None
+    plugin.on_unload()
+
+
+def test_ransac_dialog_follows_row_selection():
+    """With the RANSAC dialog open, clicking a different zone row must immediately re-preview that
+    zone (so params are tuned once and applied across zones without reopening)."""
+    from plugins.affine_zones.zones import Zone, default_zone_color
+
+    w = _tracked_window()
+    rec = w.plugin_manager._records["affine_zones"]
+    plugin = rec.cls(PluginContext(w, "affine_zones"))
+    win = plugin.launch()
+    roi = [(60, 50), (240, 50), (240, 180), (60, 180)]
+    win.zones.append(Zone(roi, default_zone_color(0)))
+    win.zones.append(Zone(roi, default_zone_color(1)))
+    win._refresh()  # build table rows for the appended zones
+
+    win.table.selectRow(0)
+    win._open_ransac()
+    assert win._ransac_dialog is not None
+    assert win._ransac_preview is not None and win._ransac_preview[0] == 0
+
+    win.table.selectRow(1)  # clicking another row switches the dialog's target zone
+    assert win._ransac_preview[0] == 1
+
+    win.close()
     plugin.on_unload()
 
 

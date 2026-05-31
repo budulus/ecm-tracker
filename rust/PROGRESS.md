@@ -85,7 +85,7 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3f — overlays as host-rendered draw-commands + canvas integration | ✅ done | `818e837` |
 | 3g-a — reactive event hub (`on_*` hooks, replaces 3f overlay poll) | ✅ done | `db8a3f8` |
 | 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ✅ done | `c62ed50` |
-| 3g-c — declared egui control panels (`panel()` + `on_control`) | ✅ done | — |
+| 3g-c — declared egui control panels (`panel()` + `on_control`) | ✅ done | `8bf6b32` |
 | 3g-d — plugin settings persistence | ⬜ next | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with

@@ -8,7 +8,9 @@
 use pyo3::prelude::*;
 
 pub mod context;
+pub mod sdk;
 pub use context::{ContextSnapshot, PluginContext};
+pub use sdk::{register_sdk, SDK_MODULE};
 
 /// Boot the embedded interpreter, make the bundled site-packages importable,
 /// and return numpy's version string. Proves the in-process CPython works.

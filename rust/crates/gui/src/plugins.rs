@@ -7,7 +7,7 @@
 //! `Python::attach`. It is the first (and, for now, only) place the GUI touches embedded Python.
 
 use ecm_core::project_state::ProjectState;
-use ecm_pyhost::{discover as host_discover, ensure_embedded_site, has_overlay, instantiate};
+use ecm_pyhost::{discover as host_discover, dispatch_event, ensure_embedded_site, has_overlay, instantiate};
 use ecm_pyhost::{overlay_commands, ContextSnapshot, DrawCommand, PluginRecord};
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -17,6 +17,51 @@ use std::path::PathBuf;
 pub struct LaunchOutcome {
     pub message: Option<String>,
     pub overlay: Option<Py<PyAny>>,
+}
+
+/// Plugin-facing state-change events — the reactive hub that replaces the 3f overlay
+/// state-signature poll. Mirrors the Python `PluginSignals` (sequence/frame/result/mask/roi);
+/// `FrameChanged` carries the new GLOBAL frame index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginEvent {
+    SequenceChanged,
+    FrameChanged(usize),
+    ResultChanged,
+    MaskChanged,
+    RoiChanged,
+}
+
+impl PluginEvent {
+    fn name(self) -> &'static str {
+        match self {
+            PluginEvent::SequenceChanged => "sequence_changed",
+            PluginEvent::FrameChanged(_) => "frame_changed",
+            PluginEvent::ResultChanged => "result_changed",
+            PluginEvent::MaskChanged => "mask_changed",
+            PluginEvent::RoiChanged => "roi_changed",
+        }
+    }
+}
+
+/// Deliver `events` to every retained plugin instance (calling their `on_<event>` hooks) under a
+/// single `Python::attach`. Each call refreshes the instance's `ctx` to the current `state`. A hook
+/// that raises is ignored so one buggy plugin can't break the others.
+pub fn dispatch_events(instances: &[Py<PyAny>], events: &[PluginEvent], state: &ProjectState) {
+    if instances.is_empty() || events.is_empty() {
+        return;
+    }
+    Python::attach(|py| {
+        ensure_embedded_site(py).ok();
+        for inst in instances {
+            for ev in events {
+                let idx = match ev {
+                    PluginEvent::FrameChanged(i) => Some(*i as i64),
+                    _ => None,
+                };
+                let _ = dispatch_event(py, inst, ev.name(), idx, snapshot(state));
+            }
+        }
+    });
 }
 
 /// Where the app looks for plugin packages: `ECM_PLUGINS_DIR` if set, else a `plugins/` folder

@@ -132,6 +132,28 @@ pub fn overlay_commands(
     Ok(commands)
 }
 
+/// Deliver a state-change event to a plugin instance by calling its `on_<event>` hook (the port of
+/// connecting to Qt's `PluginSignals`). Refreshes the instance's `ctx` to `snapshot` first so the
+/// handler sees current state via `self.ctx`, then calls `on_<event>`. `frame_index` is passed only
+/// for `frame_changed`. The hooks default to no-ops on `TrackerPlugin`, so this is safe for any
+/// instance. An error raised by the hook propagates to the caller.
+pub fn dispatch_event(
+    py: Python<'_>,
+    instance: &Py<PyAny>,
+    event: &str,
+    frame_index: Option<i64>,
+    snapshot: ContextSnapshot,
+) -> PyResult<()> {
+    let bound = instance.bind(py);
+    let ctx = Py::new(py, PluginContext::new(snapshot))?;
+    bound.setattr("ctx", ctx)?;
+    let method = format!("on_{event}");
+    match frame_index {
+        Some(i) => bound.call_method1(&method, (i,)).map(|_| ()),
+        None => bound.call_method0(&method).map(|_| ()),
+    }
+}
+
 /// Import one package by name and resolve its plugin class, isolating any failure into the record.
 fn load_one(py: Python<'_>, base: &Bound<'_, PyAny>, pkg_name: &str) -> PluginRecord {
     let module = match py.import(pkg_name) {
@@ -419,6 +441,60 @@ class P(ecm_host.TrackerPlugin):
                 }
                 other => panic!("expected Polyline, got {other:?}"),
             }
+        });
+    }
+
+    /// A plugin's `on_*` hooks receive dispatched events, with `self.ctx` refreshed to the event's
+    /// snapshot. A non-overridden hook (base no-op) must not error.
+    #[test]
+    fn dispatch_event_delivers_to_plugin_hooks() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            register_sdk(py).unwrap();
+            let src = cr#"
+import ecm_host
+
+class P(ecm_host.TrackerPlugin):
+    def __init__(self, ctx):
+        super().__init__(ctx)
+        self.frames = []
+        self.masks = 0
+    def launch(self):
+        return None
+    def on_frame_changed(self, global_index):
+        self.frames.append(global_index)
+    def on_mask_changed(self):
+        self.masks += 1
+"#;
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(src, Some(&globals), None).unwrap();
+            let cls = globals.get_item("P").unwrap().unwrap();
+            let ctx = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let instance = cls.call1((ctx,)).unwrap().unbind();
+
+            dispatch_event(
+                py,
+                &instance,
+                "frame_changed",
+                Some(7),
+                ContextSnapshot { current_index: 7, ..Default::default() },
+            )
+            .unwrap();
+            dispatch_event(py, &instance, "mask_changed", None, ContextSnapshot::default()).unwrap();
+            // A hook the plugin did NOT override (base no-op) must be harmless.
+            dispatch_event(py, &instance, "roi_changed", None, ContextSnapshot::default()).unwrap();
+
+            let b = instance.bind(py);
+            let frames: Vec<i64> = b.getattr("frames").unwrap().extract().unwrap();
+            assert_eq!(frames, vec![7]);
+            let masks: i64 = b.getattr("masks").unwrap().extract().unwrap();
+            assert_eq!(masks, 1);
+            // ctx is refreshed before each dispatch; the last dispatch's snapshot had current_index 0.
+            let cur: usize = b
+                .getattr("ctx").unwrap()
+                .getattr("current_index").unwrap()
+                .extract().unwrap();
+            assert_eq!(cur, 0);
         });
     }
 }

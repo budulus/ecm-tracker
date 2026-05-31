@@ -30,6 +30,10 @@ class TrackerPlugin:
 
     Optionally define overlay(self, painter) to draw on the canvas: the host re-invokes it
     when state changes, handing in an ecm_host.OverlayPainter (draw in image coordinates).
+
+    Optionally define on_sequence_changed / on_frame_changed(global_index) / on_result_changed /
+    on_mask_changed / on_roi_changed to react to state changes (the host calls them with self.ctx
+    refreshed to current state).
     """
 
     NAME = "Unnamed Plugin"
@@ -42,6 +46,24 @@ class TrackerPlugin:
         raise NotImplementedError
 
     def on_unload(self):
+        pass
+
+    # Optional reactive hooks — the host calls these when app state changes (the port of the Qt
+    # PluginSignals). Override the ones you care about; they default to no-ops. Reading self.ctx
+    # inside a hook reflects the NEW state (the host refreshes it before each call).
+    def on_sequence_changed(self):
+        pass
+
+    def on_frame_changed(self, global_index):
+        pass
+
+    def on_result_changed(self):
+        pass
+
+    def on_mask_changed(self):
+        pass
+
+    def on_roi_changed(self):
         pass
 "#;
 

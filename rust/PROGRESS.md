@@ -20,14 +20,17 @@ build environment, and the next steps. Companion docs:
   `discover`/`launch`, the headless port of `manager.py`) + **3e** (**Plugins menu + GUI wiring** —
   the gui crate now drives the host: `ProjectState`→`ContextSnapshot`, a Plugins menu, an example
   plugin) + **3f** (**canvas overlays** — `OverlayPainter` draw-commands a plugin builds in
-  `overlay(self, painter)`; the canvas renders them; an example overlay plugin). 3a–3d driven from
-  embedded Python in tests; 3e/3f verified end-to-end via `ECM_SMOKE`.
+  `overlay(self, painter)`; the canvas renders them; an example overlay plugin) + **3g-a**
+  (**reactive event hub** — five `on_*` plugin hooks dispatched at state transitions, replacing the
+  3f overlay state-signature poll). 3a–3d/3g-a driven from embedded Python in tests; 3e/3f verified
+  end-to-end via `ECM_SMOKE`.
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 3 slice **3g** — **events + mutation + panels**: an event hub (replaces Qt
-  `PluginSignals`) so overlays/panels refresh reactively instead of on the state-signature poll, the
-  undoable `apply_keep_mask` write-back command, declared egui control panels, and plugin settings
-  persistence. Then Phase 4 (port the 3 example plugins) + Phase 5 (packaging).
+- **Next:** Phase 3 slice **3g-b** — the undoable `apply_keep_mask` **write-back** command (the one
+  plugin mutation, recorded on `PluginContext` like overlay commands and applied via the existing
+  undo path). 3g-a (the event hub replacing Qt `PluginSignals`) is **done**. Then 3g-c (declared
+  egui control panels) + 3g-d (plugin settings persistence), Phase 4 (port the 3 example plugins),
+  Phase 5 (packaging).
 
 ## Working method — use subagents, keep the main context lean
 
@@ -76,7 +79,10 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3d — plugin discovery + loading (port `manager.py`) | ✅ done | `cd23163` |
 | 3e — Plugins menu in GUI + `ProjectState`→`ContextSnapshot` wiring | ✅ done | `85915fe` |
 | 3f — overlays as host-rendered draw-commands + canvas integration | ✅ done | `818e837` |
-| 3g — event hub + `apply_keep_mask` write-back + panels + settings | ⬜ next | — |
+| 3g-a — reactive event hub (`on_*` hooks, replaces 3f overlay poll) | ✅ done | _this commit_ |
+| 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ⬜ next | — |
+| 3g-c — declared egui control panels | ⬜ | — |
+| 3g-d — plugin settings persistence | ⬜ | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -107,7 +113,7 @@ Non-obvious build requirements (all encoded in `cargoenv.ps1`; full story in `RE
 ```powershell
 $CE = "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1"
 pwsh $CE build --workspace --manifest-path .\Cargo.toml     # build everything
-pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 20 tests incl. parity
+pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 21 tests incl. parity
 pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI window
 ```
 `cargoenv.ps1` changes the working dir, so when invoking it from elsewhere pass an **absolute**
@@ -145,8 +151,9 @@ rust/crates/
            + progress Window + cancel), Clear Tracking, Cleanup side-panel, ⚙ Params menu (4
            dialogs + Save-as-defaults), Export menu (.npy/.csv via rfd), Plugins menu (lazy
            discover + launch via pyhost). src/plugins.rs = GUI↔pyhost glue: ProjectState→
-           ContextSnapshot map, plugins_dir resolution, discover()/launch()/refresh_overlays()
-           under Python::attach (+ ensure_embedded_site). Example plugins in rust/plugins/. src/
+           ContextSnapshot map, plugins_dir resolution, discover()/launch()/refresh_overlays()/
+           dispatch_events() (+ the `PluginEvent` enum, slice 3g-a) under Python::attach
+           (+ ensure_embedded_site). Example plugins in rust/plugins/. src/
            canvas.rs = image↔screen Transform (fit→zoom→pan), texture draw, and draw_roi /
            draw_points / draw_tracks (alpha + green-kept / red-preview-drop) / draw_window_boxes (LK
            search window, zoom-scaled) / draw_overlay_commands (plugin DrawCommands) overlays.
@@ -164,12 +171,13 @@ rust/crates/
            base) so embedded plugins can `import ecm_host`. src/host.rs = `discover(py, dir)` +
            `launch(record, snapshot)` + `PluginRecord` — the headless port of `manager.py`'s
            discovery/loading (scan, import, resolve `PLUGIN`/`TrackerPlugin` subclass, isolate
-           errors) + instantiate/has_overlay/overlay_commands (slice 3f). src/overlay.rs =
+           errors) + instantiate/has_overlay/overlay_commands (slice 3f) + dispatch_event (slice
+           3g-a: refresh ctx, call a plugin's `on_<event>` hook). src/overlay.rs =
            DrawCommand enum + `#[pyclass] OverlayPainter` builder (the canvas overlay API). Plus the
            Phase-0 numpy-import smoke. `ensure_embedded_site(py)` (pub, make `ECM_PY_SITE` numpy
            importable) + test-only `interp_test_lock()` (serialize the shared interpreter) in lib.rs.
 ```
-- **Tests: 20**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 21**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -335,17 +343,34 @@ rust/crates/
 > event-driven (the reactive event hub is 3g — until then a mid-session change refreshes on the next
 > frame scrub); polygon fill assumes convex (egui), stroke is always exact.
 
-1. **Slice 3g — events + mutation + panels + settings (bundles four things — likely sub-slice it
-   3g-a..d).** Port the reactive layer of the Python plugin system. **First, delegate a
-   contract-read** (per the Working method) of `app/gui/main_window.py` (the `PluginSignals` hub +
-   `apply_keep_mask`) and `app/plugins/api.py` (overlay/panel/settings/event surface) to a subagent.
-   The four parts:
-   - **(a) Event hub** replacing Qt `PluginSignals` (`sequence_changed`, `frame_changed(int)`,
-     `result_changed`, `mask_changed`, `roi_changed`). Emit at the existing state transitions in
-     `main.rs` (open_dir, frame scrub, tracking done, cleanup apply, ROI change) so overlays/panels
-     refresh **reactively** — this **replaces the 3f state-signature poll** (`refresh_overlays_if_dirty`
-     + the `overlay_sig` field) with real events; a plugin/overlay refreshes only on the events it
-     cares about.
+> ✅ **Slice 3g-a — reactive event hub (done).** Replaced the 3f overlay state-signature poll with a
+> real event queue dispatched to plugins' `on_*` hooks (the port of Qt `PluginSignals`). Five events:
+> `sequence_changed`, `frame_changed(global_index)`, `result_changed`, `mask_changed`, `roi_changed`.
+> `pyhost::host::dispatch_event(instance, event, frame_index, snapshot)` refreshes the instance's
+> `ctx` (so a hook reads current state via `self.ctx`) then calls `on_<event>`; the five hooks are
+> optional no-ops on the `TrackerPlugin` base (`sdk.rs`). GUI side: a `plugins::PluginEvent` enum +
+> `dispatch_events(instances, events, state)` (one `Python::attach`, errors swallowed per hook), and
+> `EcmApp` now holds an `events: Vec<PluginEvent>` queue (**replacing the `overlay_sig` field**)
+> drained once per frame by `process_plugin_events()` — which dispatches the queued events **then**
+> re-invokes `refresh_overlays`. Emit sites in `main.rs`: `SequenceChanged` (open_dir success),
+> `ResultChanged` (track done; and guarded in `invalidate_tracking` so clear/detect/ROI-discard fire
+> it once), `MaskChanged` (`apply_keep_mask` + Cleanup undo), `FrameChanged` (slider commit),
+> `RoiChanged` (rect/circle drag commit, n-gon close, Clear-ROI button). **Design choice (deviation
+> from the Python `ctx.signals.X.connect`):** the Rust `PluginContext` is an immutable snapshot the
+> host swaps per call, so a connect-on-ctx model would lose callbacks each refresh — the event
+> surface is **method-override hooks** on the retained instance instead, matching the existing
+> `overlay()` pattern. **Bonus fix:** the old `(current_index, has_result, n_active)` signature never
+> refreshed on **ROI** changes, so `point_overlay` (which draws the ROI outline) silently missed
+> edits; `roi_changed` closes that gap, and mid-session changes now refresh immediately, not on the
+> next scrub. **Verified:** new pyhost unit test `dispatch_event_delivers_to_plugin_hooks`
+> (**21 workspace tests**) + `ECM_SMOKE` still green (`overlay_plugins=1 draw_commands=267`).
+> **Note:** an unclosed mid-N-Gon polygon and the tool-switch ROI-abandon do **not** emit
+> `roi_changed` (no committed ROI existed); intentional.
+
+1. **Slice 3g-b..d — mutation + panels + settings (next).** Port the rest of the reactive layer
+   (3g-a, the event hub, is done — see above). **First, delegate a contract-read** (per the Working
+   method) of `app/gui/main_window.py` (`apply_keep_mask`) and `app/plugins/api.py`
+   (panel/settings surface) to a subagent. The three remaining parts:
    - **(b) `apply_keep_mask` write-back** — the single plugin mutation. `PluginContext` is a
      read-only snapshot, so the write is a **host-applied command**: `ctx.apply_keep_mask(keep)`
      records a mask (a new method on the pyclass, collected like overlay commands); after the plugin

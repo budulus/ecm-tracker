@@ -152,8 +152,9 @@ struct EcmApp {
     overlay_plugins: Vec<Py<PyAny>>,
     /// Cached plugin draw-commands (image space), refreshed when the state signature changes.
     overlay_cmds: Vec<DrawCommand>,
-    /// State signature `(current_index, has_result, n_active)` of the cached overlay commands.
-    overlay_sig: Option<(usize, bool, usize)>,
+    /// Pending plugin events emitted by state transitions this frame; drained next `update()`
+    /// to dispatch to plugins and refresh overlays (the reactive hub, replacing `overlay_sig`).
+    events: Vec<plugins::PluginEvent>,
     status: String,
     smoke: bool,
 }
@@ -236,7 +237,7 @@ impl EcmApp {
             plugins: None,
             overlay_plugins: Vec::new(),
             overlay_cmds: Vec::new(),
-            overlay_sig: None,
+            events: Vec::new(),
             status: "Open a folder of images to begin.".into(),
             smoke,
         };
@@ -264,7 +265,8 @@ impl EcmApp {
                 self.status = outcome.message.unwrap_or_else(|| format!("{name} ran."));
                 if let Some(instance) = outcome.overlay {
                     self.overlay_plugins.push(instance);
-                    self.overlay_sig = None; // force a refresh next frame
+                    // Render the just-launched overlay immediately (don't wait for an event).
+                    self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
                 }
             }
             Err(e) => self.status = format!("{name}: {e}"),
@@ -276,30 +278,22 @@ impl EcmApp {
         plugins::unload(&self.overlay_plugins);
         self.overlay_plugins.clear();
         self.overlay_cmds.clear();
-        self.overlay_sig = None;
     }
 
-    /// Re-invoke active overlay plugins when the state signature `(current_index, has_result,
-    /// n_active)` changes (frame scrub, tracking, cleanup), caching the commands otherwise. Cheap
-    /// when nothing changed; the per-frame canvas render uses the cache.
-    fn refresh_overlays_if_dirty(&mut self) {
-        if self.overlay_plugins.is_empty() {
-            self.overlay_cmds.clear();
-            self.overlay_sig = None;
+    /// Drain the plugin event queue (events emitted by state transitions): dispatch each to the
+    /// retained overlay plugins' `on_*` hooks, then re-invoke their `overlay()` so the canvas
+    /// reflects the new state. Replaces the 3f state-signature poll — overlays now refresh on real
+    /// transitions (including ROI changes, which the old signature missed). No-op when idle.
+    fn process_plugin_events(&mut self) {
+        if self.events.is_empty() {
             return;
         }
-        let sig = (
-            self.state.current_index,
-            self.state.result.is_some(),
-            self.state
-                .active_mask
-                .as_ref()
-                .map_or(0, |m| m.iter().filter(|&&b| b).count()),
-        );
-        if self.overlay_sig != Some(sig) {
-            self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
-            self.overlay_sig = Some(sig);
+        let events = std::mem::take(&mut self.events);
+        if self.overlay_plugins.is_empty() {
+            return;
         }
+        plugins::dispatch_events(&self.overlay_plugins, &events, &self.state);
+        self.overlay_cmds = plugins::refresh_overlays(&self.overlay_plugins, &self.state);
     }
 
     fn open_dir(&mut self, dir: PathBuf) {
@@ -311,6 +305,7 @@ impl EcmApp {
                     self.canvas.reset();
                     self.tex = None;
                     self.status = format!("Loaded {n} frames from {}", dir.display());
+                    self.events.push(plugins::PluginEvent::SequenceChanged);
                 }
                 Err(e) => self.status = format!("Load error: {e}"),
             },
@@ -579,10 +574,14 @@ impl EcmApp {
     /// Discard any tracking result (and its mask/undo). Seeds and ROI are left untouched.
     /// Called whenever the inputs to tracking (seeds/ROI) change so stale tracks aren't shown.
     fn invalidate_tracking(&mut self) {
+        let had_result = self.state.result.is_some();
         self.state.result = None;
         self.state.active_mask = None;
         self.state.undo_stack.clear();
         self.cleanup = None; // metrics referenced the old result
+        if had_result {
+            self.events.push(plugins::PluginEvent::ResultChanged);
+        }
     }
 
     /// Open the cleanup session: compute per-point metrics once and record each band's data
@@ -644,6 +643,7 @@ impl EcmApp {
         self.state.undo_stack.push(active.clone());
         let next: Vec<bool> = active.iter().zip(keep).map(|(&a, &k)| a && k).collect();
         self.state.active_mask = Some(next);
+        self.events.push(plugins::PluginEvent::MaskChanged);
     }
 
     fn clear_tracking(&mut self) {
@@ -786,6 +786,7 @@ impl EcmApp {
                 self.cleanup = None; // a new result invalidates any open cleanup session
                 self.track_job = None;
                 self.status = format!("Tracked {np} points over {nf} frames.");
+                self.events.push(plugins::PluginEvent::ResultChanged);
             }
         }
     }
@@ -841,6 +842,7 @@ impl EcmApp {
             self.roi_draft_start = None;
             self.state.features = None; // ROI changed → seeds are stale
             self.invalidate_tracking(); // …and so is any tracking result
+            self.events.push(plugins::PluginEvent::RoiChanged);
         }
     }
 
@@ -891,6 +893,7 @@ impl EcmApp {
                     self.state.features = None; // ROI changed → seeds + tracking are stale
                     self.invalidate_tracking();
                     self.status = format!("ROI closed ({n} points).");
+                    self.events.push(plugins::PluginEvent::RoiChanged);
                 }
                 Some(Close::TooFew) => {
                     self.status =
@@ -911,7 +914,7 @@ impl EcmApp {
 impl eframe::App for EcmApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_track_job(ctx);
-        self.refresh_overlays_if_dirty();
+        self.process_plugin_events();
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -939,6 +942,7 @@ impl eframe::App for EcmApp {
                         self.state.roi = None;
                         self.state.features = None;
                         self.invalidate_tracking();
+                        self.events.push(plugins::PluginEvent::RoiChanged);
                     }
                     ui.separator();
                     if tool_button(ui, ctx, &mut self.icons, "scan", "Corners", false, false, true).clicked() {
@@ -1075,6 +1079,8 @@ impl eframe::App for EcmApp {
                     .changed()
                 {
                     self.state.set_current(cur as i64);
+                    self.events
+                        .push(plugins::PluginEvent::FrameChanged(self.state.current_index));
                 }
             }
             ui.label(&self.status);
@@ -1188,6 +1194,7 @@ impl eframe::App for EcmApp {
             CleanupAction::Undo => {
                 if let Some(prev) = self.state.undo_stack.pop() {
                     self.state.active_mask = Some(prev);
+                    self.events.push(plugins::PluginEvent::MaskChanged);
                 }
             }
             CleanupAction::Close => self.cleanup = None,

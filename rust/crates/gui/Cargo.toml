@@ -16,3 +16,4 @@ pyo3 = "0.27"         # Python::attach in the plugin glue (auto-initialize via e
 eframe = "0.30.0"     # egui + native window/GL shell
 rfd = "0.17.2"        # native folder/file picker
 resvg = "0.47.0"      # SVG → raster for toolbar icons (re-exports usvg + tiny-skia)
+serde_json = "1.0.150"  # bridge plugin settings (JSON string ↔ Value) to core::settings (slice 3g-d)

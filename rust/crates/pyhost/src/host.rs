@@ -143,6 +143,16 @@ pub fn take_keep_mask(py: Python<'_>, instance: &Py<PyAny>) -> Option<Vec<bool>>
     ctx.borrow_mut().take_pending_keep()
 }
 
+/// Take any settings a plugin recorded via `ctx.save_settings(...)` during the last call (the
+/// `pending_settings` JSON string on its `PluginContext`). The GUI persists it through
+/// `core::settings` after the plugin method returns (slice 3g-d). `None` if the instance has no
+/// `ctx`, the `ctx` isn't a `PluginContext`, or nothing was recorded.
+pub fn take_settings(py: Python<'_>, instance: &Py<PyAny>) -> Option<String> {
+    let ctx_obj = instance.bind(py).getattr("ctx").ok()?;
+    let ctx = ctx_obj.cast::<PluginContext>().ok()?;
+    ctx.borrow_mut().take_pending_settings()
+}
+
 /// Whether a launched plugin instance declares a control panel (i.e. defines a `panel()` method).
 pub fn has_panel(py: Python<'_>, instance: &Py<PyAny>) -> bool {
     instance.bind(py).hasattr("panel").unwrap_or(false)

@@ -10,7 +10,7 @@ use ecm_core::project_state::ProjectState;
 use ecm_pyhost::{
     discover as host_discover, dispatch_control as host_dispatch_control, dispatch_event,
     ensure_embedded_site, has_overlay, has_panel, instantiate,
-    panel_controls as host_panel_controls, take_keep_mask,
+    panel_controls as host_panel_controls, take_keep_mask, take_settings,
 };
 use ecm_pyhost::{
     overlay_commands, ContextSnapshot, Control, ControlValue, DrawCommand, PluginRecord,
@@ -63,13 +63,20 @@ pub fn dispatch_events(instances: &[Py<PyAny>], events: &[PluginEvent], state: &
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
         for inst in instances {
+            // Load this plugin's settings once for the whole drain (they only change via a save,
+            // which we persist after the events below).
+            let sjson = stashed_id(py, inst).as_deref().and_then(load_settings_json);
             for ev in events {
                 let idx = match ev {
                     PluginEvent::FrameChanged(i) => Some(*i as i64),
                     _ => None,
                 };
-                let _ = dispatch_event(py, inst, ev.name(), idx, snapshot(state));
+                let mut snap = snapshot(state);
+                snap.settings_json = sjson.clone();
+                let _ = dispatch_event(py, inst, ev.name(), idx, snap);
             }
+            // A hook may have called ctx.save_settings — persist it.
+            persist_settings(py, inst);
         }
     });
 }
@@ -121,6 +128,59 @@ pub fn snapshot(state: &ProjectState) -> ContextSnapshot {
         coords_fw: state.result.as_ref().map(|r| r.coords_fw.clone()),
         status_fw: state.result.as_ref().map(|r| r.status_fw.clone()),
         active_mask: state.active_mask.clone(),
+        settings_json: None, // filled per-plugin by `launch` / `snapshot_for` (read side, slice 3g-d)
+    }
+}
+
+// ---- per-plugin settings persistence (slice 3g-d) -----------------------------------------------
+//
+// A plugin reads/writes its own persisted settings through `ctx.get_settings()` / `save_settings()`.
+// The host can't reach `core::settings` (it stays opencv-free, so it has no `ecm-core` dep), so the
+// GUI owns the I/O: it loads the plugin's `plugin:<id>` section into the snapshot's `settings_json`
+// (the read side) and, after each call, persists whatever the plugin recorded via the host outbox
+// (the save side) — the same collect-then-apply shape as `apply_keep_mask`. The plugin id is stashed
+// on the retained instance at launch (`_ecm_plugin_id`) so later dispatches can find its section.
+
+/// The settings.json section key for a plugin (`plugin:<id>`). Mirrors `api.py:_section`.
+fn settings_key(id: &str) -> String {
+    format!("plugin:{id}")
+}
+
+/// Load a plugin's persisted settings section as a compact JSON-object string (`None` if it has
+/// saved none), for the snapshot's `settings_json`.
+fn load_settings_json(id: &str) -> Option<String> {
+    ecm_core::settings::get_section(&settings_key(id)).map(|v| v.to_string())
+}
+
+/// Persist a plugin's settings (a JSON-object string from `ctx.save_settings`) into its section.
+/// Best-effort: a string that doesn't parse to a JSON object, or a write error, is dropped.
+fn save_settings_json(id: &str, json: &str) {
+    if let Ok(value @ serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(json)
+    {
+        let _ = ecm_core::settings::update_section(&settings_key(id), value);
+    }
+}
+
+/// The plugin id stashed on a retained instance at launch, used to locate its settings on later
+/// dispatches. `None` if absent (it isn't set on a launched instance).
+fn stashed_id(py: Python<'_>, instance: &Py<PyAny>) -> Option<String> {
+    instance.bind(py).getattr("_ecm_plugin_id").ok()?.extract::<String>().ok()
+}
+
+/// Build the per-plugin snapshot for `instance`: the shared state snapshot plus this plugin's
+/// persisted settings, so `ctx.get_settings()` reflects what was saved.
+fn snapshot_for(py: Python<'_>, instance: &Py<PyAny>, state: &ProjectState) -> ContextSnapshot {
+    let mut snap = snapshot(state);
+    snap.settings_json = stashed_id(py, instance).as_deref().and_then(load_settings_json);
+    snap
+}
+
+/// Persist any settings the plugin recorded via `ctx.save_settings` during the last call.
+fn persist_settings(py: Python<'_>, instance: &Py<PyAny>) {
+    if let Some(json) = take_settings(py, instance) {
+        if let Some(id) = stashed_id(py, instance) {
+            save_settings_json(&id, &json);
+        }
     }
 }
 
@@ -143,14 +203,22 @@ pub fn discover() -> Vec<PluginRecord> {
 /// surface (`overlay()` and/or `panel()`), its instance is retained in the outcome so the GUI can
 /// re-invoke it and dispatch events/controls. `Err` with a message when the plugin is unloaded or
 /// `launch()` raised.
-pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutcome, String> {
+pub fn launch(record: &PluginRecord, mut snap: ContextSnapshot) -> Result<LaunchOutcome, String> {
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
+        // Load this plugin's persisted settings so launch()/panel() can read them (slice 3g-d).
+        snap.settings_json = load_settings_json(&record.id);
         let instance = instantiate(py, record, snap).map_err(|e| format!("{e}"))?;
+        // Stash the id on the instance so later dispatches can locate its settings section.
+        let _ = instance.bind(py).setattr("_ecm_plugin_id", record.id.as_str());
         let message = match instance.call_method0(py, "launch") {
             Ok(ret) => ret.bind(py).extract::<String>().ok(),
             Err(e) => return Err(format!("{e}")),
         };
+        // Persist any settings the plugin saved during launch().
+        if let Some(json) = take_settings(py, &instance) {
+            save_settings_json(&record.id, &json);
+        }
         // Collect any keep-mask the plugin recorded in launch() — before `instance` is moved below.
         let keep_mask = take_keep_mask(py, &instance);
         let retain = has_overlay(py, &instance) || has_panel(py, &instance);
@@ -165,7 +233,10 @@ pub fn launch(record: &PluginRecord, snap: ContextSnapshot) -> Result<LaunchOutc
 pub fn panel_controls(instance: &Py<PyAny>, state: &ProjectState) -> Vec<Control> {
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
-        host_panel_controls(py, instance, snapshot(state)).unwrap_or_default()
+        let controls =
+            host_panel_controls(py, instance, snapshot_for(py, instance, state)).unwrap_or_default();
+        persist_settings(py, instance); // panel() may seed-and-save defaults
+        controls
     })
 }
 
@@ -183,7 +254,8 @@ pub fn dispatch_control(
     let instance = instances.get(idx)?;
     Python::attach(|py| {
         ensure_embedded_site(py).ok();
-        host_dispatch_control(py, instance, key, value, snapshot(state)).ok()?;
+        host_dispatch_control(py, instance, key, value, snapshot_for(py, instance, state)).ok()?;
+        persist_settings(py, instance); // on_control commonly persists the changed value
         take_keep_mask(py, instance)
     })
 }
@@ -199,7 +271,7 @@ pub fn refresh_overlays(instances: &[Py<PyAny>], state: &ProjectState) -> Vec<Dr
         ensure_embedded_site(py).ok();
         let mut cmds = Vec::new();
         for inst in instances {
-            if let Ok(mut c) = overlay_commands(py, inst, snapshot(state)) {
+            if let Ok(mut c) = overlay_commands(py, inst, snapshot_for(py, inst, state)) {
                 cmds.append(&mut c);
             }
         }

@@ -26,15 +26,17 @@ build environment, and the next steps. Companion docs:
   mutation: `ctx.apply_keep_mask` records a keep-mask the host applies through its undoable path) +
   **3g-c** (**declared egui control panels** — a plugin declares slider/checkbox/button/label controls
   via `panel(self, builder)`; the host renders them as an egui window, owns the live values, and
-  reports changes via the `on_control(self, key, value)` hook).
-  3a–3d/3g-a/3g-b/3g-c driven from embedded Python in tests; 3e/3f verified end-to-end via `ECM_SMOKE`
-  (3g-c by both).
+  reports changes via the `on_control(self, key, value)` hook) +
+  **3g-d** (**plugin settings persistence** — `ctx.get_settings()` / `ctx.save_settings(dict)` read/write
+  a per-plugin `plugin:<id>` JSON section via `core::settings`; the GUI owns the I/O — read served from
+  the snapshot's `settings_json`, save via a `pending_settings` outbox — so `pyhost` stays opencv-free).
+  3a–3d/3g-a/3g-b/3g-c/3g-d driven from embedded Python in tests; 3e/3f verified end-to-end via `ECM_SMOKE`
+  (3g-c/3g-d by both).
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 3 slice **3g-d** — plugin settings persistence (per-plugin JSON via
-  `core::settings`, same dir/merge model as the param dialogs; load/save exposed on `PluginContext`).
-  3g-a (event hub), 3g-b (`apply_keep_mask` write-back), and 3g-c (declared control panels) are
-  **done**. Then Phase 4 (port the 3 example plugins), Phase 5 (packaging).
+- **Next:** **Phase 4** — port the 3 example plugins (`custom_exporter`, `displacement_overlay`,
+  `affine_zones`) to the new API. All of Phase 3 is now **done** (3a–3f + 3g-a..d). Then Phase 5
+  (packaging via `cargo-packager`).
 
 ## Working method — use subagents, keep the main context lean
 
@@ -86,7 +88,7 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3g-a — reactive event hub (`on_*` hooks, replaces 3f overlay poll) | ✅ done | `db8a3f8` |
 | 3g-b — `apply_keep_mask` write-back (undoable plugin mutation) | ✅ done | `c62ed50` |
 | 3g-c — declared egui control panels (`panel()` + `on_control`) | ✅ done | `8bf6b32` |
-| 3g-d — plugin settings persistence | ⬜ next | — |
+| 3g-d — plugin settings persistence (`get_settings`/`save_settings`) | ✅ done | `PENDING` |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -117,7 +119,7 @@ Non-obvious build requirements (all encoded in `cargoenv.ps1`; full story in `RE
 ```powershell
 $CE = "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1"
 pwsh $CE build --workspace --manifest-path .\Cargo.toml     # build everything
-pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 23 tests incl. parity
+pwsh $CE test  --workspace --manifest-path .\Cargo.toml     # 24 tests incl. parity
 pwsh $CE run -p ecm-tracker --manifest-path .\Cargo.toml    # launch the GUI window
 ```
 `cargoenv.ps1` changes the working dir, so when invoking it from elsewhere pass an **absolute**
@@ -133,8 +135,10 @@ tests\fixtures\frames`, and `ECM_PLUGINS_DIR=<rust>\plugins` (exercises the plug
 the opencv + embedded-Python env); otherwise run the built exe with the opencv `bin`
 (`%LOCALAPPDATA%\ecm-tracker\opencv\opencv\build\x64\vc16\bin`) + the Python env on `PATH`. A pass
 prints `[smoke] frames=12 … tracked_points=267 …`, `[smoke] plugins_discovered=4 loaded=[…]`,
-`[smoke] overlay_plugins=2 draw_commands=267`, `[smoke] apply_keep_mask: n_active 267 -> 134`, and
-`[smoke] panel controls=4 apply_keep_mask: n_active 267 -> 134` (slice 3g-c).
+`[smoke] overlay_plugins=2 draw_commands=267`, `[smoke] apply_keep_mask: n_active 267 -> 134`,
+`[smoke] panel controls=4 apply_keep_mask: n_active 267 -> 134` (slice 3g-c), and
+`[smoke] settings: panel_filter restored stride=Some(4.0) (saved 4.0)` (slice 3g-d — saves a stride,
+relaunches a fresh instance, and confirms it restored from disk via `core::settings`).
 
 Regenerate the parity fixture (uses the app's `.venv`, which has the real `cv2`), from repo root:
 ```
@@ -158,7 +162,9 @@ rust/crates/
            discover + launch via pyhost). src/plugins.rs = GUI↔pyhost glue: ProjectState→
            ContextSnapshot map, plugins_dir resolution, discover()/launch()/refresh_overlays()/
            dispatch_events() (+ the `PluginEvent` enum, slice 3g-a) + panel_controls()/
-           dispatch_control() (slice 3g-c) under Python::attach (+ ensure_embedded_site); `launch()`
+           dispatch_control() (slice 3g-c) + per-plugin settings I/O (slice 3g-d: load_settings_json/
+           save_settings_json via `core::settings`, snapshot_for/persist_settings, plugin id stashed
+           on the instance as `_ecm_plugin_id`) under Python::attach (+ ensure_embedded_site); `launch()`
            returns `LaunchOutcome { message, instance, keep_mask }` (instance retained if the plugin
            has an overlay and/or a panel; keep_mask applied by the GUI's undoable `apply_keep_mask`).
            main.rs renders open `PluginPanel`s (slice 3g-c) via `show_panels`/`render_control`,
@@ -177,7 +183,10 @@ rust/crates/
            (`coords(active_only)` / `track_status(active_only)` / `active_mask` / `point_indices()`,
            cut-indexed, active_only selects kept columns) + the one mutation `apply_keep_mask(keep)`
            (slice 3g-b: records a full-length keep-mask into `pending_keep` — length P or n_active,
-           ValueError otherwise; the host takes + applies it, so the context stays read-only). src/sdk.rs = `register_sdk(py)` injects
+           ValueError otherwise; the host takes + applies it, so the context stays read-only) + per-plugin
+           settings `get_settings()` / `save_settings(dict)` (slice 3g-d: read parses the snapshot's
+           `settings_json`, save records a JSON string into a `pending_settings` outbox the host takes —
+           via stdlib `json`, so pyhost stays serde-free). src/sdk.rs = `register_sdk(py)` injects
            the `ecm_host` module into sys.modules (PluginContext class + a Python `TrackerPlugin`
            base) so embedded plugins can `import ecm_host`. src/host.rs = `discover(py, dir)` +
            `launch(record, snapshot)` + `PluginRecord` — the headless port of `manager.py`'s
@@ -186,14 +195,15 @@ rust/crates/
            3g-a: refresh ctx, call a plugin's `on_<event>` hook) + take_keep_mask (slice 3g-b: take
            the `pending_keep` a plugin recorded via `ctx.apply_keep_mask`) + has_panel/panel_controls/
            dispatch_control (slice 3g-c: collect a plugin's declared controls via `panel(self,
-           builder)`; deliver a change to `on_control(self, key, value)`). src/overlay.rs =
+           builder)`; deliver a change to `on_control(self, key, value)`) + take_settings (slice 3g-d:
+           take the `pending_settings` JSON a plugin recorded via `ctx.save_settings`). src/overlay.rs =
            DrawCommand enum + `#[pyclass] OverlayPainter` builder (the canvas overlay API). src/panel.rs =
            Control enum + ControlValue + `#[pyclass] PanelBuilder` builder (the control-panel API).
            Plus the
            Phase-0 numpy-import smoke. `ensure_embedded_site(py)` (pub, make `ECM_PY_SITE` numpy
            importable) + test-only `interp_test_lock()` (serialize the shared interpreter) in lib.rs.
 ```
-- **Tests: 23**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 24**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -430,14 +440,28 @@ rust/crates/
 > **Resolves 3g-b's deferred item** for the panel case (a button now filters); event-hook apply lands
 > only if a plugin needs it.
 
-1. **Slice 3g-d — plugin settings persistence (next).** The last reactive-layer part (3g-a event hub,
-   3g-b `apply_keep_mask` write-back, 3g-c control panels are done — see above). **First, delegate a
-   contract-read** (per the Working method) of `app/plugins/api.py`'s settings surface
-   (`ctx.get_settings()` / `ctx.save_settings(dict)`, keyed `plugin:<id>` in the same JSON config dir
-   as the param dialogs). Then port it: per-plugin JSON via `core::settings` (same dir/merge model),
-   load/save exposed on `PluginContext`. Verify with a pyhost unit test (round-trip save→load) +
-   extend `ECM_SMOKE` and/or the `panel_filter` example (persist the stride/invert across launches).
-2. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
+> ✅ **Slice 3g-d — plugin settings persistence (done).** The last reactive-layer part. A plugin
+> reads/writes a per-plugin `plugin:<id>` JSON section (the same `core::settings` config dir + merge
+> model as the param dialogs) via two `PluginContext` methods: `get_settings() -> dict` (empty if none
+> saved) and `save_settings(dict)`. **Design (mirrors 3b reads + 3g-b's collect-then-apply, and keeps
+> `pyhost` opencv/serde-free):** the host rebuilds the `PluginContext` from a fresh snapshot on every
+> call, so settings state can't live as a stamped field — instead the **read** rides in the snapshot
+> (`ContextSnapshot.settings_json`, a compact JSON-object string `get_settings` parses with stdlib
+> `json`) and the **save** is an outbox (`pending_settings`; the host's `take_settings` takes it). The
+> GUI owns the actual `core::settings` I/O (it's the layer that has `ecm-core`): `plugins.rs` gains
+> `load_settings_json`/`save_settings_json` (+ `serde_json` dep to bridge the JSON string ↔ `Value`),
+> `snapshot_for`/`persist_settings`, and stashes the plugin id on the retained instance as
+> `_ecm_plugin_id` so later dispatches (events / panel / overlay) can locate its section. `launch`
+> loads settings before `instantiate` (so `launch()`/`panel()` can read) and persists after; the
+> `panel_filter` example now restores its stride/invert on relaunch. **Verified:** new pyhost unit test
+> `settings_round_trip_records_and_reads` (**24 workspace tests**) + extended `ECM_SMOKE`
+> (`[smoke] settings: panel_filter restored stride=Some(4.0) (saved 4.0)` — the smoke isolates I/O in a
+> temp `TRACKER_CONFIG_DIR`). **Deviations:** like `apply_keep_mask`, a save applies *after* the call
+> returns (a save-then-read within one call sees the pre-call value); the GUI loads the section per
+> dispatch (eager — fine since dispatches are event-driven; cache later if it ever matters).
+
+1. **Phase 4** — port the 3 example plugins (`custom_exporter`, `displacement_overlay`, `affine_zones`)
+   to the new API. **Phase 5** — packaging (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 

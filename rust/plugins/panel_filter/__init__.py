@@ -12,6 +12,10 @@ the live values, and reports changes back via on_control(self, key, value):
 This plugin keeps every Nth active point (stride from the slider), or drops them instead when the
 "invert" checkbox is set, applying the filter via ctx.apply_keep_mask when the button is clicked —
 so the user can Undo it in the Cleanup dialog. numpy-free (keep is a plain list of bools).
+
+It also persists its settings (slice 3g-d): launch() restores the stride/invert the user last chose
+via ctx.get_settings(), and on_control() writes them back with ctx.save_settings(...), so the panel
+comes back the way you left it on the next launch.
 """
 
 from ecm_host import TrackerPlugin
@@ -27,6 +31,10 @@ class PanelFilter(TrackerPlugin):
         self.invert = False
 
     def launch(self):
+        # Restore the stride/invert saved on a previous launch (empty dict the first time).
+        saved = self.ctx.get_settings()
+        self.stride = max(1, int(saved.get("stride", self.stride)))
+        self.invert = bool(saved.get("invert", self.invert))
         return "Panel Filter ready — set the stride, then click Apply."
 
     def panel(self, ui):
@@ -38,10 +46,15 @@ class PanelFilter(TrackerPlugin):
     def on_control(self, key, value):
         if key == "stride":
             self.stride = max(1, int(round(value)))
+            self._save()
         elif key == "invert":
             self.invert = bool(value)
+            self._save()
         elif key == "apply":
             self._apply()
+
+    def _save(self):
+        self.ctx.save_settings({"stride": self.stride, "invert": self.invert})
 
     def _apply(self):
         ctx = self.ctx

@@ -1419,6 +1419,12 @@ impl eframe::App for EcmApp {
                 self.state.result.as_ref().map_or(0, |r| r.n_points()),
                 self.status,
             );
+            // Isolate plugin settings I/O (slice 3g-d) to a throwaway config dir, so the smoke
+            // neither reads nor pollutes the user's real settings.json and starts from empty.
+            let smoke_cfg = std::env::temp_dir().join(format!("ecm_smoke_cfg_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&smoke_cfg);
+            std::env::set_var("TRACKER_CONFIG_DIR", &smoke_cfg);
+
             // Exercise the plugin pipeline headlessly: discover, launch each loaded plugin, then
             // refresh any overlays they provide.
             let records = plugins::discover();
@@ -1487,6 +1493,30 @@ impl eframe::App for EcmApp {
                     }
                 }
             }
+
+            // Exercise settings persistence (slice 3g-d): change the panel filter's stride (its
+            // on_control saves it via ctx.save_settings), then relaunch a FRESH instance and confirm
+            // launch() restored that stride from disk (panel() seeds the slider from it).
+            if let Some(rec) = records.iter().find(|r| r.id == "panel_filter") {
+                if let Ok(o1) = plugins::launch(rec, plugins::snapshot(&self.state)) {
+                    if let Some(i1) = o1.instance {
+                        let slice1 = [i1];
+                        plugins::dispatch_control(&slice1, 0, "stride", ControlValue::Float(4.0), &self.state);
+                    }
+                }
+                let restored = match plugins::launch(rec, plugins::snapshot(&self.state)) {
+                    Ok(o2) => o2.instance.map(|i2| plugins::panel_controls(&i2, &self.state)),
+                    Err(_) => None,
+                }
+                .and_then(|controls| {
+                    controls.iter().find_map(|c| match c {
+                        Control::Slider { key, value, .. } if key == "stride" => Some(*value),
+                        _ => None,
+                    })
+                });
+                eprintln!("[smoke] settings: panel_filter restored stride={restored:?} (saved 4.0)");
+            }
+            let _ = std::fs::remove_dir_all(&smoke_cfg);
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

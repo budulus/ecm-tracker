@@ -935,6 +935,7 @@ dependencies = [
  "pyo3",
  "resvg",
  "rfd",
+ "serde_json",
 ]
 
 [[package]]

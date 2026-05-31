@@ -15,6 +15,7 @@ use ndarray::{Array2, Array3, Axis};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, ToPyArray};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// Indices (into the full P points) where `mask` is true, in order — the kept-point columns.
 fn kept_indices(mask: &[bool]) -> Vec<usize> {
@@ -51,6 +52,12 @@ pub struct ContextSnapshot {
     pub status_fw: Option<Array2<u8>>,
     /// Active (keep) mask `(P,)`: true where a point survived cleanup. `None` if no result.
     pub active_mask: Option<Vec<bool>>,
+
+    /// The plugin's persisted settings section (`plugin:<id>`) as a compact JSON-object string, or
+    /// `None` if it has saved none. The GUI loads it via `core::settings::get_section`; `get_settings`
+    /// parses it back to a dict. It rides in the snapshot (rather than on `PluginContext`) because
+    /// the host rebuilds the context from a fresh snapshot on every call (slice 3g-d).
+    pub settings_json: Option<String>,
 }
 
 /// The façade a plugin uses to reach the app. One instance per plugin (passed as `self.ctx`);
@@ -62,19 +69,29 @@ pub struct PluginContext {
     /// takes it after the call and applies it through its undoable mask path (slice 3g-b). The
     /// context itself stays read-only — this is just an outbox, not a live mutation.
     pending_keep: Option<Vec<bool>>,
+    /// Settings dict recorded by `save_settings` during a plugin call, serialized to a JSON string.
+    /// The host takes it after the call and persists it via `core::settings` (slice 3g-d) — the same
+    /// collect-then-apply outbox as `pending_keep`, keeping the context read-only.
+    pending_settings: Option<String>,
 }
 
 impl PluginContext {
     /// Build a context over `snap`. Constructed by the host (Rust side) — plugins never make one,
     /// so there is no `#[new]`.
     pub fn new(snap: ContextSnapshot) -> Self {
-        Self { snap, pending_keep: None }
+        Self { snap, pending_keep: None, pending_settings: None }
     }
 
     /// Take the keep-mask recorded by `apply_keep_mask` during the last plugin call (full length
     /// P), clearing it. Called host-side after a plugin method returns.
     pub(crate) fn take_pending_keep(&mut self) -> Option<Vec<bool>> {
         self.pending_keep.take()
+    }
+
+    /// Take the settings JSON recorded by `save_settings` during the last plugin call, clearing it.
+    /// Called host-side after a plugin method returns; the GUI persists it via `core::settings`.
+    pub(crate) fn take_pending_settings(&mut self) -> Option<String> {
+        self.pending_settings.take()
     }
 }
 
@@ -262,6 +279,29 @@ impl PluginContext {
         self.pending_keep = Some(full);
         Ok(())
     }
+
+    // ---- per-plugin settings (persistence) ------------------------------
+    /// Return this plugin's persisted settings as a dict, or an empty dict if it has saved none.
+    /// Mirrors `app/plugins/api.py:PluginContext.get_settings` (`settings.get_section(...) or {}`).
+    /// The host loads the plugin's `plugin:<id>` section into the snapshot's `settings_json`; this
+    /// parses it. Returns a fresh dict each call — mutate it then call `save_settings` to persist.
+    fn get_settings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self.snap.settings_json.as_deref() {
+            Some(s) => py.import("json")?.call_method1("loads", (s,)),
+            None => Ok(PyDict::new(py).into_any()),
+        }
+    }
+
+    /// Persist this plugin's settings (a JSON-serializable dict), overwriting any previous. Mirrors
+    /// `save_settings(data)` (`settings.update_section(...)`). Because the context is a read-only
+    /// snapshot, this only *records* the dict (as a JSON string) into an outbox; the host writes it
+    /// through `core::settings` after the plugin call returns (collect-then-apply, like
+    /// `apply_keep_mask`). Raises if `data` isn't JSON-serializable (Python's `json.dumps` does).
+    fn save_settings(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let dumped: String = py.import("json")?.call_method1("dumps", (data,))?.extract()?;
+        self.pending_settings = Some(dumped);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -285,6 +325,7 @@ mod tests {
             coords_fw: None,
             status_fw: None,
             active_mask: None,
+            settings_json: None,
         }
     }
 
@@ -309,6 +350,7 @@ mod tests {
             coords_fw: Some(coords),
             status_fw: Some(status),
             active_mask: Some(vec![true, false, true, true]),
+            settings_json: None,
         }
     }
 
@@ -445,6 +487,46 @@ mod tests {
             let eb = empty.bind(py);
             eb.call_method1("apply_keep_mask", (vec![true],)).unwrap();
             assert_eq!(eb.borrow_mut().take_pending_keep(), None);
+        });
+    }
+
+    /// get_settings parses the snapshot's `settings_json` into a dict (and returns an empty dict
+    /// when there is none); save_settings records the dict as a JSON string into the outbox, which
+    /// the host takes (and clears). Uses only the stdlib `json` module — no numpy/site needed.
+    #[test]
+    fn settings_round_trip_records_and_reads() {
+        let _g = crate::interp_test_lock();
+        Python::attach(|py| {
+            // get_settings: a persisted section parses back to its values.
+            let snap = ContextSnapshot {
+                settings_json: Some(r#"{"stride": 5, "invert": true}"#.to_string()),
+                ..Default::default()
+            };
+            let ctx = Py::new(py, PluginContext::new(snap)).unwrap();
+            let b = ctx.bind(py);
+            let got = b.call_method0("get_settings").unwrap();
+            let stride: i64 = got.get_item("stride").unwrap().extract().unwrap();
+            assert_eq!(stride, 5);
+            let invert: bool = got.get_item("invert").unwrap().extract().unwrap();
+            assert!(invert);
+
+            // No persisted settings → an empty dict.
+            let empty = Py::new(py, PluginContext::new(ContextSnapshot::default())).unwrap();
+            let eb = empty.bind(py);
+            let got2 = eb.call_method0("get_settings").unwrap();
+            assert_eq!(got2.len().unwrap(), 0);
+
+            // save_settings records the dict; the host takes it as a JSON string, then it's cleared.
+            let data = PyDict::new(py);
+            data.set_item("stride", 3).unwrap();
+            data.set_item("invert", false).unwrap();
+            eb.call_method1("save_settings", (&data,)).unwrap();
+            let pending = eb.borrow_mut().take_pending_settings().unwrap();
+            // Round-trip the recorded string back through json to assert its contents.
+            let reparsed = py.import("json").unwrap().call_method1("loads", (pending,)).unwrap();
+            let s: i64 = reparsed.get_item("stride").unwrap().extract().unwrap();
+            assert_eq!(s, 3);
+            assert_eq!(eb.borrow_mut().take_pending_settings(), None); // taken once, then cleared
         });
     }
 }

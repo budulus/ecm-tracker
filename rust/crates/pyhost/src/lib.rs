@@ -15,7 +15,7 @@ pub mod sdk;
 pub use context::{ContextSnapshot, PluginContext};
 pub use host::{
     discover, dispatch_control, dispatch_event, has_overlay, has_panel, instantiate, launch,
-    overlay_commands, panel_controls, take_keep_mask, PluginRecord,
+    overlay_commands, panel_controls, take_keep_mask, take_settings, PluginRecord,
 };
 pub use overlay::{DrawCommand, OverlayPainter, Rgba, Stroke};
 pub use panel::{Control, ControlValue, PanelBuilder};

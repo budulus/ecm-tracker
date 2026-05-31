@@ -134,7 +134,7 @@ startup). Verify a clean-machine launch + `ECM_SMOKE`. Details in the strategy p
 | 4-prep — host image paths (`frame_path`/`sequence_paths`) | ✅ done | `5b6bb9b` |
 | 4a — custom_exporter (native PyQt window) | ✅ done | `cb5740c` |
 | 4b — displacement_overlay (egui overlay + panel) | ✅ done | `377c67a` |
-| 4c — affine_zones (PyQt + matplotlib window) | ⬜ todo | |
+| 4c — affine_zones (PyQt + matplotlib window) | ✅ done | `57c2401` |
 | 5 — packaging (cargo-packager) | ⬜ todo | |
 
 ## Done-definition

@@ -92,6 +92,7 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 4-prep — host image paths (`frame_path`/`sequence_paths`) for native-window plugins | ✅ done | `5b6bb9b` |
 | 4a — custom_exporter ported (native PyQt export window + child→host settings outbox) | ✅ done | `cb5740c` |
 | 4b — displacement_overlay ported (in-process egui strain overlay + panel, numpy JET) | ✅ done | `377c67a` |
+| 4c — affine_zones ported (native PyQt+matplotlib zone tool, numpy RANSAC, keep-mask outbox) | ✅ done | `57c2401` |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push

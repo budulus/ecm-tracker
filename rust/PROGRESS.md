@@ -16,13 +16,14 @@ build environment, and the next steps. Companion docs:
   **Phase 3 (plugin host) STARTED:** slices **3a** (`#[pyclass] PluginContext` over an immutable
   state snapshot, scalar/list read API) + **3b** (rust-numpy arrays — `coords()` / `track_status()`
   / `active_mask` / `point_indices()`) + **3c** (the `ecm_host` SDK module: `PluginContext` +
-  a `TrackerPlugin` base, importable from embedded Python). All driven from embedded Python in tests.
+  a `TrackerPlugin` base, importable from embedded Python) + **3d** (plugin **discovery + loading** —
+  `discover`/`launch`, the headless port of `manager.py`). All driven from embedded Python in tests.
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 3 slice **3d** — plugin **discovery + loading** (Rust port of `manager.py`: scan a
-  plugins dir, add to `sys.path`, import each package, find the `PLUGIN`/`TrackerPlugin` subclass,
-  instantiate with a `PluginContext`, isolate import/launch errors). Then 3e Plugins menu + GUI
-  wiring (`ProjectState` → `ContextSnapshot`), 3f overlays, 3g events + `apply_keep_mask` write-back.
+- **Next:** Phase 3 slice **3e** — Plugins **menu + GUI wiring**: add `pyhost` as a `gui` dep, build a
+  `ContextSnapshot` from `ProjectState`, list discovered plugins in a **Plugins** menu (greyed +
+  tooltip on load error), launch by id, and ship a Rust-compatible example plugin (`register_sdk` +
+  `discover` are called from the GUI here). Then 3f overlays, 3g events + `apply_keep_mask` write-back.
 
 ## Working method — use subagents, keep the main context lean
 
@@ -68,8 +69,8 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3a — plugin host: `PluginContext` pyclass (read-bridge, snapshot) | ✅ done | `f912a82` |
 | 3b — plugin host: rust-numpy arrays (coords/status/mask/indices) | ✅ done | `44f7cdc` |
 | 3c — plugin host: `ecm_host` SDK module (PluginContext + TrackerPlugin base) | ✅ done | `dfa860d` |
-| 3d — plugin discovery + loading (port `manager.py`) | ⬜ next | — |
-| 3e — Plugins menu in GUI + `ProjectState`→`ContextSnapshot` wiring | ⬜ later | — |
+| 3d — plugin discovery + loading (port `manager.py`) | ✅ done | `cd23163` |
+| 3e — Plugins menu in GUI + `ProjectState`→`ContextSnapshot` wiring | ⬜ next | — |
 | 3f — overlays as host-rendered draw-commands + canvas integration | ⬜ later | — |
 | 3g — event hub + `apply_keep_mask` write-back + panels + settings | ⬜ later | — |
 
@@ -148,9 +149,14 @@ rust/crates/
            (`coords(active_only)` / `track_status(active_only)` / `active_mask` / `point_indices()`,
            cut-indexed, active_only selects kept columns). src/sdk.rs = `register_sdk(py)` injects
            the `ecm_host` module into sys.modules (PluginContext class + a Python `TrackerPlugin`
-           base) so embedded plugins can `import ecm_host`. Plus the Phase-0 numpy-import smoke.
+           base) so embedded plugins can `import ecm_host`. src/host.rs = `discover(py, dir)` +
+           `launch(record, snapshot)` + `PluginRecord` — the headless port of `manager.py`'s
+           discovery/loading (scan, import, resolve `PLUGIN`/`TrackerPlugin` subclass, isolate
+           errors). Plus the Phase-0 numpy-import smoke. Test-only helpers in lib.rs:
+           `interp_test_lock()` (serialize the shared interpreter) + `ensure_embedded_site(py)`
+           (make `ECM_PY_SITE` numpy importable).
 ```
-- **Tests: 18**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 19**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -245,22 +251,45 @@ rust/crates/
 > contract — a plugin imports the SDK, subclasses `TrackerPlugin`, receives a `PluginContext`, reads
 > `point_count` in `launch()`. 18 tests.
 
-1. **Slice 3d — discovery + loading.** Rust port of `manager.py` in `pyhost` (headless, testable):
-   a `PluginHost`/`discover(py, dir)` that adds `dir` to `sys.path`, imports each package
-   (skip `.`/`_`, require `__init__.py`), finds the class (`PLUGIN` attr, else a lone
-   `TrackerPlugin` subclass via `issubclass`), reads NAME/DESCRIPTION into a `PluginRecord`
-   (`id/name/description/error/cls: Py<PyAny>`), isolating import errors; `launch(record, snapshot)`
-   instantiates `cls(PluginContext(snapshot))` and calls `.launch()`. Test with temp `.py` plugins
-   (one good, one broken). Mind sys.path/sys.modules pollution across tests (unique package names).
-2. **Slice 3e — Plugins menu + GUI wiring.** Add `pyhost` as a `gui` dep; build `ContextSnapshot`
+> ✅ **Slice 3d — discovery + loading (done, `cd23163`).** `pyhost::host` ports the headless half of
+> `app/plugins/manager.py`. `discover(py, dir)` registers the `ecm_host` SDK, makes `dir` importable
+> (**appended** to `sys.path`, guarded against duplicates — append not insert-at-0 so a plugin folder
+> can't shadow a stdlib/site-packages module), scans sorted subdirs (skip `.`/`_`, require
+> `__init__.py`), imports each as a top-level package, and resolves the class (a module-level
+> `PLUGIN`, else the first in-package `TrackerPlugin` subclass — via `Bound::cast::<PyType>` +
+> `PyTypeMethods::is_subclass`, excluding the base, requiring `__module__` in-package). Reads
+> `NAME`(or id)/`DESCRIPTION` into `PluginRecord { id, name, description, cls: Option<Py<PyAny>>,
+> error: Option<String> }`, isolating per-plugin import/resolution errors so one broken plugin
+> doesn't abort the rest. `launch(record, snapshot)` = `cls(PluginContext(snapshot))` then
+> `.launch()`. **Free functions, not a `PluginHost` struct** — the slice is stateless; the GUI (3e)
+> owns the records (re-discovery/caching is 3g). One test drives good / lone-subclass / no-subclass /
+> raises-at-import plugins + skip-cases + a launch round-trip, and is **hermetic** (restores
+> `sys.path`/`sys.modules`). 19 workspace tests.
+>
+> **Test-infra fix (shared embedded interpreter) — important for all future pyhost tests.** The
+> pyhost tests share one process-global CPython and the documented command runs them **in parallel**.
+> Added `interp_test_lock` (a `#[cfg(test)]` `Mutex` in `lib.rs`) so every interpreter-touching test
+> holds it across `Python::attach` and they run serially — this closes a `register_sdk` TOCTOU where
+> two harness threads could each build a separate `ecm_host`, so a plugin's `issubclass(TrackerPlugin)`
+> compared against a different base and discovery silently dropped the class (the one-off
+> `good.cls`-missing failure). Serializing then **exposed a latent ordering bug** in the slice-3b
+> array test: `tracked_arrays_from_python` needs numpy importable, but the embedded interpreter only
+> gets numpy on `sys.path` via `ECM_PY_SITE`, which **only `imports_numpy_and_runs` had added** —
+> under parallel it won that race, under serialization it sometimes ran second and rust-numpy's lazy
+> array-API init panicked (`Failed to access NumPy array API capsule: ModuleNotFoundError: numpy`).
+> Fixed with `ensure_embedded_site(py)` (idempotent `ECM_PY_SITE` insert) so each numpy-using test
+> stands alone. **Rule for new pyhost tests: take `interp_test_lock()` and, if you touch numpy arrays,
+> call `ensure_embedded_site(py)` first.** Verified 0 failures over 18 parallel + 12 serial repeats.
+
+1. **Slice 3e — Plugins menu + GUI wiring.** Add `pyhost` as a `gui` dep; build `ContextSnapshot`
    from `ProjectState` (the gui owns both core + pyhost); a **Plugins** menu listing discovered
    plugins (greyed + tooltip on load error) that launches by id; ship a Rust-compatible example
    plugin. (`register_sdk` + `discover` are called from the GUI here.)
-3. **Slice 3f — overlays.** Host-rendered draw-commands (plugins return shapes in image space; the
+2. **Slice 3f — overlays.** Host-rendered draw-commands (plugins return shapes in image space; the
    Rust canvas renders them via the existing overlay hook) replacing the Qt `OverlayFn`.
-4. **Slice 3g — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
+3. **Slice 3g — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
    `apply_keep_mask` write-back command, declared egui control panels, plugin settings persistence.
-5. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
+4. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 
@@ -300,7 +329,23 @@ rust/crates/
   `cls.call1(py, (ctx,))` then `instance.call_method0(py, "launch")`. **rust-numpy 0.27** pairs with
   pyo3 0.27 + ndarray 0.16 (numpy 0.28 needs rustc 1.83 > the 1.80 pin); `to_pyarray(&self, py)`
   copies, `into_pyarray(self, py)` moves, both → `Bound<'py, PyArrayN>`; read back via
-  `obj.extract::<PyReadonlyArrayN<T>>()` then `.as_array()`.
+  `obj.extract::<PyReadonlyArrayN<T>>()` then `.as_array()`. Discovery (3d): import a top-level
+  package with `py.import(name)` (`&str`); `is_subclass` lives on **`PyTypeMethods` only** → first
+  `value.cast::<PyType>()` (the 0.27 replacement for the now-deprecated `downcast`; doubles as the
+  "is it a class?" guard) then `cls.is_subclass(&base)? && !value.is(&base)`; iterate a module's
+  members via `module.dict().iter()` (returns `Bound<PyDict>`, no `?`); attribute/method **names are
+  `&str`** (NOT `&CStr`). `getattr_opt(name) -> Option<Bound>` for optional attrs.
+- **Shared embedded interpreter in tests (bit us in 3d — read before adding a pyhost test):** all
+  `#[cfg(test)]` tests run against **one** process-global CPython, and the documented `test` command
+  runs them **in parallel**. Two hazards: (1) concurrent `register_sdk` can build duplicate `ecm_host`
+  modules → `issubclass` identity mismatch; (2) numpy is only importable after `ECM_PY_SITE` is on
+  `sys.path`, and CPython releases the GIL mid-bytecode so "another test imported it first" is racy.
+  **Convention:** every interpreter-touching test takes `let _g = crate::interp_test_lock();` across
+  its `Python::attach` (serializes them), and any test that creates numpy arrays calls
+  `crate::ensure_embedded_site(py)` first (idempotent `ECM_PY_SITE` insert). Tests that mutate
+  `sys.path`/`sys.modules` (e.g. discovery) should restore them so they stay hermetic. Symptom if you
+  forget: intermittent `Failed to access NumPy array API capsule: ModuleNotFoundError: numpy`,
+  surfacing only under parallel/serialized ordering — debug by looping the suite, not single runs.
 - **Build invocation:** see the Commands note above (absolute manifest path; benign vswhere
   warning; background-task-to-log if interactive output capture misbehaves).
 

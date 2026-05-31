@@ -19,12 +19,15 @@ build environment, and the next steps. Companion docs:
   a `TrackerPlugin` base, importable from embedded Python) + **3d** (plugin **discovery + loading** —
   `discover`/`launch`, the headless port of `manager.py`) + **3e** (**Plugins menu + GUI wiring** —
   the gui crate now drives the host: `ProjectState`→`ContextSnapshot`, a Plugins menu, an example
-  plugin). 3a–3d driven from embedded Python in tests; 3e verified end-to-end via `ECM_SMOKE`.
+  plugin) + **3f** (**canvas overlays** — `OverlayPainter` draw-commands a plugin builds in
+  `overlay(self, painter)`; the canvas renders them; an example overlay plugin). 3a–3d driven from
+  embedded Python in tests; 3e/3f verified end-to-end via `ECM_SMOKE`.
 - Building needs a special environment (OpenCV + LLVM clang + MSVC vcvars + embedded Python).
   Use the helper: `pwsh "$env:LOCALAPPDATA\ecm-tracker\cargoenv.ps1" <cargo args>`.
-- **Next:** Phase 3 slice **3f** — **overlays**: host-rendered draw-commands (a plugin returns shapes
-  in image space; the Rust canvas renders them via the existing `add_overlay` hook), replacing the Qt
-  `OverlayFn`. Then 3g events + `apply_keep_mask` write-back + panels + settings.
+- **Next:** Phase 3 slice **3g** — **events + mutation + panels**: an event hub (replaces Qt
+  `PluginSignals`) so overlays/panels refresh reactively instead of on the state-signature poll, the
+  undoable `apply_keep_mask` write-back command, declared egui control panels, and plugin settings
+  persistence. Then Phase 4 (port the 3 example plugins) + Phase 5 (packaging).
 
 ## Working method — use subagents, keep the main context lean
 
@@ -72,8 +75,8 @@ conclusion. (See `MEMORY.md` → the matching feedback note.)
 | 3c — plugin host: `ecm_host` SDK module (PluginContext + TrackerPlugin base) | ✅ done | `dfa860d` |
 | 3d — plugin discovery + loading (port `manager.py`) | ✅ done | `cd23163` |
 | 3e — Plugins menu in GUI + `ProjectState`→`ContextSnapshot` wiring | ✅ done | `85915fe` |
-| 3f — overlays as host-rendered draw-commands + canvas integration | ⬜ next | — |
-| 3g — event hub + `apply_keep_mask` write-back + panels + settings | ⬜ later | — |
+| 3f — overlays as host-rendered draw-commands + canvas integration | ✅ done | `818e837` |
+| 3g — event hub + `apply_keep_mask` write-back + panels + settings | ⬜ next | — |
 
 > Note: Forgejo pushes go over Tailscale + Git Credential Manager and can intermittently fail with
 > `401 — credentials expired` (GCM needs an interactive prompt this tool can't answer). If a push
@@ -138,11 +141,12 @@ rust/crates/
            + progress Window + cancel), Clear Tracking, Cleanup side-panel, ⚙ Params menu (4
            dialogs + Save-as-defaults), Export menu (.npy/.csv via rfd), Plugins menu (lazy
            discover + launch via pyhost). src/plugins.rs = GUI↔pyhost glue: ProjectState→
-           ContextSnapshot map, plugins_dir resolution, discover()/launch() under Python::attach
-           (+ ensure_embedded_site). Example plugin in rust/plugins/. src/canvas.rs =
-           image↔screen Transform (fit→zoom→pan), texture draw, and draw_roi / draw_points /
-           draw_tracks (alpha + green-kept / red-preview-drop) / draw_window_boxes (LK search
-           window, zoom-scaled) overlays. src/theme.rs = light egui Visuals (LIGHT_QSS palette
+           ContextSnapshot map, plugins_dir resolution, discover()/launch()/refresh_overlays()
+           under Python::attach (+ ensure_embedded_site). Example plugins in rust/plugins/. src/
+           canvas.rs = image↔screen Transform (fit→zoom→pan), texture draw, and draw_roi /
+           draw_points / draw_tracks (alpha + green-kept / red-preview-drop) / draw_window_boxes (LK
+           search window, zoom-scaled) / draw_overlay_commands (plugin DrawCommands) overlays.
+           src/theme.rs = light egui Visuals (LIGHT_QSS palette
            port, applied to the context at startup). src/icons.rs = Lucide SVGs embedded from
            app/gui/icons via include_str! → resvg/tiny-skia render → alpha-recolored, cached egui
            textures (toolbar glyphs via a tool_button helper + the OS window icon).
@@ -156,11 +160,12 @@ rust/crates/
            base) so embedded plugins can `import ecm_host`. src/host.rs = `discover(py, dir)` +
            `launch(record, snapshot)` + `PluginRecord` — the headless port of `manager.py`'s
            discovery/loading (scan, import, resolve `PLUGIN`/`TrackerPlugin` subclass, isolate
-           errors). Plus the Phase-0 numpy-import smoke. Test-only helpers in lib.rs:
-           `interp_test_lock()` (serialize the shared interpreter) + `ensure_embedded_site(py)`
-           (make `ECM_PY_SITE` numpy importable).
+           errors) + instantiate/has_overlay/overlay_commands (slice 3f). src/overlay.rs =
+           DrawCommand enum + `#[pyclass] OverlayPainter` builder (the canvas overlay API). Plus the
+           Phase-0 numpy-import smoke. `ensure_embedded_site(py)` (pub, make `ECM_PY_SITE` numpy
+           importable) + test-only `interp_test_lock()` (serialize the shared interpreter) in lib.rs.
 ```
-- **Tests: 19**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
+- **Tests: 20**, including **bit-identical** parity vs Python: `tests/tracking_parity.rs`,
   `tests/cleanup_parity.rs` (both 0.000000 diff), plus `project_state.rs`, `settings_roundtrip.rs`,
   and unit tests. Fixtures (`tests/fixtures/*.npy` + `frames/*.png`) are committed (a fixtures-local
   `.gitignore` re-includes the `.npy` past the repo-root `*.npy` rule).
@@ -304,11 +309,31 @@ rust/crates/
 > runs on the UI thread (fine for quick plugins; long/own-window plugins land with 3f/3g). Running
 > the GUI outside `cargoenv` needs the Python env (`ECM_PY_SITE`/`PYTHONHOME`) until Phase-5 packaging.
 
-1. **Slice 3f — overlays.** Host-rendered draw-commands (plugins return shapes in image space; the
-   Rust canvas renders them via the existing overlay hook) replacing the Qt `OverlayFn`.
-2. **Slice 3g — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
+> ✅ **Slice 3f — canvas overlays (done, `818e837`).** Plugins draw on the canvas via host-rendered
+> draw-commands, replacing the Qt `OverlayFn`. New `pyhost::overlay`: a `DrawCommand` enum
+> (`Circle`/`Polyline`/`Polygon`/`Text`, geometry in **image** coords) + a `#[pyclass] OverlayPainter`
+> builder (`circle`/`line`/`polyline`/`polygon`/`text`; colors are `(r,g,b[,a])` sequences; widths/
+> radii/text sizes are **screen** px, constant under zoom), exposed in the `ecm_host` SDK. A plugin
+> optionally defines `overlay(self, painter)`; new host fns: `instantiate()` (retains the instance),
+> `has_overlay()`, `overlay_commands()` (sets a fresh `ctx` on the instance so the overlay reflects
+> current state, calls `overlay()`, returns the accumulated commands). `launch()` now reuses
+> `instantiate()`. GUI: `canvas::draw_overlay_commands` renders the commands (image→screen positions,
+> screen-px sizes) on **top** of the built-in markers; `main.rs` retains overlay-providing instances
+> and re-invokes them **only when the state signature `(current_index, has_result, n_active)`
+> changes** (cached otherwise, so the per-frame render is pure Rust — no per-frame GIL), plus a
+> **Clear overlays** menu item; `plugins::launch` now returns a `LaunchOutcome { message, overlay }`
+> (+ `refresh_overlays`/`unload`). Ships `rust/plugins/point_overlay/` — draws the ROI outline +
+> active tracked points at the current frame (reads `ctx.coords`, exercising the NumPy array API).
+> **Verified:** a pyhost overlay round-trip unit test (**20 workspace tests**, 0/8 parallel-flake
+> repeats) + extended `ECM_SMOKE` (`Point Overlay` → 267 draw-commands). **egui note:** *circle*
+> strokes take `Stroke`, *line/polygon* strokes take `PathStroke` — use `egui::Stroke::new(w, color)`
+> uniformly (auto-converts). **Deviations:** overlay refresh is a state-signature poll, not yet
+> event-driven (the reactive event hub is 3g — until then a mid-session change refreshes on the next
+> frame scrub); polygon fill assumes convex (egui), stroke is always exact.
+
+1. **Slice 3g — events + mutation + panels.** Event hub (replaces `PluginSignals`), the undoable
    `apply_keep_mask` write-back command, declared egui control panels, plugin settings persistence.
-3. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
+2. **Phase 4** — port the 3 example plugins to the new API. **Phase 5** — packaging (`cargo-packager`).
 
 ## Gotchas learned (egui 0.30 + core API + build)
 
@@ -365,6 +390,16 @@ rust/crates/
   `sys.path`/`sys.modules` (e.g. discovery) should restore them so they stay hermetic. Symptom if you
   forget: intermittent `Failed to access NumPy array API capsule: ModuleNotFoundError: numpy`,
   surfacing only under parallel/serialized ordering — debug by looping the suite, not single runs.
+- **Overlay draw-commands (3f, verified before coding):** egui *circle* methods (`circle_filled`/
+  `circle_stroke`) take `impl Into<Stroke>`; *line/path/polygon* (`Shape::line`/`convex_polygon`/
+  `closed_line`, `Painter::line_segment`) take `impl Into<PathStroke>` — build `egui::Stroke::new(w,
+  color)` **everywhere** and rely on `From<Stroke> for PathStroke` (don't name `PathStroke`). All
+  `Painter` draw methods return `ShapeIdx` (ignore). pyo3: to read a Rust-built `#[pyclass]`'s field
+  back after a Python call, create it with **`Bound::new(py, T)`** and use `painter.borrow().field`
+  — **not** `Py::new` + `Py::borrow(py)` (the latter ties the `PyRef` to the local's lifetime vs the
+  GIL's → E0597). Pass it into the call as `(&bound,)`. `&mut self` pymethods are auto-`PyRefMut`
+  (don't hold another borrow across the call). `#[pyo3(signature = (a, b=4.0, c=None))]` with
+  `Option<Vec<u8>>` for `c=None`.
 - **Build invocation:** see the Commands note above (absolute manifest path; benign vswhere
   warning; background-task-to-log if interactive output capture misbehaves).
 

@@ -375,6 +375,52 @@ def test_ransac_dialog_follows_row_selection():
     plugin.on_unload()
 
 
+def test_set_current_frame():
+    """ctx.set_current_frame moves the app's current frame (clamped) and emits frame_changed."""
+    w = _tracked_window()
+    ctx = PluginContext(w, "test")
+    seen = []
+    w.signals.frame_changed.connect(lambda g: seen.append(g))
+
+    ctx.set_current_frame(ctx.last_index)
+    assert w.state.current_index == ctx.last_index
+    assert seen and seen[-1] == ctx.last_index
+
+    ctx.set_current_frame(-5)  # clamped to the first frame
+    assert w.state.current_index == 0
+    ctx.set_current_frame(10 ** 6)  # clamped to the last loaded frame
+    assert w.state.current_index == w.state.total_images - 1
+
+
+def test_ransac_dialog_frame_defaults_to_last():
+    """Opening RANSAC jumps the current frame to the last frame; the Frame spinbox mirrors it and,
+    when edited, drives the app's current frame."""
+    from plugins.affine_zones.zones import Zone, default_zone_color
+
+    w = _tracked_window()
+    rec = w.plugin_manager._records["affine_zones"]
+    plugin = rec.cls(PluginContext(w, "affine_zones"))
+    win = plugin.launch()
+    win.zones.append(Zone([(60, 50), (240, 50), (240, 180), (60, 180)], default_zone_color(0)))
+    win._refresh()  # build the table row for the appended zone
+    win.table.selectRow(0)
+
+    last = w.state.last_index
+    win._open_ransac()
+    dlg = win._ransac_dialog
+    assert dlg is not None
+    assert w.state.current_index == last  # auto-jumped to the last frame on open
+    assert dlg.frame_spin.value() == last
+    assert dlg.frame_spin.minimum() == w.state.reference_index
+    assert dlg.frame_spin.maximum() == last
+
+    dlg.frame_spin.setValue(last - 1)  # editing the spinbox navigates the app
+    assert w.state.current_index == last - 1
+
+    win.close()
+    plugin.on_unload()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

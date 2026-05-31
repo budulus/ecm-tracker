@@ -417,6 +417,7 @@ class AffineZonesWindow(QWidget):
             return
         if self._ransac_dialog is None:
             self._ransac_dialog = RansacDialog(self)
+        self._ransac_dialog.sync_frame_range()  # set range + jump to last frame
         self._ransac_dialog.show()
         self._ransac_dialog.raise_()
         self._ransac_dialog.preview()
@@ -543,6 +544,7 @@ class RansacDialog(QDialog):
         self.setWindowTitle("RANSAC zone cleaning")
         self.setWindowFlags(Qt.Window)
 
+        self.frame_spin = QSpinBox()  # range/value set per-open by sync_frame_range()
         self.sample_size = QSpinBox()
         self.sample_size.setRange(MIN_ZONE_POINTS, 50)
         self.sample_size.setValue(6)
@@ -561,6 +563,7 @@ class RansacDialog(QDialog):
         self.confidence.setValue(0.99)
 
         form = QFormLayout()
+        form.addRow("Frame", self.frame_spin)
         form.addRow("Points per fit", self.sample_size)
         form.addRow("Reproj threshold (px)", self.reproj)
         form.addRow("Max iterations", self.max_iters)
@@ -582,7 +585,8 @@ class RansacDialog(QDialog):
             w.valueChanged.connect(self.preview)
         self.max_iters.valueChanged.connect(self.preview)
         self.sample_size.valueChanged.connect(self.preview)
-        self.ctx.signals.frame_changed.connect(self.preview)
+        self.frame_spin.valueChanged.connect(self._on_frame_spin)
+        self.ctx.signals.frame_changed.connect(self._on_frame_changed)
         self.ctx.signals.mask_changed.connect(self.preview)
         # Follow the zone table: clicking another row re-previews that zone with the current
         # parameters, so the user can tune once and run through all zones without reopening.
@@ -601,6 +605,25 @@ class RansacDialog(QDialog):
             confidence=self.confidence.value(), valid=self.owner._valid_at(cut),
         )
         return z, fit
+
+    def _on_frame_spin(self, value):
+        self.ctx.set_current_frame(value)  # → frame_changed → _on_frame_changed → preview
+
+    def _on_frame_changed(self):
+        self._sync_frame_spin()
+        self.preview()
+
+    def _sync_frame_spin(self):
+        self.frame_spin.blockSignals(True)
+        self.frame_spin.setValue(self.ctx.current_index)  # QSpinBox clamps to its range
+        self.frame_spin.blockSignals(False)
+
+    def sync_frame_range(self):
+        """Set the spinbox to the tracked range and jump to the last frame. Called on every open."""
+        self.frame_spin.blockSignals(True)
+        self.frame_spin.setRange(self.ctx.reference_index, self.ctx.last_index)
+        self.frame_spin.blockSignals(False)
+        self.ctx.set_current_frame(self.ctx.last_index)  # drives main slider + emits frame_changed
 
     def preview(self):
         z, fit = self._fit()
@@ -633,7 +656,7 @@ class RansacDialog(QDialog):
 
     def closeEvent(self, event):
         try:
-            self.ctx.signals.frame_changed.disconnect(self.preview)
+            self.ctx.signals.frame_changed.disconnect(self._on_frame_changed)
             self.ctx.signals.mask_changed.disconnect(self.preview)
             self.owner.table.itemSelectionChanged.disconnect(self.preview)
         except (TypeError, RuntimeError):

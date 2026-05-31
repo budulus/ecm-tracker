@@ -174,6 +174,14 @@ class PluginContext:
         """Convert a cut index to a global frame index (``reference + cut``)."""
         return self._state.cut_to_global(cut_index)
 
+    def set_current_frame(self, global_index: int) -> None:
+        """Move the app's current frame to ``global_index`` (clamped to the loaded range).
+
+        Drives the same path as the main Current slider: updates the canvas, status bar and tool
+        states, and emits ``signals.frame_changed``. No-op if no sequence is loaded.
+        """
+        self._window._go_to_frame(global_index)
+
     # ---- images ---------------------------------------------------------
     def image_size(self) -> Optional[Tuple[int, int]]:
         """``(height, width)`` of the frames, or ``None`` if no sequence is loaded."""

@@ -543,16 +543,24 @@ class MtsUniaxialWindow(QWidget):
         st.material_thickness = self._read_float(self.thickness_edit, st.material_thickness)
         st.incompressible = self.incompressible_chk.isChecked()
         st.completed_through = int(Step.CROP)  # channel + crop have valid defaults
-        self.pstate = st
+        # Persist the new project to disk BEFORE swapping the core sequence, so an I/O failure
+        # aborts cleanly instead of leaving the loaded sequence pointing at a half-wiped project
+        # (wipe + save only read `st`, never the core state).
+        try:
+            project_io.wipe_files(project_io.project_dir(root), _ALL_FILES)  # clear stale project
+            project_io.save_load(st)
+            project_io.save_channel(st)
+            project_io.save_crop(st)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed",
+                                 f"Could not write the project files:\n\n{exc}")
+            return
 
+        self.pstate = st
         self._loading = True
         self.ctx.load_sequence(ordered, root)
         self._loading = False
 
-        project_io.wipe_files(project_io.project_dir(root), _ALL_FILES)  # clear any stale project
-        project_io.save_load(st)
-        project_io.save_channel(st)
-        project_io.save_crop(st)
         self.ctx.save_settings({"last_root": root})
 
         self._sync_widgets_from_state()
@@ -834,6 +842,13 @@ class MtsUniaxialWindow(QWidget):
             project_io.save_manifest(st)  # persist — but NOT a Step, so no invalidate_from
         # Geometry (λ/ε/directions) is independent of the cross-section, so the kinematics cache
         # stays valid; only the stress curves and the ε₂-incompressible overlay need a redraw.
+        # The Cauchy (true-stress) curve σ=λ₁·P is valid only under incompressibility, so if the
+        # user just turned that off, tear its window down rather than keep redrawing an invalid
+        # curve titled "Cauchy (true) stress" (the Cauchy button is likewise disabled while
+        # compressible — keep the two consistent).
+        if not st.incompressible and self._cauchy_plot is not None:
+            self._cauchy_plot.close()
+            self._cauchy_plot = None
         self._refresh_open_plots()
         self._update_gating()
 

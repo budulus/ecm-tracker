@@ -83,6 +83,13 @@ them together):
   artifacts stay in the repo (`build/`, `dist/`, `build_log.txt` are gitignored).
 - **Run one build at a time** — two concurrent Nuitka runs collide on the shared output dir and cache.
 
+**macOS** is drafted in `build_macos.py` (builds a `.app` bundle → `.dmg` + zip). It must run *on a
+Mac* — Nuitka can't cross-compile — and is **not yet verified**. The loose plugins go in
+`Contents/MacOS/plugins`, so `manager.py`'s frozen-path logic needs no change. Before it builds,
+expect to relax the Windows-only uv pins for Apple-Silicon wheels, supply an `assets/app_icon.icns`,
+and (for distribution without Gatekeeper warnings) sign + notarize. See the script header for the
+specifics.
+
 ## Architecture
 
 Three layers under `app/`, with a strict dependency direction `gui → models → core` and a hard rule: **`app/core/` and `app/core/settings.py` are Qt-free** so the whole pipeline can be exercised headlessly. Do not import PyQt5 into `core`.

@@ -553,6 +553,24 @@ class MainWindow(QMainWindow):
         self.current_slider.setValue(target)  # sync widget (setValue blocks signals)
         self._on_current_changed(target)      # state + canvas + status + tools + signal
 
+    def _set_reference_frame(self, global_index: int) -> None:
+        """Move Reference to ``global_index`` (clamped to ``0..last``), driving the same
+        path as the Reference slider (which also clears the ROI on the old reference)."""
+        if not self.state.has_sequence:
+            return
+        target = max(0, min(global_index, self.state.last_index))
+        self.reference_slider.setValue(target)  # sync widget (setValue blocks signals)
+        self._on_reference_changed(target)      # state + range constraints + ROI clear + refresh
+
+    def _set_last_frame(self, global_index: int) -> None:
+        """Move Last to ``global_index`` (clamped to ``reference..total-1``), driving the
+        same path as the Last slider."""
+        if not self.state.has_sequence:
+            return
+        target = max(self.state.reference_index, min(global_index, self.state.total_images - 1))
+        self.last_slider.setValue(target)  # sync widget (setValue blocks signals)
+        self._on_last_changed(target)      # state + range constraints + refresh
+
     # ---- ROI ------------------------------------------------------------
     def _on_pan_tool_toggled(self, checked: bool) -> None:
         self.canvas.set_pan_tool(checked)

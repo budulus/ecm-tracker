@@ -182,6 +182,25 @@ class PluginContext:
         """
         self._window._go_to_frame(global_index)
 
+    def set_reference_frame(self, global_index: int) -> None:
+        """Move the reference (start) frame to ``global_index`` (clamped to ``0 .. last_index``).
+
+        Drives the same path as the main Reference slider: re-scopes the tracked range and, because
+        the ROI is defined on the reference frame, clears any existing ROI and seed features
+        (emitting ``signals.roi_changed``). An existing tracking result is left untouched. No-op if
+        no sequence is loaded.
+        """
+        self._window._set_reference_frame(global_index)
+
+    def set_last_frame(self, global_index: int) -> None:
+        """Move the last frame to ``global_index`` (clamped to ``reference_index .. last loaded
+        frame``).
+
+        Drives the same path as the main Last slider: re-scopes the tracked range. An existing
+        tracking result is left untouched. No-op if no sequence is loaded.
+        """
+        self._window._set_last_frame(global_index)
+
     # ---- images ---------------------------------------------------------
     def image_size(self) -> Optional[Tuple[int, int]]:
         """``(height, width)`` of the frames, or ``None`` if no sequence is loaded."""

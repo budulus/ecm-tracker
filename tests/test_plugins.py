@@ -392,6 +392,29 @@ def test_set_current_frame():
     assert w.state.current_index == w.state.total_images - 1
 
 
+def test_set_reference_and_last_frame():
+    """ctx.set_reference_frame / set_last_frame re-scope the tracked range, clamped to the
+    invariant 0 <= reference <= last < total, mirroring the Reference/Last sliders."""
+    w = _tracked_window()
+    ctx = PluginContext(w, "test")
+    total = w.state.total_images
+    assert total >= 3  # synthetic sequence is long enough for the indices below
+
+    ctx.set_last_frame(10 ** 6)  # clamped to the last loaded frame
+    assert w.state.last_index == total - 1
+
+    mid = total // 2
+    ctx.set_last_frame(mid)
+    assert w.state.last_index == mid
+
+    ctx.set_reference_frame(10 ** 6)  # cannot exceed last_index
+    assert w.state.reference_index == mid == w.state.last_index
+
+    ctx.set_reference_frame(-5)  # clamped to the first frame
+    assert w.state.reference_index == 0
+    assert 0 <= w.state.reference_index <= w.state.last_index < total
+
+
 def test_ransac_dialog_frame_defaults_to_last():
     """Opening RANSAC jumps the current frame to the last frame; the Frame spinbox mirrors it and,
     when edited, drives the app's current frame."""

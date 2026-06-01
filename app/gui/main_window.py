@@ -465,6 +465,14 @@ class MainWindow(QMainWindow):
         if files:
             self._load_paths(discover(files), os.path.dirname(files[0]))
 
+    def load_sequence_from_paths(self, paths, source_dir) -> None:
+        """Public entry to load an explicit, pre-ordered image-path list.
+
+        Order is preserved verbatim (``ImageSequence`` does not re-sort). Resets all downstream
+        state and emits ``sequence_changed``, exactly like File -> Open. Used by loader plugins
+        that order frames by an acquisition log rather than by filename."""
+        self._load_paths(paths, source_dir)
+
     def _load_paths(self, paths, source_dir) -> None:
         if not paths:
             QMessageBox.warning(self, "No images", "No supported images were found.")

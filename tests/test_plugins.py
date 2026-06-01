@@ -19,7 +19,7 @@ from app.plugins import CanvasInteraction, PluginContext
 from app.plugins.manager import PluginManager
 from tests.synthetic import make_sequence
 
-EXPECTED_PLUGINS = {"custom_exporter", "displacement_overlay", "affine_zones"}
+EXPECTED_PLUGINS = {"custom_exporter", "displacement_overlay", "affine_zones", "mts_uniaxial"}
 
 
 _APP = None

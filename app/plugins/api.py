@@ -202,6 +202,17 @@ class PluginContext:
         self._window._set_last_frame(global_index)
 
     # ---- images ---------------------------------------------------------
+    def load_sequence(self, paths: List[str], source_dir: Optional[str] = None) -> None:
+        """Load an explicit, pre-ordered list of image paths as the active sequence.
+
+        Order is preserved verbatim (no filename sort) — pass the paths in the exact order you
+        want them indexed (e.g. acquisition-log order). Resets all downstream state (ROI, seed
+        features, result, mask) and emits ``signals.sequence_changed``, just like File -> Open.
+        ``source_dir`` is remembered as the default save/open directory. Intended for loader
+        plugins; most plugins never need this and should work with the already-loaded sequence.
+        """
+        self._window.load_sequence_from_paths(list(paths), source_dir)
+
     def image_size(self) -> Optional[Tuple[int, int]]:
         """``(height, width)`` of the frames, or ``None`` if no sequence is loaded."""
         return self._state.image_size()

@@ -142,14 +142,23 @@ two locations, deliberately separate:
   `plugins.<name>` (root is already on `sys.path`). Plain Python, safe to Dropbox-sync.
   `plugins/README.md` is the author's guide; the three bundled examples (`custom_exporter`,
   `displacement_overlay`, `affine_zones`) are the copy-paste scaffolds and cover all three
-  capabilities (data access, canvas overlay, mouse capture).
+  capabilities (data access, canvas overlay, mouse capture). `mts_uniaxial` is a fourth, **foundational**
+  plugin (not a toy example): it loads an experiment (images in acquisition-log order + the MTS
+  `.dat` sensor stream), interpolates sensor force/displacement onto the image timeline, crops the
+  experiment window, detects + zeroes a reference frame, sets the core tracked range, and exports
+  per-frame coords aligned with the (zeroed) sensor data. Its Qt-free logic (`parsers`, `sync`,
+  `reference_algorithms`, `state`, `project_io`) is unit-tested in `tests/test_mts_uniaxial.py`; it
+  enforces data integrity with a `Step` dependency chain whose `invalidate_from()` wipes all
+  downstream artifacts (memory + the `<root>/mts_uniaxial_project/` files) on any upstream edit.
 
 **The façade (`PluginContext`)** is the whole point: a plugin only ever learns this one object
 (handed to it as `self.ctx`). It wraps `MainWindow`/`ProjectState`/`CanvasView` and **hides the
 dual global/cut index system** — all `ctx` indices are global, while `ctx.coords()` is
 cut-indexed (`coords[0]` = reference), with `ctx.global_to_cut`/`cut_to_global` to convert.
 Plugins get read access to coords/images/ROI/mask/metrics, plus overlays, mouse capture, settings,
-and exactly one mutation: `ctx.apply_keep_mask()`.
+frame-range control (`set_reference_frame`/`set_last_frame`/`set_current_frame`), the mask mutation
+`ctx.apply_keep_mask()`, and a loader entry point `ctx.load_sequence(paths, source_dir)` for plugins
+that drive image loading (order preserved, no filename re-sort; emits `sequence_changed`).
 
 Key integration points in the core (all small + additive):
 - **Canvas hooks** (`canvas_view.py`): `add_overlay/remove_overlay` (painters called in screen

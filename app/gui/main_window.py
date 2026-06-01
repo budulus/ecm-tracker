@@ -563,19 +563,33 @@ class MainWindow(QMainWindow):
 
     def _set_reference_frame(self, global_index: int) -> None:
         """Move Reference to ``global_index`` (clamped to ``0..last``), driving the same
-        path as the Reference slider (which also clears the ROI on the old reference)."""
+        path as the Reference slider (which also clears the ROI on the old reference).
+
+        If a tracking result exists, moving the reference shifts the cut origin and leaves the
+        result's cut-indexed arrays misaligned, so the result is discarded. The GUI slider is
+        disabled while a result exists; this guards the plugin ``ctx.set_reference_frame`` path.
+        """
         if not self.state.has_sequence:
             return
         target = max(0, min(global_index, self.state.last_index))
+        if self.state.result is not None and target != self.state.reference_index:
+            self._clear_tracking()
         self.reference_slider.setValue(target)  # sync widget (setValue blocks signals)
         self._on_reference_changed(target)      # state + range constraints + ROI clear + refresh
 
     def _set_last_frame(self, global_index: int) -> None:
         """Move Last to ``global_index`` (clamped to ``reference..total-1``), driving the
-        same path as the Last slider."""
+        same path as the Last slider.
+
+        If a tracking result exists, re-scoping the range invalidates its cut-indexed arrays, so
+        the result is discarded. The GUI slider is disabled while a result exists; this guards the
+        plugin ``ctx.set_last_frame`` path.
+        """
         if not self.state.has_sequence:
             return
         target = max(self.state.reference_index, min(global_index, self.state.total_images - 1))
+        if self.state.result is not None and target != self.state.last_index:
+            self._clear_tracking()
         self.last_slider.setValue(target)  # sync widget (setValue blocks signals)
         self._on_last_changed(target)      # state + range constraints + refresh
 
@@ -811,6 +825,14 @@ class MainWindow(QMainWindow):
         if result is None:
             self.statusBar().showMessage("Tracking cancelled.", 4000)
             return
+        # Discard any derived state tied to a previous result before installing the new one: an
+        # open Cleanup dialog is bound to the old metrics and a leftover undo stack holds old-mask
+        # snapshots, either of which would otherwise be applied against the new result.
+        if self._cleanup_dialog is not None:
+            self._cleanup_dialog.close()
+        self.state.undo_stack = []
+        self.canvas.set_preview_mask(None)
+        self._preview_keep = None
         self.state.result = result
         self.state.active_mask = np.ones(result.n_points, dtype=bool)
         self.statusBar().showMessage(

@@ -212,10 +212,14 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     stored = int(manifest.get("completed_through", Step.LOAD))
 
     # Material parameters are not step-gated — restore them unconditionally (old manifests that
-    # predate them fall back to the defaults).
-    st.material_width = float(manifest.get("material_width", 10.0))
-    st.material_thickness = float(manifest.get("material_thickness", 0.5))
-    st.incompressible = bool(manifest.get("incompressible", True))
+    # predate them fall back to the defaults). Guard the coercions so a malformed or explicit-null
+    # value degrades to "start fresh" (return None) rather than aborting the whole resume.
+    try:
+        st.material_width = float(manifest.get("material_width", 10.0))
+        st.material_thickness = float(manifest.get("material_thickness", 0.5))
+        st.incompressible = bool(manifest.get("incompressible", True))
+    except (ValueError, TypeError):
+        return None
 
     sp = _read_json(pdir, "sync_params.json")
     if stored >= Step.CHANNEL and sp:
@@ -238,7 +242,8 @@ def load_project(root: str) -> Optional[MtsProjectState]:
         st.last_image_global = rf.get("last_image_global")
         st.zero_disp = rf.get("zero_disp")
         st.zero_force = rf.get("zero_force")
-        if st.ref_image_global is not None and st.last_image_global is not None:
+        if (st.ref_image_global is not None and st.last_image_global is not None
+                and 0 <= st.ref_image_global <= st.last_image_global < image_log.n_images):
             st.completed_through = int(Step.REFERENCE)
 
     return st

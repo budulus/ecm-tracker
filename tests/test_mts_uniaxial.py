@@ -566,6 +566,67 @@ def test_project_io_persists_material():
     assert loaded2.incompressible is True
 
 
+def test_resume_rejects_out_of_range_reference():
+    # A stale/hand-edited reference.json whose ref_image_global lies past the re-parsed image log
+    # must not be adopted: the resume caps at CROP instead of raising IndexError downstream.
+    d = tempfile.mkdtemp(prefix="mts_")
+    exp = make_mts_experiment(d, n_frames=6)
+    log = parsers.parse_image_log(exp["log_path"])
+    sen = parsers.parse_sensor(exp["sensor_file"])
+    ordered = parsers.resolve_image_paths(log, exp["images_dir"])
+    st = MtsProjectState()
+    st.root, st.images_dir, st.sensor_file, st.log_path = (
+        exp["root"], exp["images_dir"], exp["sensor_file"], exp["log_path"])
+    st.image_log, st.sensor, st.ordered_paths = log, sen, ordered
+    st.crop_start, st.crop_end = 0, sen.n_samples - 1
+    st.ref_image_global, st.last_image_global = 2, 5
+    st.completed_through = int(Step.REFERENCE)
+    project_io.save_load(st)
+    project_io.save_channel(st)
+    project_io.save_crop(st)
+    project_io.save_reference(st)
+
+    # Corrupt the saved reference to point past the end of the (re-parsed) image log.
+    rpath = os.path.join(project_io.project_dir(exp["root"]), "reference.json")
+    with open(rpath) as f:
+        ref = json.load(f)
+    ref["ref_image_global"] = log.n_images + 3
+    with open(rpath, "w") as f:
+        json.dump(ref, f)
+
+    capped = project_io.load_project(exp["root"])  # must not raise IndexError
+    assert capped is not None
+    assert capped.completed_through == int(Step.CROP)
+
+
+def test_resume_rejects_null_material_param():
+    # A manifest with an explicit null material field is malformed: resume degrades to "start
+    # fresh" (None) rather than crashing on float(None).
+    d = tempfile.mkdtemp(prefix="mts_")
+    exp = make_mts_experiment(d, n_frames=6)
+    log = parsers.parse_image_log(exp["log_path"])
+    sen = parsers.parse_sensor(exp["sensor_file"])
+    ordered = parsers.resolve_image_paths(log, exp["images_dir"])
+    st = MtsProjectState()
+    st.root, st.images_dir, st.sensor_file, st.log_path = (
+        exp["root"], exp["images_dir"], exp["sensor_file"], exp["log_path"])
+    st.image_log, st.sensor, st.ordered_paths = log, sen, ordered
+    st.crop_start, st.crop_end = 0, sen.n_samples - 1
+    st.completed_through = int(Step.CROP)
+    project_io.save_load(st)
+    project_io.save_channel(st)
+    project_io.save_crop(st)
+
+    mpath = os.path.join(project_io.project_dir(exp["root"]), project_io.MANIFEST)
+    with open(mpath) as f:
+        man = json.load(f)
+    man["material_width"] = None
+    with open(mpath, "w") as f:
+        json.dump(man, f)
+
+    assert project_io.load_project(exp["root"]) is None  # must not raise TypeError
+
+
 # --------------------------------------------------------------------------- kinematics GUI wiring
 
 

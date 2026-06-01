@@ -98,7 +98,7 @@ class PluginContext:
         self._window = main_window
         self._plugin_id = plugin_id
         self._overlay_wrappers: dict = {}
-        self._metrics_cache: Optional[Tuple[int, Metrics]] = None
+        self._metrics_cache: Optional[Tuple[tuple, Metrics]] = None
 
     # ---- identity / plumbing -------------------------------------------
     @property
@@ -187,8 +187,9 @@ class PluginContext:
 
         Drives the same path as the main Reference slider: re-scopes the tracked range and, because
         the ROI is defined on the reference frame, clears any existing ROI and seed features
-        (emitting ``signals.roi_changed``). An existing tracking result is left untouched. No-op if
-        no sequence is loaded.
+        (emitting ``signals.roi_changed``). If a tracking result exists and the reference actually
+        moves, the result is discarded (its cut-indexed arrays are tied to the old reference),
+        emitting ``signals.result_changed``. No-op if no sequence is loaded.
         """
         self._window._set_reference_frame(global_index)
 
@@ -196,8 +197,10 @@ class PluginContext:
         """Move the last frame to ``global_index`` (clamped to ``reference_index .. last loaded
         frame``).
 
-        Drives the same path as the main Last slider: re-scopes the tracked range. An existing
-        tracking result is left untouched. No-op if no sequence is loaded.
+        Drives the same path as the main Last slider: re-scopes the tracked range. If a tracking
+        result exists and the last frame actually moves, the result is discarded (re-scoping the
+        range invalidates its cut-indexed arrays), emitting ``signals.result_changed``. No-op if
+        no sequence is loaded.
         """
         self._window._set_last_frame(global_index)
 
@@ -307,7 +310,9 @@ class PluginContext:
         if not self.has_result:
             return None
         result = self._state.result
-        key = id(result)
+        # Key on both the result and the ROI: the ``left_roi`` metric depends on the ROI, so the
+        # cache must refresh when the ROI is set/cleared/replaced, not only when the result changes.
+        key = (id(result), id(self._state.roi))
         if self._metrics_cache is None or self._metrics_cache[0] != key:
             h, w = self._state.image_size()
             self._metrics_cache = (key, compute_metrics(result, self._state.roi, (h, w)))

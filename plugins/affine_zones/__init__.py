@@ -2,8 +2,9 @@
 
 Lets you draw polygon zones on the canvas; for each zone the tracked points inside it are fit
 (least squares, reference → current frame) with an affine map whose linear part is the
-homogenized deformation gradient ``F``. From ``C = Fᵀ F`` the tool reports the principal
-stretches ``λ1, λ2`` and their normalized eigenvectors (live, following the frame slider). Each
+homogenized deformation gradient ``F``. From the left Cauchy–Green tensor ``B = F Fᵀ`` the tool
+reports the principal stretches ``λ1, λ2`` and their normalized eigenvectors — the principal
+directions in the current (deformed) configuration (live, following the frame slider). Each
 zone gets a unique color (with a per-row color picker); a RANSAC dialog cleans the selected
 zone's points; a plot window shows λ1 (solid) / λ2 (dashed) over frames in the zone color; and
 the per-frame stretches export to CSV. Demonstrates: canvas mouse capture, overlays, per-frame

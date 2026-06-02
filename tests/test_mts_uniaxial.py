@@ -26,8 +26,10 @@ import json
 
 from plugins.mts_uniaxial import kinematics, parsers, project_io, sync
 from plugins.mts_uniaxial.reference_algorithms import (
+    ELASTIC_ENERGY,
     PREFORCE,
     REGISTRY,
+    elastic_energy_minimum,
     fd_knee,
     force_onset,
     preforce_reference,
@@ -235,6 +237,25 @@ def test_reference_algorithms():
     assert preforce_reference(disp, force, 0.05) == 20
     assert preforce_reference(disp, force, 100.0) == 0  # nothing exceeds -> 0
     assert preforce_reference(np.array([]), np.array([]), 0.0) == 0
+
+
+def test_elastic_energy_reference_algorithm():
+    # registered and discoverable via the standard 2-arg path
+    assert ELASTIC_ENERGY in REGISTRY
+    assert REGISTRY[ELASTIC_ENERGY] is elastic_energy_minimum
+
+    # smooth toe -> linear tensile branch; assert the contract, not the model's exact frame
+    n = 200
+    u = np.linspace(0.0, 2.0, n)
+    toe = 0.4
+    f = np.where(u < toe, 0.5 * (u / toe) ** 2, 0.5 + 4.0 * (u - toe))
+    idx = elastic_energy_minimum(u, f)
+    assert isinstance(idx, int) and 0 <= idx < n  # in range, no exception
+
+    # defensive contract: too-short input -> 0; degenerate (constant force) window doesn't raise
+    assert elastic_energy_minimum(u[:10], f[:10]) == 0
+    j = elastic_energy_minimum(u, np.zeros(n))
+    assert isinstance(j, int) and 0 <= j < n
 
 
 # --------------------------------------------------------------------------- state machine

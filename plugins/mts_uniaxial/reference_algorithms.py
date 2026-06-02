@@ -18,12 +18,14 @@ from __future__ import annotations
 from typing import Callable, Dict
 
 import numpy as np
+from scipy.optimize import brentq, least_squares
 
 ReferenceFn = Callable[[np.ndarray, np.ndarray], int]
 
 REGISTRY: Dict[str, ReferenceFn] = {}
 
 PREFORCE = "Set preforce"  # the one algorithm the UI passes a threshold argument to
+ELASTIC_ENERGY = "Elastic-energy minimum (spring-hinge fit)"
 
 
 def register(name: str) -> Callable[[ReferenceFn], ReferenceFn]:
@@ -91,3 +93,102 @@ def preforce_reference(displacement: np.ndarray, force: np.ndarray, threshold: f
         return 0
     above = np.flatnonzero(force > float(threshold))
     return int(above[0]) if above.size else 0
+
+
+@register(ELASTIC_ENERGY)
+def elastic_energy_minimum(displacement: np.ndarray, force: np.ndarray) -> int:
+    """Reference at the minimum of fitted elastic distortion energy (spring-hinge model).
+
+    Fits a lumped spring-hinge-mass model (linear axial spring + rotary bending spring +
+    gravity) to the force-displacement curve, then returns the index minimising the stored
+    elastic distortion energy ``U_el = 1/2 (lambda-1)^2 + 1/2 beta phi^2`` -- the start of the
+    clean tensile branch, just past the bending->tension knee, independent of axis scaling.
+
+    The whole passed window is the fit window (crop it upstream with the search sliders).
+    Needs >= 20 points; returns 0 on too-short input or a failed/degenerate fit.
+    """
+    u = np.asarray(displacement, dtype=float)
+    f = np.asarray(force, dtype=float)
+    if u.size < 20:
+        return 0
+    try:
+        return _elastic_energy_index(u, f)
+    except (ValueError, RuntimeError, FloatingPointError):
+        return 0
+
+
+def _elastic_energy_index(u: np.ndarray, f: np.ndarray) -> int:
+    """Spring-hinge fit + elastic-energy argmin. Assumes ``u``, ``f`` are 1-D, equal length, >= 20.
+
+    Raises ``ValueError`` on a degenerate fit window or an all-NaN energy curve.
+    """
+    HALF_PI = np.pi / 2.0
+
+    # --- forward model: dimensionless horizontal force at grip ratio xi = x/L ---
+    def f_hat(xi, gamma, beta):
+        if xi <= 1e-9:
+            return -gamma
+        def equilibrium(phi):                       # vertical balance -> phi(xi)
+            lam = xi / np.cos(phi)
+            return (lam - 1.0) * np.sin(phi) + beta * phi * np.cos(phi) / lam - gamma
+        try:
+            phi = brentq(equilibrium, 1e-9, HALF_PI - 1e-4, xtol=1e-10, maxiter=100)
+        except ValueError:
+            return np.nan
+        lam = xi / np.cos(phi)
+        return (lam - 1.0) * np.cos(phi) - beta * phi * np.sin(phi) / lam
+
+    # --- forward model in physical units: F(u; k, L, c, u0, W) ---
+    def forward(uu, k, L, c, u0, W):
+        gamma, beta = W / (k * L), c / (k * L * L)
+        xi = (np.asarray(uu) + u0) / L
+        return k * L * np.array([f_hat(x, gamma, beta) for x in xi])
+
+    # --- the whole window is the fit window (already cropped by the search sliders upstream) ---
+    uc, fc = u, f
+
+    # --- subsample for speed (forward model does a root-find per point) ---
+    step = max(1, uc.size // 250)
+    uf, ff = uc[::step], fc[::step]
+
+    # --- initial guess from the steepest tangent (toe-compensation style) ---
+    order = np.argsort(uc)
+    us, fs = uc[order], fc[order]
+    w = max(5, (us.size // 30) | 1)                 # odd smoothing width
+    usm = np.convolve(us, np.ones(w) / w, "same")
+    fsm = np.convolve(fs, np.ones(w) / w, "same")
+    slope = np.gradient(fsm, usm)
+    core = slice(w, -w) if us.size > 2 * w else slice(None)
+    k0 = max(np.percentile(slope[core], 80), 1e-2)
+    ip = np.argmax(slope[core]) + (w if us.size > 2 * w else 0)
+    onset0 = us[ip] - fs[ip] / slope[ip] if slope[ip] > 0 else us[0]
+    L0 = max(2.0, 5.0 * (uc.max() - uc.min()))
+    theta0 = [k0, L0, 0.05 * k0 * L0 * L0, L0 - onset0, 1e-3]
+
+    # --- weighted nonlinear least-squares fit ---
+    sigma = 0.01 * np.ptp(ff) + 1e-3
+    sol = least_squares(
+        lambda p: (forward(uf, *p) - ff) / sigma, theta0, method="trf",
+        bounds=([1e-4, 1.0, 1e-6, -1e3, 1e-8], [1e5, 1e4, 1e9, 1e3, 1e3]),
+        xtol=1e-12, ftol=1e-12, max_nfev=1000)
+    k, L, c, u0, W = sol.x
+    gamma, beta = W / (k * L), c / (k * L * L)
+
+    # --- minimize elastic distortion energy over xi to get the reference ---
+    xs = np.linspace(0.30, 1.80, 1500)
+    phi = np.empty_like(xs)
+    for i, xi in enumerate(xs):
+        def eq(p, xi=xi):
+            lam = xi / np.cos(p)
+            return (lam - 1.0) * np.sin(p) + beta * p * np.cos(p) / lam - gamma
+        try:
+            phi[i] = brentq(eq, 1e-9, HALF_PI - 1e-4, xtol=1e-10, maxiter=100)
+        except ValueError:
+            phi[i] = np.nan
+    lam = xs / np.cos(phi)
+    U_el = 0.5 * (lam - 1.0) ** 2 + 0.5 * beta * phi ** 2
+    xi_star = xs[np.nanargmin(U_el)]
+
+    # --- map back to a grip reading and to the nearest input index ---
+    u_star = L * xi_star - u0
+    return int(np.argmin(np.abs(u - u_star)))

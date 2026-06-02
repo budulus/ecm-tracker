@@ -17,8 +17,9 @@ import os
 
 import numpy as np
 from PyQt5.QtCore import QLocale, Qt
-from PyQt5.QtGui import QDoubleValidator
+from PyQt5.QtGui import QBrush, QColor, QDoubleValidator, QPen
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -70,6 +71,8 @@ _DEFAULT_IMAGES_SUBDIR = "veddac"
 _DEFAULT_SENSOR_REL = "mts/specimen.dat"
 _LOG_NAME = "VDCCam.log"
 
+_OUTLIER_COLOR = QColor(255, 60, 60)  # red — RANSAC outlier preview on the main canvas
+
 
 class MtsUniaxialWindow(QWidget):
     def __init__(self, ctx):
@@ -88,6 +91,11 @@ class MtsUniaxialWindow(QWidget):
         self._pk_plot = None
         self._cauchy_plot = None
         self._gauge = None
+
+        # "Show outliers" preview: a bool mask over active points (True = RANSAC would drop it) drawn
+        # red on the main canvas, plus whether our canvas overlay is currently registered.
+        self._outlier_mask = None
+        self._outlier_overlay_on = False
 
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("MTS Uniaxial")
@@ -355,6 +363,17 @@ class MtsUniaxialWindow(QWidget):
         self.ransac_conf.setValue(0.99)
         form.addRow("Confidence:", self.ransac_conf)
         v.addLayout(form)
+
+        # Recompute the red outlier preview live as any RANSAC parameter changes (a no-op while the
+        # "Show outliers" box is unchecked).
+        for w in (self.ransac_sample, self.ransac_reproj, self.ransac_iters, self.ransac_conf):
+            w.valueChanged.connect(self._refresh_outlier_preview)
+
+        self.show_outliers_chk = QCheckBox("Show outliers")
+        self.show_outliers_chk.setToolTip(
+            "Color the points RANSAC would drop in red on the main canvas, live, without applying.")
+        self.show_outliers_chk.toggled.connect(self._on_show_outliers_toggled)
+        v.addWidget(self.show_outliers_chk)
 
         row = QHBoxLayout()
         self.ransac_status = QLabel("—")
@@ -653,7 +672,11 @@ class MtsUniaxialWindow(QWidget):
             QMessageBox.warning(self, "No algorithm", "Select a reference-finding algorithm.")
             return
         # local index within the sub-window -> absolute sensor index -> nearest global image frame.
-        local = int(fn(disp, force, self.preforce_spin.value()) if algo == PREFORCE else fn(disp, force))
+        QApplication.setOverrideCursor(Qt.WaitCursor)  # some fits (spring-hinge) block for ~1-3 s
+        try:
+            local = int(fn(disp, force, self.preforce_spin.value()) if algo == PREFORCE else fn(disp, force))
+        finally:
+            QApplication.restoreOverrideCursor()
         abs_idx = lo + max(0, min(local, hi - lo))
         last_idx = self._sensor_to_image(st.crop_end)  # last frame is the crop end, not the sub-window
         ref_idx = self._sensor_to_image(abs_idx)
@@ -722,11 +745,13 @@ class MtsUniaxialWindow(QWidget):
             else:
                 st.completed_through = min(st.completed_through, int(Step.REFERENCE))
         self._invalidate_kinematics()  # new/cleared result → recompute on next access
+        self._refresh_outlier_preview()  # active set / result changed → re-judge the preview
         self._update_gating()
 
     def _on_mask_changed(self) -> None:
         # The active set changed (our RANSAC, or the main window's Cleanup). Recompute kinematics.
         self._invalidate_kinematics()
+        self._refresh_outlier_preview()  # re-judge the preview on the new active set
         self._update_gating()
 
     def _on_export(self) -> None:
@@ -875,13 +900,19 @@ class MtsUniaxialWindow(QWidget):
         return validator
 
     # ---- RANSAC -------------------------------------------------------
-    def _on_apply_ransac(self) -> None:
+    def _ransac_outliers(self):
+        """Run RANSAC with the current panel parameters and return ``(outliers, info)``.
+
+        ``outliers`` is a bool mask over the active points (True = a point RANSAC would drop) or
+        ``None`` when the fit cannot run, in which case ``info`` explains why (otherwise ``info`` is
+        ``None``). Points not valid at both the reference and the last frame are never judged (kept).
+        Shared by the live "Show outliers" preview and the apply action so both stay in lockstep.
+        """
         if not self._plot_ready():
-            return
+            return None, "Run tracking and set a reference frame first."
         coords = self.ctx.coords(active_only=True)
         if coords is None or coords.shape[1] < kinematics.MIN_FIT_POINTS:
-            QMessageBox.warning(self, "RANSAC", "Need at least 3 active points to filter.")
-            return
+            return None, "Need at least 3 active points to filter."
         last = self.ctx.frame_count - 1
         status = self.ctx.track_status(active_only=True)
         if status is not None:
@@ -890,27 +921,73 @@ class MtsUniaxialWindow(QWidget):
             valid = np.ones(coords.shape[1], dtype=bool)
         vidx = np.where(valid)[0]
         if vidx.size < kinematics.MIN_FIT_POINTS:
-            QMessageBox.warning(self, "RANSAC",
-                                "Too few points are valid at both the reference and the last frame.")
-            return
+            return None, "Too few points are valid at both the reference and the last frame."
         M, inliers = kinematics.ransac_affine(
             coords[0][vidx], coords[last][vidx],
             sample_size=self.ransac_sample.value(), reproj=self.ransac_reproj.value(),
             max_iters=self.ransac_iters.value(), confidence=self.ransac_conf.value())
         if M is None:
-            QMessageBox.warning(self, "RANSAC", "No consensus affine found — nothing applied.")
+            return None, "No consensus affine found."
+        outliers = np.zeros(self.ctx.n_active, dtype=bool)
+        outliers[vidx[~inliers]] = True  # points invalid at ref-or-last are not judged, so kept
+        return outliers, None
+
+    def _on_apply_ransac(self) -> None:
+        outliers, info = self._ransac_outliers()
+        if outliers is None:
+            QMessageBox.warning(self, "RANSAC", f"{info} Nothing applied.")
             return
-        keep = np.ones(self.ctx.n_active, dtype=bool)
-        keep[vidx[~inliers]] = False  # points invalid at ref-or-last are not judged, so kept
-        dropped = int((~keep).sum())
+        dropped = int(outliers.sum())
         if dropped == 0:
-            self.ransac_status.setText(f"No outliers — kept all {keep.size} points.")
+            self.ransac_status.setText(f"No outliers — kept all {outliers.size} points.")
             return
-        # → mask_changed → _on_mask_changed → kinematics invalidated → plots refresh.
-        self.ctx.apply_keep_mask(keep)
+        # → mask_changed → _on_mask_changed → kinematics invalidated + preview recomputed → refresh.
+        self.ctx.apply_keep_mask(~outliers)
         self.ransac_status.setText(
-            f"Dropped {dropped} outlier(s); kept {int(keep.sum())} of {keep.size}. "
+            f"Dropped {dropped} outlier(s); kept {int((~outliers).sum())} of {outliers.size}. "
             "Undo in the main window's Cleanup.")
+
+    # ---- "Show outliers" preview --------------------------------------
+    def _on_show_outliers_toggled(self, checked: bool) -> None:
+        if checked:
+            if not self._outlier_overlay_on:
+                self.ctx.add_overlay(self._paint_outliers)
+                self._outlier_overlay_on = True
+            self._refresh_outlier_preview()
+        else:
+            self._outlier_mask = None
+            if self._outlier_overlay_on:
+                self.ctx.remove_overlay(self._paint_outliers)
+                self._outlier_overlay_on = False
+            self.ctx.request_redraw()
+
+    def _refresh_outlier_preview(self) -> None:
+        """Recompute the red outlier mask and redraw. No-op unless "Show outliers" is checked."""
+        if not self.show_outliers_chk.isChecked():
+            return
+        outliers, info = self._ransac_outliers()
+        self._outlier_mask = outliers
+        if outliers is None:
+            self.ransac_status.setText(info)
+        else:
+            self.ransac_status.setText(
+                f"Preview: {int(outliers.sum())} outlier(s) shown in red of {outliers.size} points.")
+        self.ctx.request_redraw()
+
+    def _paint_outliers(self, painter, ctx) -> None:
+        """Canvas overlay: draw the previewed RANSAC outliers as red dots at the current frame."""
+        mask = self._outlier_mask
+        if mask is None:
+            return
+        coords = ctx.coords(active_only=True)
+        cut = ctx.current_cut
+        if coords is None or cut is None or coords.shape[1] != mask.size:
+            return
+        pts = coords[cut]
+        painter.setPen(QPen(_OUTLIER_COLOR, 1))
+        painter.setBrush(QBrush(_OUTLIER_COLOR))
+        for i in np.nonzero(mask)[0]:
+            painter.drawEllipse(ctx.image_to_screen(float(pts[i][0]), float(pts[i][1])), 4, 4)
 
     # ---- plot windows -------------------------------------------------
     def _ensure_matplotlib(self) -> bool:
@@ -1219,10 +1296,18 @@ class MtsUniaxialWindow(QWidget):
             self.ctx.signals.sequence_changed.connect(self._on_sequence_changed)
             self.ctx.signals.mask_changed.connect(self._on_mask_changed)
             self._connected = True
+        # Window is cached and reused: re-register the outlier overlay if it was left checked.
+        if self.show_outliers_chk.isChecked() and not self._outlier_overlay_on:
+            self.ctx.add_overlay(self._paint_outliers)
+            self._outlier_overlay_on = True
+            self._refresh_outlier_preview()
         self._update_gating()
 
     def closeEvent(self, event) -> None:
         self._close_child_windows()
+        if self._outlier_overlay_on:
+            self.ctx.remove_overlay(self._paint_outliers)
+            self._outlier_overlay_on = False  # checkbox state kept, so reopen restores the preview
         if self._connected:
             for sig, slot in (
                 (self.ctx.signals.result_changed, self._on_result_changed),

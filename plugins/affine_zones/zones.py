@@ -2,11 +2,11 @@
 
 For each polygon zone the tracked points inside it are fit (least squares, reference → current
 frame) with an affine map ``x' = F x + b``. The linear part ``F`` is the homogenized
-**deformation gradient** of the zone; its right Cauchy–Green tensor ``C = Fᵀ F`` yields the two
+**deformation gradient** of the zone; its left Cauchy–Green tensor ``B = F Fᵀ`` yields the two
 **principal stretches** ``λ1 ≥ λ2`` (square roots of the eigenvalues) and their normalized
-eigenvectors (principal directions). The translation ``b`` is irrelevant for motion analysis and
-is discarded. A separate RANSAC tool cleans a zone's points; a plot window shows the stretches
-over frames.
+eigenvectors (principal directions in the current/deformed configuration). The translation ``b`` is
+irrelevant for motion analysis and is discarded. A separate RANSAC tool cleans a zone's points; a
+plot window shows the stretches over frames.
 """
 import csv
 
@@ -101,13 +101,16 @@ def fit_zone_deformation(polygon, ref_pts, cur_pts, valid=None):
 
 
 def principal_stretches(F):
-    """Principal stretches and directions of deformation gradient ``F``.
+    """Principal stretches and *current-configuration* directions of deformation gradient ``F``.
 
     Returns ``(lam1, lam2, v1, v2)`` with ``lam1 >= lam2`` the square roots of the eigenvalues of
-    ``C = Fᵀ F`` and ``v1, v2`` the matching unit eigenvectors. ``F = I`` ⇒ ``lam1 = lam2 = 1``.
+    the **left** Cauchy–Green tensor ``B = F Fᵀ`` and ``v1, v2`` the matching unit eigenvectors —
+    the principal directions in the current (deformed) configuration, i.e. the frame the gauge draws
+    on. ``F = I`` ⇒ ``lam1 = lam2 = 1``. ``eig(B) == eig(C)`` (with ``C = Fᵀ F``), so the stretches
+    are identical to the referential tensor's; only the direction vectors differ.
     """
-    C = F.T @ F
-    vals, vecs = np.linalg.eigh(C)  # ascending eigenvalues, orthonormal columns
+    B = F @ F.T
+    vals, vecs = np.linalg.eigh(B)  # ascending eigenvalues, orthonormal columns
     lam = np.sqrt(np.maximum(vals, 0.0))
     order = np.argsort(lam)[::-1]  # descending → lam1 first
     lam = lam[order]
@@ -220,6 +223,7 @@ class AffineZonesWindow(QWidget):
         self._ransac_dialog = None
         self._ransac_preview = None  # (zone_idx, local_idx, inliers) while previewing
         self._plot_window = None
+        self._gauge_window = None
         self._fits_cache = None  # per-zone fits for the current state; invalidated in _refresh
 
         self.new_btn = QPushButton("New Zone")
@@ -227,12 +231,14 @@ class AffineZonesWindow(QWidget):
         self.clear_btn = QPushButton("Clear Zones")
         self.ransac_btn = QPushButton("RANSAC…")
         self.plot_btn = QPushButton("Plot Curves")
+        self.gauge_btn = QPushButton("Direction Gauge")
         self.export_btn = QPushButton("Export CSV…")
         self.new_btn.clicked.connect(self._start_zone)
         self.finish_btn.clicked.connect(self._finish_zone)
         self.clear_btn.clicked.connect(self._clear_zones)
         self.ransac_btn.clicked.connect(self._open_ransac)
         self.plot_btn.clicked.connect(self._open_plot)
+        self.gauge_btn.clicked.connect(self._open_gauge)
         self.export_btn.clicked.connect(self._export)
 
         self.table = QTableWidget(0, 7)
@@ -247,7 +253,7 @@ class AffineZonesWindow(QWidget):
 
         top = QHBoxLayout()
         for b in (self.new_btn, self.finish_btn, self.clear_btn,
-                  self.ransac_btn, self.plot_btn, self.export_btn):
+                  self.ransac_btn, self.plot_btn, self.gauge_btn, self.export_btn):
             top.addWidget(b)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
@@ -278,6 +284,9 @@ class AffineZonesWindow(QWidget):
         if self._plot_window is not None:
             self._plot_window.close()
             self._plot_window = None
+        if self._gauge_window is not None:
+            self._gauge_window.close()
+            self._gauge_window = None
         self._ransac_preview = None
         self.ctx.remove_overlay(self._paint)
         super().closeEvent(event)
@@ -315,6 +324,7 @@ class AffineZonesWindow(QWidget):
         self.clear_btn.setEnabled(has)
         self.export_btn.setEnabled(has and self.ctx.has_result)
         self.plot_btn.setEnabled(has and self.ctx.has_result)
+        self.gauge_btn.setEnabled(has and self.ctx.has_result)
         self.ransac_btn.setEnabled(
             not drawing and self.ctx.has_result and self.table.currentRow() >= 0
         )
@@ -379,6 +389,8 @@ class AffineZonesWindow(QWidget):
                 f"{len(self.zones)} zone(s). Stretches map reference → current frame."
             )
         self._update_buttons()
+        if self._gauge_window is not None and self._gauge_window.isVisible():
+            self._gauge_window.refresh()  # propagate zone add/clear/recolor + RANSAC edits
         self.ctx.request_redraw()
 
     def _set_cell(self, row, col, text):
@@ -456,6 +468,20 @@ class AffineZonesWindow(QWidget):
 
     def on_plot_closed(self):
         self._plot_window = None
+
+    # ---- direction gauge ------------------------------------------------
+    def _open_gauge(self):
+        if not (self.zones and self.ctx.has_result):
+            return
+        if self._gauge_window is None:
+            from .gauge import ZoneDirectionGaugeWindow
+            self._gauge_window = ZoneDirectionGaugeWindow(self)
+        self._gauge_window.show()
+        self._gauge_window.raise_()
+        self._gauge_window.refresh()
+
+    def on_gauge_closed(self):
+        self._gauge_window = None
 
     # ---- export ---------------------------------------------------------
     def _export(self):

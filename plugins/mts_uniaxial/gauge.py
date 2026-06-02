@@ -3,7 +3,8 @@
 A standalone window that shows the tracked frames with an **independent** local slider (unrelated
 to the app's global current frame) and overlays the two principal-direction axes — the eigenvectors
 of ``B = F Fᵀ`` in the current (deformed) configuration — anchored at the active-points centroid, so
-the user can read off which way the principal strains point at any frame.
+the user can read off which way the principal strains point at any frame. Each axis length is scaled
+by its principal stretch (``λ₁``/``λ₂``), so the arrows grow in tension and shrink in compression.
 
 It deliberately does **not** use ``ctx.add_overlay`` (that overlay tracks the global current frame);
 instead it renders the frame itself into a small widget with a plain fit-to-widget scale and paints
@@ -37,11 +38,13 @@ class _GaugeCanvas(QWidget):
         self._img = None        # QImage of the current frame
         self._centroid = None   # (x, y) in image coords
         self._v1 = self._v2 = None
+        self._lam1 = self._lam2 = 1.0  # principal stretches; scale the arrow lengths
 
-    def set_frame(self, img, centroid, v1, v2):
+    def set_frame(self, img, centroid, v1, v2, lam1=1.0, lam2=1.0):
         self._img = img
         self._centroid = centroid
         self._v1, self._v2 = v1, v2
+        self._lam1, self._lam2 = lam1, lam2
         self.update()
 
     def paintEvent(self, event):
@@ -60,9 +63,11 @@ class _GaugeCanvas(QWidget):
             return
         painter.setRenderHint(QPainter.Antialiasing, True)
         c = QPointF(ox + self._centroid[0] * scale, oy + self._centroid[1] * scale)
-        length = 0.20 * min(dw, dh)
-        self._draw_axis(painter, c, self._v1, length, QColor(_V1_COLOR))
-        self._draw_axis(painter, c, self._v2, length, QColor(_V2_COLOR))
+        # Base length = the undeformed (λ = 1) axis; scale each axis by its principal stretch so the
+        # arrows grow in tension (λ > 1) and shrink in compression (λ < 1) live with the frame.
+        base = 0.20 * min(dw, dh)
+        self._draw_axis(painter, c, self._v1, base * self._lam1, QColor(_V1_COLOR))
+        self._draw_axis(painter, c, self._v2, base * self._lam2, QColor(_V2_COLOR))
         painter.setPen(QPen(QColor("#ffffff"), 1))
         painter.setBrush(QBrush(QColor("#ffffff")))
         painter.drawEllipse(c, 3.0, 3.0)
@@ -153,8 +158,10 @@ class DirectionGaugeWindow(QWidget):
         v1, v2 = series.v1[cut], series.v2[cut]
         if not (np.all(np.isfinite(v1)) and np.all(np.isfinite(v2))):
             v1 = v2 = None
-        self.canvas.set_frame(qimg, centroid, v1, v2)
         l1, l2 = series.lambda_1[cut], series.lambda_2[cut]
+        sl1 = l1 if np.isfinite(l1) else 1.0
+        sl2 = l2 if np.isfinite(l2) else 1.0
+        self.canvas.set_frame(qimg, centroid, v1, v2, sl1, sl2)
         self.info.setText(f"frame {g} (cut {cut}/{self.ctx.frame_count - 1}) — "
                           f"λ₁ = {l1:.4f}, λ₂ = {l2:.4f}")
 

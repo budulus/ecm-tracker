@@ -468,6 +468,9 @@ class TrackerPlugin:
     NAME: str = "Unnamed Plugin"
     #: One-line description (used as the menu item's tooltip).
     DESCRIPTION: str = ""
+    #: Sort key for the Plugins menu / side-pane (ascending; ties broken by NAME). Lower floats
+    #: to the top. Leave at the default to be ordered after pinned plugins, alphabetically.
+    ORDER: int = 100
 
     def __init__(self, ctx: PluginContext):
         self.ctx = ctx

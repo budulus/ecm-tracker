@@ -17,9 +17,8 @@ Drop a folder into `plugins/` and restart the app (or **Plugins → Reload Plugi
 scans `plugins/*/`, imports each as a Python package, and lists the ones that expose a plugin.
 Already part of this repo as worked examples:
 
-- `plugins/custom_exporter/` — export coords to CSV / MATLAB `.mat` / NumPy `.npz` (data + window + settings)
-- `plugins/displacement_overlay/` — displacement vectors + interpolated strain field on the canvas (overlay + signals)
 - `plugins/affine_zones/` — draw zones, fit a RANSAC affine per zone (mouse capture + overlay + compute + `apply_keep_mask`)
+- `plugins/mts_uniaxial/` — sync MTS force/displacement sensor data with the image sequence (data access + image loading + frame-range control + export)
 
 Copy the one closest to what you want and edit it.
 

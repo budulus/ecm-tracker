@@ -82,12 +82,18 @@ class PluginManager:
             sys.path.insert(0, str(PROJECT_ROOT))
         if not PLUGINS_DIR.is_dir():
             return []
+        records: List[PluginRecord] = []
         for entry in sorted(PLUGINS_DIR.iterdir()):
             if not entry.is_dir() or entry.name.startswith((".", "_")):
                 continue
             if not (entry / "__init__.py").exists():
                 continue
-            self._records[entry.name] = self._load_record(entry.name)
+            records.append(self._load_record(entry.name))
+        # Order by the plugin's ORDER (ascending), ties broken by display name. Records that
+        # failed to load (cls is None) fall back to the default ORDER and sort by name.
+        records.sort(key=lambda r: (getattr(r.cls, "ORDER", TrackerPlugin.ORDER), r.name.lower()))
+        for rec in records:
+            self._records[rec.plugin_id] = rec
         return list(self._records.values())
 
     def _load_record(self, plugin_id: str) -> PluginRecord:

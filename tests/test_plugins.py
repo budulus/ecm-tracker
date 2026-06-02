@@ -19,7 +19,7 @@ from app.plugins import CanvasInteraction, PluginContext
 from app.plugins.manager import PluginManager
 from tests.synthetic import make_sequence
 
-EXPECTED_PLUGINS = {"custom_exporter", "displacement_overlay", "affine_zones", "mts_uniaxial"}
+EXPECTED_PLUGINS = {"affine_zones", "mts_uniaxial"}
 
 
 _APP = None
@@ -63,6 +63,14 @@ def test_discovery_finds_examples():
         assert pid in found, f"{pid} not discovered"
         assert found[pid].error is None, f"{pid} failed to load:\n{found[pid].error}"
         assert found[pid].cls is not None and found[pid].name
+
+
+def test_discovery_orders_by_plugin_order():
+    # ORDER (ascending, ties broken by NAME) controls the menu/pane order: mts_uniaxial (10)
+    # is pinned above affine_zones (20) despite sorting later alphabetically by folder name.
+    mgr = PluginManager(None)
+    order = [r.plugin_id for r in mgr.discover()]
+    assert order.index("mts_uniaxial") < order.index("affine_zones")
 
 
 def test_window_builds_plugin_menu():

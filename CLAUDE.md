@@ -140,9 +140,9 @@ two locations, deliberately separate:
   Qt-free rule for `app/core/` is untouched.
 - **`plugins/` (repo root) — installed plugins**, one package per folder, imported as
   `plugins.<name>` (root is already on `sys.path`). Plain Python, safe to Dropbox-sync.
-  `plugins/README.md` is the author's guide; the three bundled examples (`custom_exporter`,
-  `displacement_overlay`, `affine_zones`) are the copy-paste scaffolds and cover all three
-  capabilities (data access, canvas overlay, mouse capture). `mts_uniaxial` is a fourth, **foundational**
+  `plugins/README.md` is the author's guide; `affine_zones` is the copy-paste example scaffold
+  (canvas overlay + mouse capture + per-frame compute + `apply_keep_mask`). `mts_uniaxial` is a
+  second, **foundational**
   plugin (not a toy example): it loads an experiment (images in acquisition-log order + the MTS
   `.dat` sensor stream), interpolates sensor force/displacement onto the image timeline, crops the
   experiment window, detects + zeroes a reference frame, sets the core tracked range, and exports

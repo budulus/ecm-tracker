@@ -18,6 +18,7 @@ from .zones import AffineZonesWindow
 class AffineZonesPlugin(TrackerPlugin):
     NAME = "Affine Zone Tool"
     DESCRIPTION = "Draw zones and fit a RANSAC affine deformation per zone."
+    ORDER = 20  # pinned second, after MTS Uniaxial
 
     def __init__(self, ctx):
         super().__init__(ctx)

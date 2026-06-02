@@ -879,9 +879,9 @@ ctx.status(f"{ctx.n_active} of {ctx.point_count} points kept across {ctx.frame_c
         <p><span class="co-title">Keep painters cheap.</span> They run on the UI thread on every paint. Cache anything expensive (triangulations, color maps) and recompute only when the relevant signal fires — never inside the painter.</p>
       </div>
 
-      <p>The lifecycle from the <code>displacement_overlay</code> example — register on construction, redraw reactively, remove on close:</p>
+      <p>A typical overlay lifecycle — register on construction, redraw reactively, remove on close:</p>
       <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">plugins/displacement_overlay/overlay.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
+        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">overlay lifecycle (pattern)</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
 <pre><code class="py">        ctx.signals.frame_changed.connect(self._redraw)
         ctx.signals.result_changed.connect(self._invalidate)
         ctx.signals.mask_changed.connect(self._invalidate)
@@ -1029,31 +1029,7 @@ ctx.signals.sequence_changed.connect(self._reload)
     <!-- EXAMPLES -->
     <section id="examples">
       <h2><svg class="ic"><use href="#i-code"/></svg>Worked examples</h2>
-      <p class="sec-sub">Three bundled plugins, one per capability. Copy the closest and edit.</p>
-
-      <div class="ex">
-        <div class="ex-head">
-          <div class="ci"><svg class="ic"><use href="#i-download"/></svg></div>
-          <div class="et"><h4>Custom Exporter</h4><span class="path">plugins/custom_exporter/</span></div>
-          <span class="pill">Read data · export</span>
-        </div>
-        <div class="ex-body">
-          <p>The simplest shape. A window with format options that exports <code>ctx.coords()</code> to CSV, MATLAB <code>.mat</code>, or NumPy <code>.npz</code>, and remembers your choices via settings. SciPy's <code>savemat</code> is imported lazily, only when you export <code>.mat</code>.</p>
-          <p><strong>Teaches:</strong> the minimal <code>launch()</code> + <code>PLUGIN</code> pattern, reading coords/ids/metadata, and settings round-tripping.</p>
-        </div>
-      </div>
-
-      <div class="ex">
-        <div class="ex-head">
-          <div class="ci"><svg class="ic"><use href="#i-eye"/></svg></div>
-          <div class="et"><h4>Displacement / Strain Overlay</h4><span class="path">plugins/displacement_overlay/</span></div>
-          <span class="pill">Canvas overlay</span>
-        </div>
-        <div class="ex-body">
-          <p>Draws displacement vectors and an interpolated strain field over the frame. Triangulates the reference points with SciPy's <code>Delaunay</code>, colors each triangle by strain, and caches the result per frame — recomputing only when <code>result_changed</code> / <code>mask_changed</code> fires.</p>
-          <p><strong>Teaches:</strong> the overlay lifecycle, screen-space painting with <code>image_to_screen</code>, signal-driven redraws, and the reused-window pattern.</p>
-        </div>
-      </div>
+      <p class="sec-sub">Two bundled plugins. Copy the closest and edit.</p>
 
       <div class="ex">
         <div class="ex-head">
@@ -1064,6 +1040,18 @@ ctx.signals.sequence_changed.connect(self._reload)
         <div class="ex-body">
           <p>The all-features example. Draw polygon zones by clicking the canvas, fit a RANSAC affine per zone, plot principal stretches over frames (embedded matplotlib), and drop outliers with <code>apply_keep_mask</code>. It also drives the timeline through <code>set_current_frame</code>.</p>
           <p><strong>Teaches:</strong> <code>CanvasInteraction</code> mouse capture, combining overlay + interaction, the undoable point filter, and frame navigation.</p>
+        </div>
+      </div>
+
+      <div class="ex">
+        <div class="ex-head">
+          <div class="ci"><svg class="ic"><use href="#i-folder"/></svg></div>
+          <div class="et"><h4>MTS Uniaxial</h4><span class="path">plugins/mts_uniaxial/</span></div>
+          <span class="pill">Load · sync · range · export</span>
+        </div>
+        <div class="ex-body">
+          <p>The foundational, full-application example. Loads an experiment (images in acquisition-log order plus an MTS <code>.dat</code> sensor stream), interpolates force/displacement onto the image timeline, crops the window, detects and zeroes a reference frame, and sets the core tracked range — then exports per-frame coords aligned with the zeroed sensor data.</p>
+          <p><strong>Teaches:</strong> driving image loading with <code>ctx.load_sequence</code>, frame-range control (<code>set_reference_frame</code> / <code>set_last_frame</code>), and a multi-step plugin that persists its own project folder.</p>
         </div>
       </div>
 

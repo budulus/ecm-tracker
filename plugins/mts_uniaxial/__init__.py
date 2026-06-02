@@ -15,6 +15,7 @@ from app.plugins import TrackerPlugin
 class MtsUniaxialPlugin(TrackerPlugin):
     NAME = "MTS Uniaxial"
     DESCRIPTION = "Sync MTS force/displacement with the image sequence and set the tracked range."
+    ORDER = 10  # pinned first in the Plugins menu / side-pane
 
     def __init__(self, ctx):
         super().__init__(ctx)

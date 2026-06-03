@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
-from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
-from PyQt5.QtWidgets import QWidget
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
+from PySide6.QtWidgets import QWidget
 
 from app.models.project_state import ProjectState
 
@@ -12,7 +12,7 @@ def bgr_to_qimage(bgr: np.ndarray) -> QImage:
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     rgb = np.ascontiguousarray(rgb)
     h, w = rgb.shape[:2]
-    image = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+    image = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
     return image.copy()  # detach from the numpy buffer
 
 
@@ -24,7 +24,7 @@ class CanvasView(QWidget):
     tracks widget resizing).
     """
 
-    imageClicked = pyqtSignal(QPointF)  # emitted with image-space coordinates on left click
+    imageClicked = Signal(QPointF)  # emitted with image-space coordinates on left click
 
     def __init__(self, state: ProjectState, parent=None):
         super().__init__(parent)
@@ -46,7 +46,7 @@ class CanvasView(QWidget):
         self._pan_tool = False  # hand-tool mode (toolbar toggle): left-drag pans
         self._space_pan = False  # Spacebar held: temporary left-drag pan
         self.setMinimumSize(320, 240)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
 
     def reset_view(self) -> None:
@@ -80,7 +80,7 @@ class CanvasView(QWidget):
         if self._panning:
             return  # mid-drag: keep the closed-hand cursor set by the press handler
         if self._pan_tool or self._space_pan:
-            self.setCursor(Qt.OpenHandCursor)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
             self.unsetCursor()
 
@@ -133,7 +133,7 @@ class CanvasView(QWidget):
         if method is None:
             return True  # handler is active but doesn't care about this event
         try:
-            method(self.screen_to_image(QPointF(event.pos())), event)
+            method(self.screen_to_image(event.position()), event)
         except Exception:
             pass
         return True
@@ -152,7 +152,7 @@ class CanvasView(QWidget):
         if method is None:
             return False
         try:
-            method(self.screen_to_image(QPointF(event.pos())), event)
+            method(self.screen_to_image(event.position()), event)
         except Exception:
             pass
         return True
@@ -200,24 +200,24 @@ class CanvasView(QWidget):
         if self._qimage.isNull():
             super().mousePressEvent(event)
             return
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             if self._pan_tool or self._space_pan:
                 self._panning = True
-                self._last_pan_pos = QPointF(event.pos())
-                self.setCursor(Qt.ClosedHandCursor)
+                self._last_pan_pos = event.position()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif not self._dispatch_interaction("on_press", event):
-                self.imageClicked.emit(self.screen_to_image(QPointF(event.pos())))
-        elif event.button() == Qt.RightButton and self._right_press_consumed(event):
+                self.imageClicked.emit(self.screen_to_image(event.position()))
+        elif event.button() == Qt.MouseButton.RightButton and self._right_press_consumed(event):
             pass  # consumed by the active interaction (e.g. N-Gon close)
-        elif event.button() in (Qt.MiddleButton, Qt.RightButton):
+        elif event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
             self._panning = True
-            self._last_pan_pos = QPointF(event.pos())
-            self.setCursor(Qt.ClosedHandCursor)
+            self._last_pan_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._panning:
-            pos = QPointF(event.pos())
+            pos = event.position()
             self._pan += pos - self._last_pan_pos
             self._last_pan_pos = pos
             self.update()
@@ -227,13 +227,13 @@ class CanvasView(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:
         if self._panning and event.button() in (
-            Qt.LeftButton,
-            Qt.MiddleButton,
-            Qt.RightButton,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.MiddleButton,
+            Qt.MouseButton.RightButton,
         ):
             self._panning = False
             self._apply_nav_cursor()
-        elif event.button() == Qt.LeftButton:
+        elif event.button() == Qt.MouseButton.LeftButton:
             self._dispatch_interaction("on_release", event)
         super().mouseReleaseEvent(event)
 
@@ -245,35 +245,35 @@ class CanvasView(QWidget):
         if self._qimage.isNull():
             return
         pixel = event.pixelDelta()
-        ctrl = bool(event.modifiers() & Qt.ControlModifier)  # Cmd on macOS
+        ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)  # Cmd on macOS
         # Zoom for a mouse wheel (no pixelDelta) or when Cmd/Ctrl is held; a bare two-finger
         # trackpad scroll (pixelDelta present, no modifier) pans like a native image viewer.
         if pixel.isNull() or ctrl:
             delta = event.angleDelta().y() or pixel.y()
             if delta == 0:
                 return
-            self._zoom_at(1.25 if delta > 0 else 0.8, QPointF(event.pos()))
+            self._zoom_at(1.25 if delta > 0 else 0.8, event.position())
         else:
             self._pan += QPointF(pixel)
             self.update()
 
     def event(self, e):
         # macOS sends pinch as a native gesture, not a wheel event.
-        if e.type() == QEvent.NativeGesture and e.gestureType() == Qt.ZoomNativeGesture:
+        if e.type() == QEvent.Type.NativeGesture and e.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
             if not self._qimage.isNull():
-                self._zoom_at(1.0 + e.value(), QPointF(e.pos()))
+                self._zoom_at(1.0 + e.value(), e.position())
             return True
         return super().event(e)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pan = True
             self._apply_nav_cursor()
             return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
-        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pan = False
             self._apply_nav_cursor()
             return
@@ -286,7 +286,7 @@ class CanvasView(QWidget):
         if self._qimage.isNull():
             return
         self._transform = self._build_transform()
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.setTransform(self._transform)
         painter.drawImage(0, 0, self._qimage)
 
@@ -323,7 +323,7 @@ class CanvasView(QWidget):
             painter.setBrush(QBrush(QColor(255, 215, 0, 40)))
             painter.drawPolygon(QPolygonF(screen_pts))
         else:
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             if len(screen_pts) >= 2:
                 painter.drawPolyline(QPolygonF(screen_pts))
 
@@ -411,7 +411,7 @@ class CanvasView(QWidget):
                 tl = self.image_to_screen(x - half, y - half)
                 br = self.image_to_screen(x + half, y + half)
                 painter.setPen(box_pen)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(QRectF(tl, br))
             if prev is not None:
                 painter.setPen(trail_pen)

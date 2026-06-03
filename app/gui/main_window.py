@@ -1,10 +1,9 @@
 import os
 
 import numpy as np
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QDesktopServices, QKeySequence
-from PyQt5.QtWidgets import (
-    QAction,
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QGroupBox,
@@ -14,7 +13,6 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressDialog,
-    QShortcut,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -23,14 +21,14 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.core import settings
+from app.core import settings, tracker_io
 from app.gui.icon_loader import ACCENT, load_icon
 from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
 from app.core.export import export, export_csv
-from app.core.feature_detection import regular_grid, shi_tomasi
+from app.core.feature_detection import DEFAULT_GRID, DEFAULT_SHI_TOMASI, regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover
 from app.core.roi import ROI
-from app.core.tracking import track
+from app.core.tracking import DEFAULT_LK, track
 from app.gui.canvas_view import CanvasView
 from app.gui.point_tools import AddPointsTool, DeletePointsTool
 from app.gui.point_manager import PointManagerDialog, PointSelectInteraction
@@ -38,6 +36,7 @@ from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
 from app.models.project_state import ProjectState
+from app.models.tracker_result import TrackerResult
 from app.plugins.api import PluginSignals
 from app.plugins.manager import PluginManager
 
@@ -49,12 +48,12 @@ class LabeledSlider(QWidget):
     do not emit, which avoids reentrant update loops between interdependent sliders.
     """
 
-    valueChanged = pyqtSignal(int)
+    valueChanged = Signal(int)
 
     def __init__(self, label: str, parent=None):
         super().__init__(parent)
         self._label = QLabel(label)
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.spin = QSpinBox()
 
         row = QHBoxLayout()
@@ -148,7 +147,7 @@ class MainWindow(QMainWindow):
         pane_layout.addStretch(1)  # cards hug the top; future cards stack downward
 
         # ---- splitter as central widget: [pane | canvas] ------------------
-        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.side_pane)
         self.splitter.addWidget(self.canvas)
         self.splitter.setStretchFactor(0, 0)   # pane keeps its size on window resize
@@ -166,19 +165,19 @@ class MainWindow(QMainWindow):
 
         # Esc cancels an in-progress ROI definition (the menu-only Define button has no
         # toggle-off affordance).
-        self._roi_escape = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._roi_escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._roi_escape.activated.connect(self._cancel_roi_definition)
 
         # ←/→ step the Current frame, scoped to the canvas (WidgetWithChildrenShortcut) so
         # they don't hijack arrow keys from the sliders/spin boxes or from plugin windows
         # (a window-wide shortcut on these navigation keys conflicts widely and is unstable).
-        self._prev_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self.canvas)
-        self._prev_frame_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._prev_frame_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self.canvas)
+        self._prev_frame_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._prev_frame_shortcut.activated.connect(
             lambda: self._go_to_frame(self.state.current_index - 1)
         )
-        self._next_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Right), self.canvas)
-        self._next_frame_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._next_frame_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self.canvas)
+        self._next_frame_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._next_frame_shortcut.activated.connect(
             lambda: self._go_to_frame(self.state.current_index + 1)
         )
@@ -200,6 +199,13 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self._open_directory)
         open_files = file_menu.addAction("Open &Files...")
         open_files.triggered.connect(self._open_files)
+        file_menu.addSeparator()
+        self.save_trackers_action = file_menu.addAction("Save &Trackers...")
+        self.save_trackers_action.setShortcut("Ctrl+S")
+        self.save_trackers_action.triggered.connect(self._save_trackers)
+        self.load_trackers_action = file_menu.addAction("&Load Trackers...")
+        self.load_trackers_action.setShortcut("Ctrl+L")
+        self.load_trackers_action.triggered.connect(self._load_trackers)
         file_menu.addSeparator()
         self.export_action = file_menu.addAction("&Export...")
         self.export_action.setShortcut("Ctrl+E")
@@ -430,20 +436,20 @@ class MainWindow(QMainWindow):
         for action in actions:
             button = QToolButton()
             button.setDefaultAction(action)
-            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             button.setAutoRaise(True)
             if action is primary:
                 button.setObjectName("primaryAction")
             if menus and action in menus:
                 button.setMenu(menus[action])
-                button.setPopupMode(QToolButton.InstantPopup)
+                button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
                 button.setObjectName("menuButton")
             row.addWidget(button)
         outer.addLayout(row)
 
         caption = QLabel(title)
         caption.setObjectName("toolGroupCaption")
-        caption.setAlignment(Qt.AlignHCenter)
+        caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(caption)
         return box
 
@@ -630,7 +636,7 @@ class MainWindow(QMainWindow):
                 finally:
                     self._activating_point_tool = False
             self.canvas.set_interaction(tool_cls(self))
-            self.canvas.setCursor(Qt.CrossCursor)
+            self.canvas.setCursor(Qt.CursorShape.CrossCursor)
         else:
             # Only clear if THIS family owns the current interaction (guards a foreign handler, e.g.
             # an ROI tool or plugin, that may have replaced ours).
@@ -724,17 +730,17 @@ class MainWindow(QMainWindow):
     # ---- feature detection ---------------------------------------------
     def _open_corner_dialog(self) -> None:
         dialog = CornerDetectionDialog(self.state.shi_tomasi_params, self)
-        if dialog.exec_():
+        if dialog.exec():
             self.state.shi_tomasi_params = dialog.values()
 
     def _open_grid_dialog(self) -> None:
         dialog = GridDialog(self.state.grid_params, self)
-        if dialog.exec_():
+        if dialog.exec():
             self.state.grid_params = dialog.values()
 
     def _open_tracker_dialog(self) -> None:
         dialog = TrackerDialog(self.state.lk_params, self)
-        if dialog.exec_():
+        if dialog.exec():
             self.state.lk_params = dialog.values()
 
     def _open_display_dialog(self) -> None:
@@ -745,7 +751,7 @@ class MainWindow(QMainWindow):
             self.canvas.update()
 
         dialog = DisplayDialog(snapshot, _apply, self)
-        if dialog.exec_():
+        if dialog.exec():
             self.state.display_params = dialog.values()
         else:
             self.state.display_params = snapshot
@@ -761,8 +767,12 @@ class MainWindow(QMainWindow):
             self,
             "About ECM Tracker",
             "<h3>ECM Tracker</h3>"
+            "<p>Version 0.1</p>"
             "<p>Image-feature tracking for frame sequences.</p>"
-            "<p>&copy; 2026 Senecell AG</p>",
+            "<p>&copy; 2026 Senecell AG</p>"
+            "<p>Licensed under the "
+            "<a href=\"https://polyformproject.org/licenses/noncommercial/1.0.0/\">"
+            "PolyForm Noncommercial License 1.0.0</a>.</p>",
         )
 
     def _detect_shi_tomasi(self) -> None:
@@ -801,7 +811,7 @@ class MainWindow(QMainWindow):
         n = self.state.n_cut
         total = max(1, 2 * (n - 1))
         dialog = QProgressDialog("Tracking...", "Cancel", 0, total, self)
-        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
         dialog.setValue(0)
 
@@ -853,10 +863,10 @@ class MainWindow(QMainWindow):
             self,
             "Discard tracking?",
             "This will discard the existing tracking result. Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if resp == QMessageBox.Yes:
+        if resp == QMessageBox.StandardButton.Yes:
             self._clear_tracking()
             return True
         return False
@@ -1067,6 +1077,176 @@ class MainWindow(QMainWindow):
             6000,
         )
 
+    # ---- save / load trackers ------------------------------------------
+    def save_trackers_to(self, path) -> None:
+        """Write the current seeds + (optional) tracking result to ``path`` (a ``.npz``).
+
+        The dialog-free save path shared by ``File -> Save Trackers`` and the plugin API
+        (``PluginContext.save_trackers``). Raises ``ValueError`` if there are no reference
+        points; lets ``OSError`` from the write propagate."""
+        s = self.state
+        if s.features is None or len(s.features) == 0:
+            raise ValueError("No reference points to save.")
+        result = s.result
+        result_arrays = (
+            {
+                "coords_fw": result.coords_fw,
+                "status_fw": result.status_fw,
+                "err_fw": result.err_fw,
+                "coords_bw": result.coords_bw,
+                "status_bw": result.status_bw,
+                "err_bw": result.err_bw,
+                "fb_mean_error": result.fb_mean_error,
+                "fb_max_error": result.fb_max_error,
+            }
+            if result is not None
+            else None
+        )
+        tracker_io.save_trackers(
+            path,
+            total_images=s.total_images,
+            reference_index=s.reference_index,
+            last_index=s.last_index,
+            current_index=s.current_index,
+            features=s.features,
+            roi_corners=(s.roi.corners if s.roi is not None and s.roi.is_complete else None),
+            active_mask=s.active_mask if result is not None else None,
+            result_arrays=result_arrays,
+            win_size=(result.win_size if result is not None else s.lk_params.get("win_size", 0)),
+            lk_params=s.lk_params,
+            shi_tomasi_params=s.shi_tomasi_params,
+            grid_params=s.grid_params,
+        )
+
+    def load_trackers_from(self, path):
+        """Load a tracker ``.npz`` and overlay it onto the open sequence; return the bundle.
+
+        The dialog-free load path shared by ``File -> Load Trackers`` and the plugin API
+        (``PluginContext.load_trackers``). Raises ``ValueError`` if no sequence is open, the
+        file can't be read, or its frame count doesn't match the open sequence."""
+        if not self.state.has_sequence:
+            raise ValueError("Open an image sequence before loading trackers.")
+        bundle = tracker_io.load_trackers(path)  # raises ValueError on a bad/foreign file
+        if bundle["total_images"] != self.state.total_images:
+            raise ValueError(
+                f"This tracker file is for a {bundle['total_images']}-frame sequence, but the "
+                f"open sequence has {self.state.total_images} frames."
+            )
+        self._apply_loaded_trackers(bundle)
+        return bundle
+
+    def _save_trackers(self) -> None:
+        """Save the reference seed points and (if tracked) the full result to one .npz."""
+        s = self.state
+        if not s.has_sequence or s.features is None or len(s.features) == 0:
+            QMessageBox.warning(self, "Nothing to save", "Seed some reference points first.")
+            return
+        default_path = os.path.join(s.source_dir or "", "trackers.npz")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Trackers", default_path, "Tracker file (*.npz)"
+        )
+        if not path:
+            return
+        try:
+            self.save_trackers_to(path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return
+        where = "with tracking" if s.result is not None else "reference points only"
+        self.statusBar().showMessage(
+            f"Saved trackers ({where}) to {os.path.basename(path)}", 6000
+        )
+
+    def _load_trackers(self) -> None:
+        """Overlay a saved tracker file onto the open sequence (frame counts must match)."""
+        if not self.state.has_sequence:
+            QMessageBox.warning(
+                self, "No sequence", "Open the image folder first, then load trackers onto it."
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Trackers", self.state.source_dir or "", "Tracker file (*.npz)"
+        )
+        if not path:
+            return
+        if self.state.features is not None or self.state.result is not None:
+            resp = QMessageBox.question(
+                self,
+                "Replace current trackers?",
+                "This will replace the current points and tracking with the loaded file. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            self.load_trackers_from(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Load failed", str(exc))
+
+    def _apply_loaded_trackers(self, bundle) -> None:
+        """Install a loaded tracker bundle onto the open sequence (overlay model).
+
+        Mirrors the teardown in ``_run_tracking``/``_clear_tracking``, then restores state and
+        drives the same refresh path as a fresh load. Safe because ``LabeledSlider.setValue``
+        (used by ``_configure_sliders``) blocks signals, so restoring a non-zero reference index
+        does not re-enter ``_on_reference_changed`` and wipe the ROI we just restored.
+        """
+        s = self.state
+        # Tear down UI bound to any previous result (cached metrics / stale selections).
+        if self._cleanup_dialog is not None:
+            self._cleanup_dialog.close()
+        if self._point_manager is not None:
+            self._point_manager.close()
+        s.undo_stack = []
+        self._preview_keep = None
+        self.canvas.set_preview_mask(None)
+
+        # Indices: clamp to the open sequence so the slider invariant holds even for a bad file.
+        s.reference_index = max(0, min(bundle["reference_index"], s.total_images - 1))
+        s.last_index = max(s.reference_index, min(bundle["last_index"], s.total_images - 1))
+        s.set_current(bundle["current_index"])
+
+        # ROI (toggle off, mirroring _finish_roi_definition).
+        s.roi = ROI(bundle["roi_corners"]) if bundle["roi_corners"] is not None else None
+        self.define_roi_action.setChecked(False)
+
+        # Seed points + (optional) tracking result + active mask.
+        s.features = bundle["features"]
+        if bundle["has_result"]:
+            s.result = TrackerResult(
+                reference_index=s.reference_index,
+                last_index=s.last_index,
+                win_size=bundle["win_size"],
+                **bundle["result_arrays"],
+            )
+            s.active_mask = bundle["active_mask"]
+        else:
+            s.result = None
+            s.active_mask = None
+
+        # Parameters that produced this session (merged over built-ins, like ProjectState).
+        s.lk_params = {**DEFAULT_LK, **bundle["lk_params"]}
+        s.shi_tomasi_params = {**DEFAULT_SHI_TOMASI, **bundle["shi_tomasi_params"]}
+        s.grid_params = {**DEFAULT_GRID, **bundle["grid_params"]}
+
+        self._configure_sliders()  # safe: LabeledSlider.setValue blocks signals
+        self.canvas.refresh()
+        self._update_status()
+        self._update_tool_states()
+
+        # Refresh reactive consumers (plugins, point manager) atomically after the full swap.
+        self.signals.roi_changed.emit()
+        self.signals.result_changed.emit()
+        self.signals.mask_changed.emit()
+        self.signals.frame_changed.emit(s.current_index)
+
+        if bundle["has_result"]:
+            msg = f"Loaded {s.result.n_points} points, tracked over {s.result.n_frames} frames."
+        else:
+            msg = f"Loaded {len(s.features)} reference points."
+        self.statusBar().showMessage(msg, 6000)
+
     # ---- tool enablement ------------------------------------------------
     def _update_tool_states(self) -> None:
         has = self.state.has_sequence
@@ -1095,6 +1275,9 @@ class MainWindow(QMainWindow):
         can_export = has_result and bool(self.state.active_mask.any())
         self.export_action.setEnabled(can_export)
         self.export_toolbar_action.setEnabled(can_export)
+        # Save needs seed points; Load overlays onto any open sequence.
+        self.save_trackers_action.setEnabled(has_features)
+        self.load_trackers_action.setEnabled(has)
 
         # The result is tied to a fixed reference..last range; lock those sliders until the
         # user explicitly discards the tracking (current stays free for browsing frames).

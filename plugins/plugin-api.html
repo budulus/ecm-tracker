@@ -580,8 +580,8 @@ pre code::-webkit-scrollbar{height:8px;}
 
       <div class="code" data-lang="python">
         <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">plugins/my_plugin/__init__.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel
+<pre><code class="py">from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel
 
 from app.plugins import TrackerPlugin
 
@@ -592,7 +592,7 @@ class MyPlugin(TrackerPlugin):
 
     def launch(self):                  # called when the user clicks the entry
         w = QLabel(f"{self.ctx.n_active} points tracked", parent=self.ctx.window)
-        w.setWindowFlags(Qt.Window)
+        w.setWindowFlags(Qt.WindowType.Window)
         w.setWindowTitle(self.NAME)
         w.show()
         return w                       # return the window so it stays alive
@@ -1058,6 +1058,7 @@ ctx.signals.sequence_changed.connect(self._reload)
       <div class="callout note">
         <svg class="ic"><use href="#i-folder"/></svg>
         <p><span class="co-title">Start here.</span> Read <code>plugins/README.md</code> and <code>app/plugins/api.py</code>, copy the example closest to what you want, then iterate with <strong>Plugins → Reload Plugins</strong>.</p>
+        <p><span class="co-title">Migrating?</span> ECM Tracker now uses <strong>PySide6</strong> (Qt6), not PyQt5. Plugins that <code>import PyQt5</code> fail against the PySide6-only app — switch imports to <code>PySide6</code> (the Qt API is identical) and fully qualify enums in Qt6 (e.g. <code>Qt.WindowType.Window</code>, not <code>Qt.Window</code>), then run <code>uv sync</code>.</p>
       </div>
     </section>
 
@@ -1067,7 +1068,7 @@ ctx.signals.sequence_changed.connect(self._reload)
       <p class="sec-sub">The handful of things that bite, distilled.</p>
       <ul>
         <li><strong>Global vs cut.</strong> Every <code>ctx</code> index is global; <code>coords()</code> is cut-indexed (<code>coords[0]</code> = reference). Convert with <code>cut_to_global</code> / <code>global_to_cut</code>, and remember <code>current_cut</code> can be <code>None</code>.</li>
-        <li><strong>Parent your windows</strong> to <code>ctx.window</code> and set the <code>Qt.Window</code> flag so they float independently and return them from <code>launch()</code> so they aren't garbage-collected.</li>
+        <li><strong>Parent your windows</strong> to <code>ctx.window</code> and set the <code>Qt.WindowType.Window</code> flag so they float independently and return them from <code>launch()</code> so they aren't garbage-collected.</li>
         <li><strong>Always undo your canvas hooks</strong> in <code>closeEvent</code> / <code>on_unload</code>: <code>remove_overlay(...)</code> and <code>end_canvas_interaction()</code>.</li>
         <li><strong>Treat returned arrays as read-only.</strong> Don't mutate <code>coords()</code>, <code>active_mask</code>, or <code>metrics</code> in place. The only legitimate change to the point set is <code>apply_keep_mask</code>.</li>
         <li><strong>Overlays must be fast.</strong> Cache heavy work; recompute on the matching signal, not inside the painter.</li>

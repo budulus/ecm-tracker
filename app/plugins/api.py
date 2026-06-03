@@ -30,7 +30,7 @@ from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QObject, QPointF, pyqtSignal
+from PySide6.QtCore import QObject, QPointF, Signal
 
 from app.core import settings
 from app.core.cleanup import Metrics, compute_metrics
@@ -53,11 +53,11 @@ class PluginSignals(QObject):
     * ``roi_changed`` — the ROI was completed or cleared.
     """
 
-    sequence_changed = pyqtSignal()
-    frame_changed = pyqtSignal(int)
-    result_changed = pyqtSignal()
-    mask_changed = pyqtSignal()
-    roi_changed = pyqtSignal()
+    sequence_changed = Signal()
+    frame_changed = Signal(int)
+    result_changed = Signal()
+    mask_changed = Signal()
+    roi_changed = Signal()
 
 
 class CanvasInteraction:
@@ -215,6 +215,27 @@ class PluginContext:
         plugins; most plugins never need this and should work with the already-loaded sequence.
         """
         self._window.load_sequence_from_paths(list(paths), source_dir)
+
+    def save_trackers(self, path: str) -> None:
+        """Save the current reference points and (if tracked) the full result to ``path``.
+
+        Writes a single self-contained ``.npz`` (see :mod:`app.core.tracker_io`) holding the
+        seed points, the tracking arrays + active mask, the ROI, the frame range and the
+        detection/LK parameters — the same format as ``File -> Save Trackers``. Use it to
+        persist the tracking state alongside your plugin's own project files, then restore it
+        with :meth:`load_trackers`. Raises ``ValueError`` if there are no reference points and
+        ``OSError`` if the write fails."""
+        self._window.save_trackers_to(path)
+
+    def load_trackers(self, path: str) -> None:
+        """Load a ``.npz`` written by :meth:`save_trackers` and overlay it onto the open sequence.
+
+        Restores the seeds, tracking result, active mask, ROI and frame range, emitting
+        ``signals.result_changed`` / ``mask_changed`` / ``roi_changed`` so the UI and plugins
+        refresh. The open sequence must have the same frame count the trackers were saved
+        against; otherwise (or on a bad/foreign file) this raises ``ValueError``. This is the
+        only way a plugin can install a full tracking result back into the core."""
+        self._window.load_trackers_from(path)
 
     def image_size(self) -> Optional[Tuple[int, int]]:
         """``(height, width)`` of the frames, or ``None`` if no sequence is loaded."""
@@ -446,7 +467,7 @@ class TrackerPlugin:
 
     Minimal example::
 
-        from PyQt5.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel
         from app.plugins import TrackerPlugin
 
         class HelloPlugin(TrackerPlugin):
@@ -456,7 +477,7 @@ class TrackerPlugin:
             def launch(self):
                 n = self.ctx.n_active
                 w = QLabel(f"{n} points tracked", parent=self.ctx.window)
-                w.setWindowFlags(w.windowFlags() | 0x00000001)  # Qt.Window
+                w.setWindowFlags(w.windowFlags() | 0x00000001)  # Qt.WindowType.Window
                 w.setWindowTitle(self.NAME)
                 w.show()
                 return w

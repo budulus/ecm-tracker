@@ -15,9 +15,9 @@ selects the matching rows. ``_row_to_index`` is the single row→point-index tra
 selection readout, the red overlay, and delete, so the two systems can never disagree.
 """
 import numpy as np
-from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPen
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt, Signal
+from PySide6.QtGui import QColor, QPen
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
@@ -43,7 +43,7 @@ class PointSelectInteraction:
         self._dialog = dialog
 
     def on_press(self, image_pt, event) -> None:
-        modifiers = event.modifiers() if event is not None else Qt.NoModifier
+        modifiers = event.modifiers() if event is not None else Qt.KeyboardModifier.NoModifier
         self._dialog.handle_canvas_click(image_pt, modifiers)
 
     def on_cancel(self) -> None:
@@ -51,7 +51,7 @@ class PointSelectInteraction:
 
 
 class PointManagerDialog(QDialog):
-    deleteRequested = pyqtSignal()
+    deleteRequested = Signal()
 
     def __init__(self, window, parent=None):
         super().__init__(parent if parent is not None else window)
@@ -64,9 +64,9 @@ class PointManagerDialog(QDialog):
         self.setModal(False)
 
         self.table = QTableWidget(0, 1)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
@@ -75,7 +75,7 @@ class PointManagerDialog(QDialog):
         self.delete_btn.clicked.connect(self.deleteRequested)
         self.delete_btn.setEnabled(False)
 
-        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_box.rejected.connect(self.reject)
 
         buttons = QHBoxLayout()
@@ -135,7 +135,7 @@ class PointManagerDialog(QDialog):
     def _metric_item(value) -> QTableWidgetItem:
         text = f"{value:.2f}" if np.isfinite(value) else "∞"
         item = QTableWidgetItem(text)
-        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return item
 
     # ---- selection readout ------------------------------------------------
@@ -152,7 +152,7 @@ class PointManagerDialog(QDialog):
         last_col = self.table.columnCount() - 1
         for r in rows:
             sel.select(self.table.model().index(r, 0), self.table.model().index(r, last_col))
-        sm.select(sel, QItemSelectionModel.ClearAndSelect)
+        sm.select(sel, QItemSelectionModel.SelectionFlag.ClearAndSelect)
 
     def _on_selection_changed(self, *_args) -> None:
         # list -> canvas: just repaint the overlay (which reads the live selection). Never writes
@@ -179,8 +179,8 @@ class PointManagerDialog(QDialog):
             candidates,
         ) if coords is not None else -1
 
-        ctrl = bool(modifiers & Qt.ControlModifier)
-        shift = bool(modifiers & Qt.ShiftModifier)
+        ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
 
         self._syncing = True
         try:
@@ -217,8 +217,8 @@ class PointManagerDialog(QDialog):
         index = self.table.model().index(row, 0)
         if ctrl:
             row_range = QItemSelection(index, self.table.model().index(row, last_col))
-            sm.select(row_range, QItemSelectionModel.Toggle | QItemSelectionModel.Rows)
-            sm.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+            sm.select(row_range, QItemSelectionModel.SelectionFlag.Toggle | QItemSelectionModel.SelectionFlag.Rows)
+            sm.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
         elif shift:
             anchor = sm.currentIndex().row()
             if anchor < 0:
@@ -226,7 +226,7 @@ class PointManagerDialog(QDialog):
             self._select_rows(range(min(anchor, row), max(anchor, row) + 1))
         else:
             self._select_rows([row])
-            sm.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+            sm.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
 
     # ---- red overlay (registered for the dialog's lifetime by MainWindow) --
     def _paint_selected(self, painter, canvas) -> None:
@@ -249,7 +249,7 @@ class PointManagerDialog(QDialog):
 
         radius = state.display_params["marker_size"] + 1
         painter.setPen(QPen(SELECT_COLOR, 2))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         for p in sel:
             if 0 <= p < len(coords):
                 x, y = coords[p]

@@ -16,9 +16,9 @@ import glob
 import os
 
 import numpy as np
-from PyQt5.QtCore import QLocale, Qt
-from PyQt5.QtGui import QBrush, QColor, QDoubleValidator, QPen
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QLocale, Qt
+from PySide6.QtGui import QBrush, QColor, QDoubleValidator, QPen
+from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
@@ -97,7 +97,7 @@ class MtsUniaxialWindow(QWidget):
         self._outlier_mask = None
         self._outlier_overlay_on = False
 
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("MTS Uniaxial")
         self.resize(560, 820)
 
@@ -236,8 +236,8 @@ class MtsUniaxialWindow(QWidget):
         self.show_images_chk.toggled.connect(lambda *_: self._refresh_crop_plot())
         v.addWidget(self.show_images_chk)
 
-        self.crop_lo = QSlider(Qt.Horizontal)
-        self.crop_hi = QSlider(Qt.Horizontal)
+        self.crop_lo = QSlider(Qt.Orientation.Horizontal)
+        self.crop_hi = QSlider(Qt.Orientation.Horizontal)
         self.crop_lo.valueChanged.connect(self._on_crop_changed)
         self.crop_hi.valueChanged.connect(self._on_crop_changed)
         self.crop_lo_label = QLabel("—")
@@ -263,8 +263,8 @@ class MtsUniaxialWindow(QWidget):
         v.addWidget(self.ref_plot)
 
         # The two sliders bound a search sub-window inside the crop; reference finding runs on it.
-        self.ref_lo = QSlider(Qt.Horizontal)
-        self.ref_hi = QSlider(Qt.Horizontal)
+        self.ref_lo = QSlider(Qt.Orientation.Horizontal)
+        self.ref_hi = QSlider(Qt.Orientation.Horizontal)
         self.ref_lo.valueChanged.connect(self._on_ref_window_changed)
         self.ref_hi.valueChanged.connect(self._on_ref_window_changed)
         self.ref_lo_label = QLabel("—")
@@ -531,9 +531,9 @@ class MtsUniaxialWindow(QWidget):
                 self, "Resume project?",
                 "An MTS Uniaxial project already exists in this folder.\n\n"
                 "Resume it (restore channel, crop and reference), or start fresh (overwrite)?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes,
             )
-            if choice == QMessageBox.Yes:
+            if choice == QMessageBox.StandardButton.Yes:
                 resumed = project_io.load_project(root)
                 if resumed is not None:
                     self._adopt_state(resumed)
@@ -598,10 +598,31 @@ class MtsUniaxialWindow(QWidget):
             self.ctx.set_reference_frame(int(st.ref_image_global))
             self.ctx.set_last_frame(int(st.last_image_global))
             self.ctx.set_current_frame(int(st.ref_image_global))
+            if st.done(Step.TRACK):
+                self._restore_trackers(st)
         self.ctx.save_settings({"last_root": st.root})
         self._sync_widgets_from_state()
         self._update_gating()
         self.ctx.status("Resumed MTS Uniaxial project.")
+
+    def _restore_trackers(self, st: MtsProjectState) -> None:
+        """Reinstall the saved core tracking result (``trackers.npz``) on resume.
+
+        Guarded by ``self._loading`` so the ``result_changed``/``mask_changed`` the install emits
+        don't re-enter our handlers (which would wipe the export and re-save). A missing or
+        unreadable file degrades gracefully to the REFERENCE-only resume."""
+        path = os.path.join(project_io.project_dir(st.root), "trackers.npz")
+        self._loading = True
+        try:
+            self.ctx.load_trackers(path)
+        except (OSError, ValueError) as exc:
+            st.completed_through = int(Step.REFERENCE)
+            self.ctx.status(f"Could not restore trackers: {exc}")
+            return
+        finally:
+            self._loading = False
+        self._invalidate_kinematics()
+        self._refresh_outlier_preview()
 
     # ----------------------------------------------------------------- step handlers
     def _on_channel_changed(self, *_) -> None:
@@ -672,7 +693,7 @@ class MtsUniaxialWindow(QWidget):
             QMessageBox.warning(self, "No algorithm", "Select a reference-finding algorithm.")
             return
         # local index within the sub-window -> absolute sensor index -> nearest global image frame.
-        QApplication.setOverrideCursor(Qt.WaitCursor)  # some fits (spring-hinge) block for ~1-3 s
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # some fits (spring-hinge) block for ~1-3 s
         try:
             local = int(fn(disp, force, self.preforce_spin.value()) if algo == PREFORCE else fn(disp, force))
         finally:
@@ -736,19 +757,34 @@ class MtsUniaxialWindow(QWidget):
 
     # ----------------------------------------------------------------- result / export
     def _on_result_changed(self) -> None:
+        if self._loading:  # we're reinstalling a saved result during resume; don't re-handle it
+            return
         st = self.pstate
         if st.done(Step.REFERENCE):
+            pdir = project_io.project_dir(st.root)
             if self.ctx.has_result:
                 files = st.invalidate_from(Step.EXPORT)  # any new/changed result voids a stale export
-                project_io.wipe_files(project_io.project_dir(st.root), files)
-                st.completed_through = int(Step.TRACK)
+                project_io.wipe_files(pdir, files)
+                # Persist the reloadable tracking result (the TRACK artifact) plus the manifest, so
+                # resume reaches TRACK and reinstalls it. Only mark TRACK once the file is written.
+                try:
+                    self.ctx.save_trackers(os.path.join(pdir, "trackers.npz"))
+                    st.completed_through = int(Step.TRACK)
+                    project_io.save_manifest(st)
+                except OSError as exc:
+                    self.ctx.status(f"Could not save trackers: {exc}")
             else:
-                st.completed_through = min(st.completed_through, int(Step.REFERENCE))
+                # Result cleared: drop the saved trackers + the now-orphaned export.
+                files = st.invalidate_from(Step.TRACK)
+                project_io.wipe_files(pdir, files)
+                project_io.save_manifest(st)
         self._invalidate_kinematics()  # new/cleared result → recompute on next access
         self._refresh_outlier_preview()  # active set / result changed → re-judge the preview
         self._update_gating()
 
     def _on_mask_changed(self) -> None:
+        if self._loading:  # mask_changed also fires while reinstalling a saved result
+            return
         # The active set changed (our RANSAC, or the main window's Cleanup). Recompute kinematics.
         self._invalidate_kinematics()
         self._refresh_outlier_preview()  # re-judge the preview on the new active set
@@ -896,7 +932,7 @@ class MtsUniaxialWindow(QWidget):
     def _mm_validator() -> QDoubleValidator:
         """A positive-millimetre validator with C-locale '.' decimals (independent of system locale)."""
         validator = QDoubleValidator(1e-6, 1e6, 4)
-        validator.setLocale(QLocale(QLocale.C))
+        validator.setLocale(QLocale(QLocale.Language.C))
         return validator
 
     # ---- RANSAC -------------------------------------------------------
@@ -994,7 +1030,7 @@ class MtsUniaxialWindow(QWidget):
         if not matplotlib_available():
             QMessageBox.critical(
                 self, "matplotlib unavailable",
-                "matplotlib with a working Qt5 backend is required for plotting. "
+                "matplotlib with a working Qt backend is required for plotting. "
                 "Run `uv sync` and try again.")
             return False
         return True

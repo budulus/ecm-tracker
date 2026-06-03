@@ -6,15 +6,15 @@ dark normal state, the white accent (primary-action) state, and a faded disabled
 state. Results are memoized, and rendering is done at the device pixel ratio so
 icons stay crisp on HiDPI (Retina) displays.
 
-Qt-only — no third-party dependency. ``QtSvg`` ships with the PyQt5 wheel.
+Qt-only — no third-party dependency. ``QtSvg`` ships with the PySide6 wheel.
 """
 
 import os
 
-from PyQt5.QtCore import QRectF, Qt
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
-from PyQt5.QtSvg import QSvgRenderer
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QApplication
 
 _ICON_DIR = os.path.join(os.path.dirname(__file__), "icons")
 
@@ -36,13 +36,13 @@ def _tinted_pixmap(name: str, color: str, size: int, dpr: float) -> QPixmap:
     renderer = QSvgRenderer(os.path.join(_ICON_DIR, f"{name}.svg"))
     px = max(1, int(round(size * dpr)))
     pixmap = QPixmap(px, px)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     renderer.render(painter, QRectF(0, 0, px, px))
     # Replace the rendered (black) glyph with the requested color, preserving alpha.
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(pixmap.rect(), QColor(color))
     painter.end()
 
@@ -64,10 +64,10 @@ def load_icon(name: str, color: str = NORMAL, size: int = 20) -> QIcon:
         return cached
 
     icon = QIcon()
-    icon.addPixmap(_tinted_pixmap(name, color, size, dpr), QIcon.Normal, QIcon.On)
-    icon.addPixmap(_tinted_pixmap(name, color, size, dpr), QIcon.Normal, QIcon.Off)
-    icon.addPixmap(_tinted_pixmap(name, DISABLED, size, dpr), QIcon.Disabled, QIcon.On)
-    icon.addPixmap(_tinted_pixmap(name, DISABLED, size, dpr), QIcon.Disabled, QIcon.Off)
+    icon.addPixmap(_tinted_pixmap(name, color, size, dpr), QIcon.Mode.Normal, QIcon.State.On)
+    icon.addPixmap(_tinted_pixmap(name, color, size, dpr), QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(_tinted_pixmap(name, DISABLED, size, dpr), QIcon.Mode.Disabled, QIcon.State.On)
+    icon.addPixmap(_tinted_pixmap(name, DISABLED, size, dpr), QIcon.Mode.Disabled, QIcon.State.Off)
     _cache[key] = icon
     return icon
 
@@ -87,9 +87,9 @@ def load_app_icon() -> QIcon:
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
         pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
+        pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         renderer.render(painter, QRectF(0, 0, size, size))
         painter.end()
         icon.addPixmap(pixmap)

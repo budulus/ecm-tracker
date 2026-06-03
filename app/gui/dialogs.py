@@ -1,5 +1,5 @@
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -18,10 +18,10 @@ from app.core import settings
 def _add_buttons(dialog, form, section_getter, section_name):
     """Add OK / Cancel plus a 'Save as defaults' action that persists the dialog's values
     with a brief non-blocking confirmation on the button itself."""
-    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
-    save_btn = buttons.addButton("Save as defaults", QDialogButtonBox.ActionRole)
+    save_btn = buttons.addButton("Save as defaults", QDialogButtonBox.ButtonRole.ActionRole)
 
     def _save():
         settings.update_section(section_name, section_getter())
@@ -161,11 +161,11 @@ class DisplayDialog(QDialog):
         self.show_markers = QCheckBox()
         self.show_markers.setChecked(bool(params["show_markers"]))
 
-        self.marker_size = QSlider(Qt.Horizontal)
+        self.marker_size = QSlider(Qt.Orientation.Horizontal)
         self.marker_size.setRange(1, 15)
         self.marker_size.setValue(int(params["marker_size"]))
 
-        self.marker_opacity = QSlider(Qt.Horizontal)
+        self.marker_opacity = QSlider(Qt.Orientation.Horizontal)
         self.marker_opacity.setRange(0, 100)
         self.marker_opacity.setValue(int(params["marker_opacity"]))
 

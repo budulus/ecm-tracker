@@ -14,9 +14,9 @@ never recomputes the kinematics.
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import QPointF, QRectF, Qt
-from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
 _V1_COLOR = "#2563eb"  # major / tensile axis
 _V2_COLOR = "#f59e0b"  # minor / lateral axis
@@ -26,7 +26,7 @@ def _rgb_to_qimage(rgb: np.ndarray) -> QImage:
     """Convert an ``(H, W, 3)`` uint8 RGB array to an independent (copied) QImage."""
     rgb = np.ascontiguousarray(rgb)
     h, w = rgb.shape[:2]
-    return QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+    return QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
 
 
 class _GaugeCanvas(QWidget):
@@ -61,7 +61,7 @@ class _GaugeCanvas(QWidget):
         painter.drawImage(QRectF(ox, oy, dw, dh), self._img)
         if self._centroid is None or self._v1 is None or self._v2 is None:
             return
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = QPointF(ox + self._centroid[0] * scale, oy + self._centroid[1] * scale)
         # Base length = the undeformed (λ = 1) axis; scale each axis by its principal stretch so the
         # arrows grow in tension (λ > 1) and shrink in compression (λ < 1) live with the frame.
@@ -105,14 +105,14 @@ class DirectionGaugeWindow(QWidget):
         super().__init__(owner)
         self.owner = owner
         self.ctx = owner.ctx
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Direction gauge — principal strain axes")
         self.resize(560, 600)
 
         self.canvas = _GaugeCanvas()
         self.info = QLabel("—")
         self.info.setWordWrap(True)
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.valueChanged.connect(lambda *_: self._update_display())
 
         layout = QVBoxLayout(self)

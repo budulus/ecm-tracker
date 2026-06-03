@@ -9,6 +9,12 @@ never touch the core tracking code.
 `self.ctx`. Its full reference (every method, with docstrings) lives in
 [`app/plugins/api.py`](../app/plugins/api.py) — skim that file and you know the whole API.
 
+> **⚠ Breaking change — ECM Tracker now uses PySide6 (Qt6), not PyQt5.** Plugins import the Qt
+> binding directly, and the app bundles **only PySide6**, so any plugin that does
+> `from PyQt5...` will fail with `ModuleNotFoundError: No module named 'PyQt5'`. Update your
+> imports to `from PySide6...` (the Qt API is the same — only the import path changes), then run
+> `uv sync`. In Qt6, fully qualify enum names (e.g. `Qt.WindowType.Window`, not `Qt.Window`).
+
 ---
 
 ## Install / run
@@ -33,8 +39,8 @@ plugins/my_plugin/
 
 ```python
 # plugins/my_plugin/__init__.py
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel
 from app.plugins import TrackerPlugin
 
 class MyPlugin(TrackerPlugin):
@@ -43,7 +49,7 @@ class MyPlugin(TrackerPlugin):
 
     def launch(self):                  # called when the menu item is clicked
         w = QLabel(f"{self.ctx.n_active} points tracked", parent=self.ctx.window)
-        w.setWindowFlags(Qt.Window)
+        w.setWindowFlags(Qt.WindowType.Window)
         w.setWindowTitle(self.NAME)
         w.show()
         return w                       # return the window so it stays alive
@@ -143,7 +149,7 @@ recorded on the cleanup undo stack.
 
 - **Indices are global** in the API (e.g. `frame_bgr(i)`), but **`coords` is cut-indexed**
   (`coords[0]` = reference). Convert with `ctx.cut_to_global` / `ctx.global_to_cut`.
-- Parent your windows to `ctx.window` and set the `Qt.Window` flag so they float independently.
+- Parent your windows to `ctx.window` and set the `Qt.WindowType.Window` flag so they float independently.
 - **Always undo your canvas hooks** in `closeEvent`: `remove_overlay` and
   `end_canvas_interaction`. The example plugins show the pattern.
 - A crash in an overlay just removes that overlay; a crash in `launch()` shows a dialog. Neither

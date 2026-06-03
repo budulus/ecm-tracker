@@ -54,7 +54,7 @@ def _nuitka_cmd(version: str) -> list[str]:
         sys.executable, "-m", "nuitka",
         "--mode=standalone",
         "--windows-console-mode=disable",          # GUI app: no console window
-        "--enable-plugin=pyqt5",
+        "--enable-plugin=pyside6",
         f"--windows-icon-from-ico={ICON}",
         "--include-package=app",                    # whole app package ...
         "--include-package-data=app",               # ... plus its runtime-loaded SVG icons

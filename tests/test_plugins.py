@@ -10,9 +10,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("TRACKER_CONFIG_DIR", tempfile.mkdtemp(prefix="cfg_"))
 
 import numpy as np
-from PyQt5.QtCore import QEvent, QPointF, Qt
-from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QApplication, QPushButton, QWidget
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from app.core.image_sequence import ImageSequence, discover
 from app.plugins import CanvasInteraction, PluginContext
@@ -179,7 +179,7 @@ def test_canvas_interaction_receives_clicks():
 
     ctx.begin_canvas_interaction(Tool())
     pos = QPointF(w.canvas.width() / 2, w.canvas.height() / 2)
-    ev = QMouseEvent(QEvent.MouseButtonPress, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    ev = QMouseEvent(QEvent.Type.MouseButtonPress, pos, pos, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     w.canvas.mousePressEvent(ev)
     assert len(got) == 1
     ctx.end_canvas_interaction()

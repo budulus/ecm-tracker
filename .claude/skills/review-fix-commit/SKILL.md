@@ -63,7 +63,7 @@ claim that wasn't tested is worse.
 ## Why it's shaped this way
 
 - Numbered triage + show-before-fixing keeps the user in control and makes "fix nr 3" unambiguous.
-- The offscreen-test gate exists because this is a PyQt5 app whose tests run headless; "looks
+- The offscreen-test gate exists because this is a PySide6 app whose tests run headless; "looks
   right" is not evidence, a green test run is. Claiming work is fixed without running the suites is
   the failure this skill is built to prevent.
 - One commit per review pass keeps history readable and matches how reviews have been landed here

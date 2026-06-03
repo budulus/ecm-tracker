@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Desktop tool for tracking image features through a frame sequence."
 requires-python = ">=3.9"
 dependencies = [
-    "PyQt5>=5.15,<5.16",
+    "PySide6>=6.7,<7",
     "opencv-python>=4.5,<5",
     "numpy>=1.21,<2",
     "scipy>=1.10,<2",  # used by bundled plugins (Delaunay triangulation, savemat)
@@ -14,11 +14,6 @@ dependencies = [
 [tool.uv]
 package = false                     # app, not an installable library — deps only
 python-preference = "only-managed"  # always use uv's own CPython, never system
-# pyqt5-qt5 only ships a Windows wheel at 5.15.2; force the lock to stay
-# installable on Windows so the universal resolver doesn't pick a Linux/mac-only version.
-required-environments = [
-    "sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
 
 [dependency-groups]
 dev = [

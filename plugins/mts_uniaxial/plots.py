@@ -12,8 +12,8 @@ series), ``owner.per_frame_force_N()`` (per-frame force in N, zeroed at the refe
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 _ACCENT = "#2563eb"   # primary curve / nominal stress
 _E1 = "#dc2626"       # ε₁ tensile (red)
@@ -22,9 +22,9 @@ _ICO = "#16a34a"      # incompressible prediction (green, dashed)
 
 
 def _load_matplotlib():
-    """Import the matplotlib Qt5 backend, returning ``(FigureCanvas, Toolbar, Figure)``. Raises on
+    """Import the matplotlib Qt backend, returning ``(FigureCanvas, Toolbar, Figure)``. Raises on
     failure so the caller can show a message and skip building the window."""
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
     from matplotlib.figure import Figure
     return FigureCanvasQTAgg, NavigationToolbar2QT, Figure
 
@@ -37,7 +37,7 @@ class KinematicsPlotWindow(QWidget):
         super().__init__(owner)
         self.owner = owner
         self.ctx = owner.ctx
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Kinematics — linear strains")
         self.resize(860, 460)
 
@@ -106,7 +106,7 @@ class StressPlotWindow(QWidget):
         self.mode = mode
         is_pk = mode == "pk"
         self._ylabel = "P (MPa)" if is_pk else r"$\sigma$ (MPa)"
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("First Piola–Kirchhoff stress" if is_pk else "Cauchy (true) stress")
         self.resize(640, 480)
 

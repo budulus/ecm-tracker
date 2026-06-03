@@ -34,7 +34,7 @@ STEP_ARTIFACTS = {
     Step.CHANNEL: ["sync_params.json"],
     Step.CROP: ["crop.json"],
     Step.REFERENCE: ["reference.json"],
-    Step.TRACK: [],
+    Step.TRACK: ["trackers.npz"],  # reloadable core tracking result (seeds + tracks + mask + ROI)
     Step.EXPORT: ["tracked_coords.npy", "point_indices.npy", "aligned_data.csv", "measures.csv"],
 }
 

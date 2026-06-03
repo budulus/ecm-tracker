@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> Note: a `CLAUDE.md` is inherited from `C:\Users\raulh\Dropbox\CLAUDE.md`. That file describes an unrelated "LLM Council" project and does **not** apply here — this is a PyQt5 desktop feature-tracking app. Ignore the inherited file's architecture notes (e.g. "use relative imports", "run as `python -m backend.main`").
+> Note: a `CLAUDE.md` is inherited from `C:\Users\raulh\Dropbox\CLAUDE.md`. That file describes an unrelated "LLM Council" project and does **not** apply here — this is a PySide6 desktop feature-tracking app. Ignore the inherited file's architecture notes (e.g. "use relative imports", "run as `python -m backend.main`").
 
 ## What this is
 
@@ -92,11 +92,11 @@ specifics.
 
 ## Architecture
 
-Three layers under `app/`, with a strict dependency direction `gui → models → core` and a hard rule: **`app/core/` and `app/core/settings.py` are Qt-free** so the whole pipeline can be exercised headlessly. Do not import PyQt5 into `core`.
+Three layers under `app/`, with a strict dependency direction `gui → models → core` and a hard rule: **`app/core/` and `app/core/settings.py` are Qt-free** so the whole pipeline can be exercised headlessly. Do not import PySide6 into `core`.
 
 - **`app/core/`** — pure logic: `image_sequence` (path discovery + on-demand decode with an LRU cache, normalizes everything to BGR uint8), `roi` (4-corner polygon, masks, point-in-polygon), `feature_detection` (Shi-Tomasi corners, regular grid), `tracking` (the LK pipeline), `cleanup` (quality metrics + filtering), `export`, `settings` (JSON persistence).
 - **`app/models/`** — `tracker_result.TrackerResult` (immutable tracking output) and `project_state.ProjectState` (mutable per-session state: loaded sequence, indices, ROI, params, result, active mask, undo stack).
-- **`app/gui/`** — PyQt5 widgets: `main_window` (orchestrates everything, owns `ProjectState`), `canvas_view` (frame display + overlays), `dialogs` (parameter editors), `cleanup_dialog` (filter UI). Presentation-only helpers: `theme` (app-wide light stylesheet), `icon_loader` (tinted SVG → `QIcon`), and the bundled `icons/` SVGs.
+- **`app/gui/`** — PySide6 widgets: `main_window` (orchestrates everything, owns `ProjectState`), `canvas_view` (frame display + overlays), `dialogs` (parameter editors), `cleanup_dialog` (filter UI). Presentation-only helpers: `theme` (app-wide light stylesheet), `icon_loader` (tinted SVG → `QIcon`), and the bundled `icons/` SVGs.
 
 ### The dual index system (most important concept)
 
@@ -125,7 +125,7 @@ All overlay geometry is stored in **image coordinates**. A single image→screen
 
 The app ships a light visual theme. `theme.apply_theme(app)` is called once in `app/main.py` right after the `QApplication` is created — it sets the `"Fusion"` base style and a single `LIGHT_QSS` stylesheet on the application, so styling reaches the main window **and** every dialog. Palette/accent (`#2563eb`) live at the top of `LIGHT_QSS`; the icon glyph colors in `icon_loader` (`NORMAL`/`ACCENT`/`DISABLED`) are kept visually in sync with it. **Sliders are intentionally left unstyled** (native/Fusion look) — don't re-add `QSlider` QSS.
 
-Toolbar icons come from MIT-licensed Lucide SVGs in `gui/icons/` (plain XML, safe to Dropbox-sync, one file per action). `icon_loader.load_icon(name, color, size)` renders an SVG via `QSvgRenderer` and recolors it with a `SourceIn` composite, returning a `QIcon` that carries an auto-faded Disabled variant; results are memoized and rendered at the device pixel ratio for crisp HiDPI. `QtSvg` ships with the PyQt5 wheel, so this adds no dependency.
+Toolbar icons come from MIT-licensed Lucide SVGs in `gui/icons/` (plain XML, safe to Dropbox-sync, one file per action). `icon_loader.load_icon(name, color, size)` renders an SVG via `QSvgRenderer` and recolors it with a `SourceIn` composite, returning a `QIcon` that carries an auto-faded Disabled variant; results are memoized and rendered at the device pixel ratio for crisp HiDPI. `QtSvg` ships with the PySide6 wheel, so this adds no dependency.
 
 The toolbar (`MainWindow._build_toolbar`) is grouped into captioned clusters (ROI · DETECT · TRACK · VIEW) built by `_toolbar_group(title, actions, primary=...)`. Each cluster hosts `QToolButton`s whose `setDefaultAction` proxies the **existing** `QAction`s — so all enable/disable/checked logic in `_update_tool_states` is unchanged; the buttons just follow their actions. The `primary` action (Run Tracking) gets `objectName("primaryAction")` for the accent QSS rule.
 
@@ -134,7 +134,7 @@ The toolbar (`MainWindow._build_toolbar`) is grouped into captioned clusters (RO
 The app is extensible via plugins for **post-processing / export / visualization**. There are
 two locations, deliberately separate:
 
-- **`app/plugins/` — the SDK** (GUI layer; may import PyQt5). `api.py` is the canonical, fully
+- **`app/plugins/` — the SDK** (GUI layer; may import PySide6). `api.py` is the canonical, fully
   docstring'd reference a plugin author reads; `manager.py` discovers/loads plugins and owns the
   menu + window lifecycle. The dependency direction stays `gui → plugins → models → core`; the
   Qt-free rule for `app/core/` is untouched.

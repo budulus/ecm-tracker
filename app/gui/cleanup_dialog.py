@@ -1,8 +1,8 @@
 from typing import Optional
 
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -58,7 +58,7 @@ class _BandRow(QWidget):
     dragging, and editing the max box keeps it fixed (clamped to the new scale) by repositioning
     the slider."""
 
-    changed = pyqtSignal()
+    changed = Signal()
 
     def __init__(self, label: str, integer: bool, hi_cap: float, hi_initial: float):
         super().__init__()
@@ -66,10 +66,10 @@ class _BandRow(QWidget):
         self._hi_cap = hi_cap  # hard ceiling the max box may be set to
 
         self.enable = QCheckBox(label)
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.value_label = QLabel()
         self.value_label.setMinimumWidth(64)
-        self.value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         if integer:
             self.cap_box = QSpinBox()
@@ -175,9 +175,9 @@ class CleanupDialog(QDialog):
     active mask and undo stack and performs the actual mutations.
     """
 
-    thresholdsChanged = pyqtSignal()
-    applyRequested = pyqtSignal()
-    undoRequested = pyqtSignal()
+    thresholdsChanged = Signal()
+    applyRequested = Signal()
+    undoRequested = Signal()
 
     def __init__(self, metrics: Metrics, defaults: Optional[Thresholds] = None, parent=None):
         super().__init__(parent)
@@ -244,7 +244,7 @@ class CleanupDialog(QDialog):
         box_layout.addWidget(self.drop_left_roi)
 
         self.count_label = QLabel()
-        self.count_label.setAlignment(Qt.AlignCenter)
+        self.count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         reset_btn = QPushButton("Reset thresholds")
         self._save_btn = QPushButton("Save parameters")
@@ -259,7 +259,7 @@ class CleanupDialog(QDialog):
         for b in (reset_btn, save_btn, apply_btn, undo_btn):
             buttons.addWidget(b)
 
-        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_box.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)

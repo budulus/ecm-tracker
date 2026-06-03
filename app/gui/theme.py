@@ -11,7 +11,7 @@ The icon glyph colors live in ``icon_loader`` (NORMAL/ACCENT/DISABLED) and are
 kept visually in sync with this sheet.
 """
 
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from app.gui.icon_loader import _ICON_DIR as _ICON_DIR_RAW
 

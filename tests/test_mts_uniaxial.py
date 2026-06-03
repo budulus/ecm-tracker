@@ -15,8 +15,8 @@ os.environ.setdefault("TRACKER_CONFIG_DIR", tempfile.mkdtemp(prefix="cfg_"))
 import csv
 
 import numpy as np
-from PyQt5.QtCore import QPointF
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QPointF
+from PySide6.QtWidgets import QApplication
 
 from app.core.image_sequence import discover
 from app.plugins import PluginContext
@@ -270,8 +270,12 @@ def test_invalidate_from_wipes_downstream():
     st.completed_through = int(Step.EXPORT)
 
     files = st.invalidate_from(Step.REFERENCE)
-    # reference + export artifacts wiped; channel + crop kept
-    assert set(files) == set(STEP_ARTIFACTS[Step.REFERENCE]) | set(STEP_ARTIFACTS[Step.EXPORT])
+    # reference + track + export artifacts wiped; channel + crop kept
+    assert set(files) == (
+        set(STEP_ARTIFACTS[Step.REFERENCE])
+        | set(STEP_ARTIFACTS[Step.TRACK])
+        | set(STEP_ARTIFACTS[Step.EXPORT])
+    )
     assert st.ref_image_global is None and st.zero_disp is None
     assert st.force_channel == "A" and st.crop_start == 2
     assert st.completed_through == int(Step.CROP)
@@ -419,6 +423,47 @@ def test_export_after_tracking():
     coords = np.load(os.path.join(pdir, "tracked_coords.npy"))
     assert coords.shape == (win.ctx.frame_count, win.ctx.n_active, 2)
     win.close()
+
+
+def test_resume_restores_trackers():
+    """Tracking persists trackers.npz; resuming a project reinstalls the in-app result."""
+    w = _main_window()
+    win = _plugin_window(w)
+    d = tempfile.mkdtemp(prefix="mts_")
+    exp = make_mts_experiment(d, n_frames=10)
+    win._set_root_candidate(exp["root"])
+    win._on_load()
+    win._on_detect_reference()
+    _track_in_app(w)
+    assert w.state.result is not None
+    assert win.pstate.done(Step.TRACK)
+    pdir = project_io.project_dir(exp["root"])
+    assert os.path.isfile(os.path.join(pdir, "trackers.npz"))  # persisted on track
+
+    exp_coords = w.state.result.coords_fw.copy()
+    exp_ref, exp_last = w.state.reference_index, w.state.last_index
+    n_pts = w.state.result.n_points
+    win.close()
+
+    # load_project now reports TRACK as resumable because trackers.npz is present.
+    loaded = project_io.load_project(exp["root"])
+    assert loaded is not None and loaded.done(Step.TRACK)
+
+    # A fresh window + plugin adopts the saved project and restores the in-app tracking result.
+    w2 = _main_window()
+    win2 = _plugin_window(w2)
+    win2._adopt_state(loaded)
+    assert w2.state.result is not None
+    assert w2.state.result.n_points == n_pts
+    assert (w2.state.reference_index, w2.state.last_index) == (exp_ref, exp_last)
+    assert np.allclose(w2.state.result.coords_fw, exp_coords)
+    assert win2.ctx.has_result and win2.pstate.done(Step.TRACK)
+
+    # Export works immediately — no re-tracking needed — and the prior export wasn't wiped.
+    win2._on_export()
+    assert win2.pstate.completed_through == int(Step.EXPORT)
+    assert os.path.isfile(os.path.join(pdir, "trackers.npz"))  # still present after export
+    win2.close()
 
 
 def test_channel_change_invalidates_reference():

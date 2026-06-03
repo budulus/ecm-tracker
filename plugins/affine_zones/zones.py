@@ -11,9 +11,9 @@ plot window shows the stretches over frames.
 import csv
 
 import numpy as np
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QBrush, QColor, QPen, QPolygonF
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor, QPen, QPolygonF
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QColorDialog,
     QDialog,
@@ -215,7 +215,7 @@ class AffineZonesWindow(QWidget):
     def __init__(self, ctx):
         super().__init__(ctx.window)
         self.ctx = ctx
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Affine Zone Tool")
         self.setMinimumWidth(640)
         self.zones = []  # list of Zone
@@ -245,9 +245,9 @@ class AffineZonesWindow(QWidget):
         self.table.setHorizontalHeaderLabels(
             ["Zone", "Color", "Pts", "λ1", "λ2", "v1 (x,y)", "v2 (x,y)"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.hint = QLabel()
 
@@ -453,7 +453,7 @@ class AffineZonesWindow(QWidget):
             except Exception:
                 QMessageBox.critical(
                     self, "matplotlib unavailable",
-                    "matplotlib with a working Qt5 backend is required for plotting. "
+                    "matplotlib with a working Qt backend is required for plotting. "
                     "Run `uv sync` and try again.",
                 )
                 return
@@ -552,8 +552,8 @@ class AffineZonesWindow(QWidget):
         # in-progress polygon being drawn
         if self._tool is not None and self._tool.vertices:
             pts = [ctx.image_to_screen(x, y) for x, y in self._tool.vertices]
-            painter.setPen(QPen(QColor(255, 215, 0), 2, Qt.DashLine))
-            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(255, 215, 0), 2, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             if len(pts) >= 2:
                 painter.drawPolyline(QPolygonF(pts))
             for p in pts:
@@ -568,7 +568,7 @@ class RansacDialog(QDialog):
         self.owner = owner
         self.ctx = owner.ctx
         self.setWindowTitle("RANSAC zone cleaning")
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
 
         self.frame_spin = QSpinBox()  # range/value set per-open by sync_frame_range()
         self.sample_size = QSpinBox()
@@ -598,7 +598,7 @@ class RansacDialog(QDialog):
         self.count_label = QLabel("—")
         self.apply_btn = QPushButton("Apply Cleaning")
         self.apply_btn.clicked.connect(self._apply)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.close)
 
         layout = QVBoxLayout(self)
@@ -692,14 +692,14 @@ class RansacDialog(QDialog):
 
 
 def _load_matplotlib():
-    """Lazily import the matplotlib Qt5 backend, returning ``(FigureCanvasQTAgg, Figure)``.
+    """Lazily import the matplotlib Qt backend, returning ``(FigureCanvasQTAgg, Figure)``.
 
     Deferred (not module-level) so the plugin's mere import doesn't pull in matplotlib at app
     startup. Raises on *any* failure — a missing package (ImportError) or a backend that fails to
     initialize (e.g. a Qt-binding mismatch, which raises non-ImportError) — so the caller can show
     a message and skip constructing the plot widget entirely.
     """
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
     from matplotlib.figure import Figure
     return FigureCanvasQTAgg, NavigationToolbar2QT, Figure
 
@@ -711,7 +711,7 @@ class StretchPlotWindow(QWidget):
         super().__init__(owner)
         self.owner = owner
         self.ctx = owner.ctx
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Principal stretches over frames")
         self.resize(720, 480)
 

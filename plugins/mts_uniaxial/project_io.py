@@ -2,8 +2,9 @@
 
 Each step writes its artifact(s) immediately, plus a master ``manifest.json`` index, so work
 resumes after closing the app. ``load_project`` re-parses the original raw files (their paths are
-in the manifest) and layers the saved per-step parameters on top; it caps the resumable progress
-at REFERENCE because the core tracking result lives in the app, not here.
+in the manifest) and layers the saved per-step parameters on top. The core tracking result is
+persisted as ``trackers.npz`` (the TRACK artifact, written via the app's tracker IO); the plugin
+restores it into the app on resume, so progress resumes through TRACK when that file is present.
 
 Qt-free. The default project folder is ``<root>/mts_uniaxial_project/``.
 """
@@ -187,7 +188,8 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     """Reconstruct a :class:`MtsProjectState` from ``<root>/mts_uniaxial_project/``.
 
     Returns ``None`` if there is no project or the original raw files can no longer be parsed.
-    Resumable progress is capped at REFERENCE (the in-app tracking result can't be restored).
+    Resumable progress reaches TRACK when ``trackers.npz`` is present (the plugin reinstalls that
+    saved result into the app on resume); otherwise it caps at REFERENCE.
     """
     pdir = project_dir(root)
     manifest = _read_json(pdir, MANIFEST)
@@ -245,5 +247,12 @@ def load_project(root: str) -> Optional[MtsProjectState]:
         if (st.ref_image_global is not None and st.last_image_global is not None
                 and 0 <= st.ref_image_global <= st.last_image_global < image_log.n_images):
             st.completed_through = int(Step.REFERENCE)
+
+    # The core tracking result is reinstalled by the plugin (it needs the app handle); here we
+    # only record that a saved trackers.npz is available so resume reaches TRACK.
+    if st.done(Step.REFERENCE) and stored >= Step.TRACK and os.path.isfile(
+        os.path.join(pdir, "trackers.npz")
+    ):
+        st.completed_through = int(Step.TRACK)
 
     return st

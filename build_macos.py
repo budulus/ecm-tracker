@@ -18,9 +18,9 @@ Usage (from repo root, on a Mac):
 
 First-run friction we expect to iterate on (none of this is verified yet — it cannot
 be tested from the Windows machine where it was written):
-  * The uv lock is currently Windows-tuned (`required-environments = win32` + PyQt5/Qt
-    pins in pyproject.toml). On Apple Silicon you'll likely need to relax those pins so
-    `uv sync` resolves arm64 wheels. Verify before building.
+  * Dependencies are PySide6 (self-contained, cross-platform wheels) with no Windows-only
+    `required-environments` pin, so `uv sync` should resolve arm64 wheels directly. If a
+    resolve fails, check the numpy<2 / Python 3.12 pin first. Verify before building.
   * App icon: drop an `assets/app_icon.icns` and it's used automatically. To make one
     from a 1024px PNG:
         mkdir icon.iconset
@@ -67,7 +67,7 @@ def _nuitka_cmd(version: str) -> list[str]:
         "--macos-create-app-bundle",
         f"--macos-app-name={APP_NAME}",
         f"--macos-app-version={version}",
-        "--enable-plugin=pyqt5",
+        "--enable-plugin=pyside6",
         "--include-package=app",                # whole app package ...
         "--include-package-data=app",           # ... plus its runtime-loaded SVG icons
         "--include-package=scipy",              # plugin-only: core never imports it

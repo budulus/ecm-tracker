@@ -10,7 +10,7 @@ tools are driven by their toolbar QAction's checked state (the single source of 
   result exists — an individual tracked point, dropped via the undoable ``apply_keep_mask`` path.
 """
 import numpy as np
-from PyQt5.QtCore import QPointF
+from PySide6.QtCore import QPointF
 
 # Extra screen-space slack (px) added to the marker radius when hit-testing a delete click, so a
 # click just outside the drawn marker still lands on it.

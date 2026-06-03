@@ -11,10 +11,10 @@ import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QBuffer, QIODevice, QRectF, Qt
-from PyQt5.QtGui import QPainter, QPixmap
-from PyQt5.QtSvg import QSvgRenderer
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
+from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QApplication
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,14 +25,14 @@ OUT = os.path.join(ROOT, "assets", "app_icon.ico")
 def main() -> None:
     app = QApplication(sys.argv)  # keep referenced: an unreferenced one is GC'd
     pixmap = QPixmap(256, 256)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     QSvgRenderer(SVG).render(painter, QRectF(0, 0, 256, 256))
     painter.end()
 
     buf = QBuffer()
-    buf.open(QIODevice.WriteOnly)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
     pixmap.save(buf, "PNG")
     img = Image.open(io.BytesIO(bytes(buf.data()))).convert("RGBA")
 

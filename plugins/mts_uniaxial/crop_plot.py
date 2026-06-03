@@ -9,7 +9,7 @@ fallback label and the crop sliders still work.
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 _ACCENT = "#2563eb"
 _IMG = "#dc2626"
@@ -17,8 +17,8 @@ _REF = "#16a34a"  # reference-frame marker (distinct from the crop accent and th
 
 
 def _load_matplotlib():
-    """Import the matplotlib Qt5 backend, returning ``(FigureCanvas, Figure)``. Raises on failure."""
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+    """Import the matplotlib Qt backend, returning ``(FigureCanvas, Figure)``. Raises on failure."""
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
     return FigureCanvasQTAgg, Figure
 

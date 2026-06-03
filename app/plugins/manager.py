@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Type
 
-from PyQt5.QtCore import QUrl
-from PyQt5.QtGui import QDesktopServices
-from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
 
 from app.plugins.api import PluginContext, TrackerPlugin
 

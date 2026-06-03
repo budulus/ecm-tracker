@@ -16,9 +16,9 @@ paints the axes on top. It computes each zone's deformation gradient live (reusi
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import QPointF, QRectF, Qt
-from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
 from .zones import fit_zone_deformation, principal_stretches
 
@@ -31,7 +31,7 @@ def _rgb_to_qimage(rgb: np.ndarray) -> QImage:
     """Convert an ``(H, W, 3)`` uint8 RGB array to an independent (copied) QImage."""
     rgb = np.ascontiguousarray(rgb)
     h, w = rgb.shape[:2]
-    return QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+    return QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
 
 
 class _ZoneGaugeCanvas(QWidget):
@@ -62,7 +62,7 @@ class _ZoneGaugeCanvas(QWidget):
         painter.drawImage(QRectF(ox, oy, dw, dh), self._img)
         if not self._entries:
             return
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # Base length = the undeformed (λ = 1) axis; scale each axis by its principal stretch so the
         # arrows grow in tension (λ > 1) and shrink in compression (λ < 1) live with the frame.
         base = _AXIS_LENGTH_FRAC * min(dw, dh)
@@ -85,7 +85,7 @@ class _ZoneGaugeCanvas(QWidget):
         p2 = QPointF(c.x() + vx * length, c.y() + vy * length)
         pen = QPen(color, 1.5 if dashed else 2.5)
         if dashed:
-            pen.setStyle(Qt.DashLine)
+            pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
         painter.setBrush(QBrush(color))
         painter.drawLine(p1, p2)
@@ -111,14 +111,14 @@ class ZoneDirectionGaugeWindow(QWidget):
         super().__init__(owner)
         self.owner = owner
         self.ctx = owner.ctx
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Direction gauge — per-zone principal strain axes")
         self.resize(560, 600)
 
         self.canvas = _ZoneGaugeCanvas()
         self.info = QLabel("—")
         self.info.setWordWrap(True)
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.valueChanged.connect(lambda *_: self._update_display())
 
         layout = QVBoxLayout(self)

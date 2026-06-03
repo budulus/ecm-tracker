@@ -24,6 +24,7 @@ from app.core.export import export, export_csv
 from app.core.feature_detection import DEFAULT_SHI_TOMASI, regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover, natural_sort_key
 from app.core.roi import ROI
+from app.core.tracker_io import load_trackers, save_trackers
 from app.core.tracking import DEFAULT_LK, track
 from tests.synthetic import make_sequence
 
@@ -204,8 +205,8 @@ def test_export_csv(tmp=None):
 def test_gui_pipeline():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import QPointF
-    from PyQt5.QtWidgets import QApplication, QFileDialog
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QApplication, QFileDialog
 
     app = QApplication.instance() or QApplication(sys.argv)
     src, _ = _sequence()
@@ -265,8 +266,8 @@ def test_gui_pipeline():
 def test_roi_shape_tools():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import QPointF
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
     src, _ = _sequence()
@@ -323,8 +324,8 @@ def test_roi_shape_tools():
 def test_partial_ngon_discarded_on_frame_navigation():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import QPointF
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
     src, _ = _sequence()
@@ -351,9 +352,9 @@ def test_partial_ngon_discarded_on_frame_navigation():
 def test_display_settings():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import QPointF
-    from PyQt5.QtGui import QPixmap
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
     src, _ = _sequence()
@@ -407,7 +408,7 @@ def test_display_settings():
 
 def test_app_icon():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
     assert app is not None
@@ -421,7 +422,7 @@ def test_app_icon():
 def test_navigation_buttons():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
     assert app is not None
@@ -472,21 +473,21 @@ def test_navigation_buttons():
     # ←/→ are bound to the canvas (WidgetWithChildrenShortcut), NOT window-global: a
     # window-wide shortcut on these navigation keys conflicts with sliders/tables/plugin
     # windows and crashes plugin launch. Keep them canvas-scoped.
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtGui import QKeySequence
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence
 
-    assert w._prev_frame_shortcut.key() == QKeySequence(Qt.Key_Left)
-    assert w._next_frame_shortcut.key() == QKeySequence(Qt.Key_Right)
+    assert w._prev_frame_shortcut.key() == QKeySequence(Qt.Key.Key_Left)
+    assert w._next_frame_shortcut.key() == QKeySequence(Qt.Key.Key_Right)
     for sc in (w._prev_frame_shortcut, w._next_frame_shortcut):
         assert sc.parent() is w.canvas
-        assert sc.context() == Qt.WidgetWithChildrenShortcut
+        assert sc.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
 
 
 def test_point_tools():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import QPointF
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
     assert app is not None
@@ -550,8 +551,8 @@ def test_point_tools():
 def test_point_manager():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
-    from PyQt5.QtCore import Qt, QPointF
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import Qt, QPointF
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)  # keep referenced (GC guard)
     assert app is not None
@@ -579,7 +580,7 @@ def test_point_manager():
     assert isinstance(w.canvas._interaction, PointSelectInteraction)  # owns the slot
 
     # canvas -> list: clicking the middle seed selects its row (and only its row).
-    dlg.handle_canvas_click(QPointF(120, 90), Qt.NoModifier)
+    dlg.handle_canvas_click(QPointF(120, 90), Qt.KeyboardModifier.NoModifier)
     assert dlg.selected_point_indices() == [1]
 
     # list -> delete: select two rows, delete removes those seeds directly (not undoable).
@@ -608,7 +609,7 @@ def test_point_manager():
     assert dlg.table.rowCount() == int(w.state.active_mask.sum())
 
     # canvas -> list selects a tracked point (cut 0 coords == seed positions)...
-    dlg.handle_canvas_click(QPointF(80, 60), Qt.NoModifier)
+    dlg.handle_canvas_click(QPointF(80, 60), Qt.KeyboardModifier.NoModifier)
     assert len(dlg.selected_point_indices()) == 1
     # ...and Delete drops it via the undoable mask path; mask_changed rebuilds the table.
     before = int(w.state.active_mask.sum())
@@ -619,13 +620,183 @@ def test_point_manager():
     assert dlg.table.rowCount() == before - 1
 
     # Ctrl-click on the canvas extends the selection (no signal loop / crash).
-    dlg.handle_canvas_click(QPointF(120, 90), Qt.NoModifier)
-    dlg.handle_canvas_click(QPointF(200, 150), Qt.ControlModifier)
+    dlg.handle_canvas_click(QPointF(120, 90), Qt.KeyboardModifier.NoModifier)
+    dlg.handle_canvas_click(QPointF(200, 150), Qt.KeyboardModifier.ControlModifier)
     assert len(dlg.selected_point_indices()) == 2
 
     w._point_manager.reject()
     app.processEvents()
     assert w._point_manager is None
+
+
+_RESULT_KEYS = (
+    "coords_fw", "status_fw", "err_fw", "coords_bw", "status_bw", "err_bw",
+    "fb_mean_error", "fb_max_error",
+)
+
+
+def test_tracker_io_roundtrip():
+    _, seq = _sequence(dx=2.0, dy=1.0)
+    gray = seq.load_gray(0)
+    roi = ROI([(60, 50), (240, 50), (240, 180), (60, 180)])
+    seeds = shi_tomasi(gray, roi.mask(*gray.shape[:2]), DEFAULT_SHI_TOMASI)
+    res = track(seq, 0, 11, seeds, DEFAULT_LK)
+    mask = np.ones(res.n_points, dtype=bool)
+    mask[::3] = False  # make the active mask non-trivial
+    result_arrays = {k: getattr(res, k) for k in _RESULT_KEYS}
+
+    d = tempfile.mkdtemp(prefix="trkio_")
+    path = save_trackers(
+        os.path.join(d, "t.npz"),
+        total_images=12, reference_index=0, last_index=11, current_index=3,
+        features=seeds, roi_corners=roi.corners, active_mask=mask,
+        result_arrays=result_arrays, win_size=res.win_size,
+        lk_params=DEFAULT_LK, shi_tomasi_params=DEFAULT_SHI_TOMASI, grid_params={"spacing_x": 5},
+    )
+    b = load_trackers(path)
+    assert b["has_result"] and b["total_images"] == 12
+    assert (b["reference_index"], b["last_index"], b["current_index"]) == (0, 11, 3)
+    assert np.allclose(b["features"], seeds.astype(np.float32))
+    assert np.array_equal(b["active_mask"], mask)
+    for k in _RESULT_KEYS:
+        a, got = np.asarray(result_arrays[k]), b["result_arrays"][k]
+        if np.issubdtype(a.dtype, np.floating):
+            assert np.allclose(got, a.astype(np.float32), equal_nan=True)  # inf compares equal
+        else:
+            assert np.array_equal(got, a)
+    assert np.allclose(np.array(b["roi_corners"]), np.array(roi.corners))
+    assert b["win_size"] == res.win_size
+    assert b["lk_params"]["win_size"] == DEFAULT_LK["win_size"]
+    assert b["grid_params"]["spacing_x"] == 5
+
+    # Reference-only (no tracking): conditional arrays omitted entirely.
+    path2 = save_trackers(
+        os.path.join(d, "ref.npz"),
+        total_images=12, reference_index=0, last_index=11, current_index=0,
+        features=seeds, roi_corners=None, active_mask=None, result_arrays=None,
+        win_size=DEFAULT_LK["win_size"], lk_params=DEFAULT_LK,
+        shi_tomasi_params=DEFAULT_SHI_TOMASI, grid_params={},
+    )
+    b2 = load_trackers(path2)
+    assert not b2["has_result"]
+    assert b2["result_arrays"] is None and b2["active_mask"] is None and b2["roi_corners"] is None
+    assert np.allclose(b2["features"], seeds.astype(np.float32))
+
+
+def test_tracker_io_rejects_bad_files():
+    import json
+
+    d = tempfile.mkdtemp(prefix="trkbad_")
+
+    def _expect_valueerror(path):
+        try:
+            load_trackers(path)
+        except ValueError:
+            return
+        raise AssertionError(f"{path} should have raised ValueError")
+
+    # Wrong format string.
+    p = os.path.join(d, "fmt.npz")
+    np.savez(p, features=np.zeros((3, 2), np.float32),
+             meta=np.array(json.dumps({"format": "nope", "version": 1})))
+    _expect_valueerror(p)
+
+    # Unsupported version.
+    p = os.path.join(d, "ver.npz")
+    np.savez(p, features=np.zeros((3, 2), np.float32), meta=np.array(json.dumps(
+        {"format": "ecmtracker-trackers", "version": 999, "total_images": 3,
+         "reference_index": 0, "last_index": 2, "has_result": False})))
+    _expect_valueerror(p)
+
+    # Claims a result but the tracked arrays are the wrong shape.
+    p = os.path.join(d, "shape.npz")
+    np.savez(
+        p, features=np.zeros((3, 2), np.float32),
+        coords_fw=np.zeros((5, 9, 2), np.float32), status_fw=np.zeros((5, 9), np.uint8),
+        err_fw=np.zeros((5, 9), np.float32), coords_bw=np.zeros((5, 9, 2), np.float32),
+        status_bw=np.zeros((5, 9), np.uint8), err_bw=np.zeros((5, 9), np.float32),
+        fb_mean_error=np.zeros(9, np.float32), fb_max_error=np.zeros(9, np.float32),
+        active_mask=np.ones(9, bool),
+        meta=np.array(json.dumps(
+            {"format": "ecmtracker-trackers", "version": 1, "total_images": 3,
+             "reference_index": 0, "last_index": 2, "has_result": True})),
+    )
+    _expect_valueerror(p)
+
+    # A plain .npy is not a tracker bundle.
+    p = os.path.join(d, "plain.npy")
+    np.save(p, np.zeros((3, 2), np.float32))
+    _expect_valueerror(p)
+
+
+def test_save_load_trackers_gui():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    src, _ = _sequence(n=12)
+    from app.gui.main_window import MainWindow
+
+    # Don't let modal dialogs block the headless run.
+    QMessageBox.warning = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+    # --- session A: a non-default range, ROI, seeds, track, partial cleanup, save ---
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    w._load_paths(discover(src), src)
+    w._on_reference_changed(1)
+    w._on_last_changed(9)
+    w._go_to_frame(1)  # ROI may only be defined on the reference frame
+    w._begin_roi_definition("ngon")
+    ngon = w.canvas._interaction
+    for c in [(60, 50), (240, 50), (240, 180), (60, 180)]:
+        ngon.on_press(QPointF(*c), None)
+    ngon.on_right_press(QPointF(60, 180), None)
+    w._detect_shi_tomasi()
+    w._run_tracking()
+    assert w.state.result is not None
+    keep = np.ones(w.state.result.n_points, dtype=bool)
+    keep[0] = False
+    w.apply_keep_mask(keep)  # drop one point so the mask isn't all-True
+
+    exp_features = w.state.features.copy()
+    exp_coords = w.state.result.coords_fw.copy()
+    exp_mask = w.state.active_mask.copy()
+    exp_roi = np.array(w.state.roi.corners)
+    exp_ref, exp_last = w.state.reference_index, w.state.last_index
+
+    out = os.path.join(tempfile.mkdtemp(prefix="trk_"), "session.npz")
+    QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
+    w._save_trackers()
+    assert os.path.exists(out)
+
+    # --- session B: fresh window + same sequence, load overlays it all back ---
+    w2 = MainWindow()
+    w2.resize(1000, 700)
+    w2.show()
+    w2._load_paths(discover(src), src)
+    QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (out, ""))
+    w2._load_trackers()
+    assert w2.state.result is not None
+    assert (w2.state.reference_index, w2.state.last_index) == (exp_ref, exp_last)
+    assert np.array_equal(w2.state.features, exp_features)
+    assert np.allclose(w2.state.result.coords_fw, exp_coords)
+    assert np.array_equal(w2.state.active_mask, exp_mask)
+    assert w2.state.roi is not None and np.allclose(np.array(w2.state.roi.corners), exp_roi)
+    # A loaded result locks the range sliders and enables export, just like a fresh track.
+    assert not w2.reference_slider.isEnabled() and not w2.last_slider.isEnabled()
+    assert w2.export_action.isEnabled() and not w2.define_roi_action.isChecked()
+
+    # --- mismatch: loading onto a different-length sequence is refused ---
+    src8, _ = _sequence(n=8)
+    w3 = MainWindow()
+    w3._load_paths(discover(src8), src8)
+    w3._load_trackers()  # getOpenFileName still returns the 12-frame file
+    assert w3.state.result is None and w3.state.features is None
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ plot window shows the stretches over frames.
 """
 import csv
 
+import cv2
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPolygonF
@@ -228,6 +229,7 @@ class AffineZonesWindow(QWidget):
 
         self.new_btn = QPushButton("New Zone")
         self.finish_btn = QPushButton("Finish Zone")
+        self.all_points_btn = QPushButton("All Points Zone")
         self.clear_btn = QPushButton("Clear Zones")
         self.ransac_btn = QPushButton("RANSAC…")
         self.plot_btn = QPushButton("Plot Curves")
@@ -235,6 +237,7 @@ class AffineZonesWindow(QWidget):
         self.export_btn = QPushButton("Export CSV…")
         self.new_btn.clicked.connect(self._start_zone)
         self.finish_btn.clicked.connect(self._finish_zone)
+        self.all_points_btn.clicked.connect(self._add_all_points_zone)
         self.clear_btn.clicked.connect(self._clear_zones)
         self.ransac_btn.clicked.connect(self._open_ransac)
         self.plot_btn.clicked.connect(self._open_plot)
@@ -252,7 +255,7 @@ class AffineZonesWindow(QWidget):
         self.hint = QLabel()
 
         top = QHBoxLayout()
-        for b in (self.new_btn, self.finish_btn, self.clear_btn,
+        for b in (self.new_btn, self.finish_btn, self.all_points_btn, self.clear_btn,
                   self.ransac_btn, self.plot_btn, self.gauge_btn, self.export_btn):
             top.addWidget(b)
         layout = QVBoxLayout(self)
@@ -308,6 +311,22 @@ class AffineZonesWindow(QWidget):
         self._tool = None
         self._refresh()  # rebuilds the table and refreshes button-enable state
 
+    def _add_all_points_zone(self):
+        """Create one zone — the convex hull of all active reference-frame points — enclosing
+        every tracked point, then refresh like any other zone add."""
+        coords = self.ctx.coords(active_only=True)
+        if coords is None or coords.shape[1] < MIN_ZONE_POINTS:
+            self.ctx.status("Need at least 3 tracked points to make an all-points zone.")
+            return
+        ref_pts = coords[0].astype(np.float32)
+        hull = cv2.convexHull(ref_pts).reshape(-1, 2)
+        if len(hull) < MIN_ZONE_POINTS:  # collinear points -> degenerate hull
+            self.ctx.status("Tracked points are collinear — can't form an all-points zone.")
+            return
+        polygon = [(float(x), float(y)) for x, y in hull]
+        self.zones.append(Zone(polygon, default_zone_color(len(self.zones))))
+        self._refresh()
+
     def _clear_zones(self):
         self.zones.clear()
         self._ransac_preview = None
@@ -320,6 +339,7 @@ class AffineZonesWindow(QWidget):
         drawing = self._tool is not None
         self.new_btn.setEnabled(not drawing)
         self.finish_btn.setEnabled(drawing)
+        self.all_points_btn.setEnabled(not drawing and self.ctx.has_result)
         has = bool(self.zones)
         self.clear_btn.setEnabled(has)
         self.export_btn.setEnabled(has and self.ctx.has_result)

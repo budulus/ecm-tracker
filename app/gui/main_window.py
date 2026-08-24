@@ -1,5 +1,6 @@
 import os
 
+import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
@@ -25,17 +26,17 @@ from app.core import settings, tracker_io
 from app.gui.icon_loader import ACCENT, load_icon
 from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
 from app.core.export import export, export_csv
-from app.core.feature_detection import DEFAULT_GRID, DEFAULT_SHI_TOMASI, regular_grid, shi_tomasi
+from app.core.feature_detection import regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover
 from app.core.roi import ROI
-from app.core.tracking import DEFAULT_LK, track
+from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
 from app.gui.point_tools import AddPointsTool, DeletePointsTool
 from app.gui.point_manager import PointManagerDialog, PointSelectInteraction
 from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
-from app.models.project_state import ProjectState
+from app.models.project_state import ProjectState, validate_grid, validate_lk, validate_shi_tomasi
 from app.models.tracker_result import TrackerResult
 from app.plugins.api import PluginSignals
 from app.plugins.manager import PluginManager
@@ -181,6 +182,16 @@ class MainWindow(QMainWindow):
         self._next_frame_shortcut.activated.connect(
             lambda: self._go_to_frame(self.state.current_index + 1)
         )
+
+        # n/r/c: jump to the reference frame and start an N-Gon / Rectangle / Circle ROI.
+        # Window-scoped (letters don't conflict with the slider/spin-box widgets the way ←/→ do).
+        self._roi_shape_shortcuts = []
+        for key, shape in ((Qt.Key.Key_N, "ngon"),
+                           (Qt.Key.Key_R, "rectangle"),
+                           (Qt.Key.Key_C, "circle")):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(lambda shape=shape: self._begin_roi_on_reference(shape))
+            self._roi_shape_shortcuts.append(sc)
 
         # Discover installed plugins; populate the pane launch buttons + the utility menu.
         self.plugin_manager = PluginManager(self)
@@ -471,31 +482,55 @@ class MainWindow(QMainWindow):
         if files:
             self._load_paths(discover(files), os.path.dirname(files[0]))
 
-    def load_sequence_from_paths(self, paths, source_dir) -> None:
+    def load_sequence_from_paths(self, paths, source_dir) -> bool:
         """Public entry to load an explicit, pre-ordered image-path list.
 
         Order is preserved verbatim (``ImageSequence`` does not re-sort). Resets all downstream
         state and emits ``sequence_changed``, exactly like File -> Open. Used by loader plugins
         that order frames by an acquisition log rather than by filename."""
-        self._load_paths(paths, source_dir)
+        return self._load_paths(paths, source_dir)
 
-    def _load_paths(self, paths, source_dir) -> None:
+    def _load_paths(self, paths, source_dir) -> bool:
         if not paths:
             QMessageBox.warning(self, "No images", "No supported images were found.")
-            return
+            return False
         try:
             sequence = ImageSequence(paths)
-            self.state.load_sequence(sequence, source_dir)
-            sequence.load_bgr(0)  # surface decode errors early
-        except (IOError, ValueError) as exc:
+            dialog = QProgressDialog("Validating images...", "Cancel", 0, len(sequence), self)
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            dialog.setMinimumDuration(500)
+
+            def progress(done, _total):
+                dialog.setValue(done)
+                QApplication.processEvents()
+                return dialog.wasCanceled()
+
+            try:
+                valid = sequence.validate_all(progress)
+            finally:
+                dialog.close()
+            if not valid:
+                self.statusBar().showMessage("Image loading cancelled.", 4000)
+                return False
+        except (IOError, ValueError, cv2.error) as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
-            return
+            return False
+        # Commit only after every frame has decoded and passed the common-shape check. A failed
+        # candidate therefore leaves the existing project completely untouched.
+        self.state.load_sequence(sequence, source_dir)
         self._configure_sliders()
         self.canvas.reset_view()
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
+        self._update_window_title()
         self.signals.sequence_changed.emit()
+        return True
+
+    def _update_window_title(self) -> None:
+        """Reflect the loaded folder in the title bar (e.g. 'ECM Tracker - experiment_1')."""
+        name = os.path.basename(self.state.source_dir) if self.state.source_dir else None
+        self.setWindowTitle(f"ECM Tracker - {name}" if name else "ECM Tracker")
 
     # ---- left pane ------------------------------------------------------
     def _restore_pane_width(self) -> None:
@@ -510,7 +545,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         sizes = self.splitter.sizes()
         if sizes:
-            settings.update_section("ui", {"left_pane_width": int(sizes[0])})
+            try:
+                settings.update_section("ui", {"left_pane_width": int(sizes[0])})
+            except OSError as exc:
+                self.statusBar().showMessage(f"Could not save UI settings: {exc}", 5000)
         super().closeEvent(event)
 
     def _configure_sliders(self) -> None:
@@ -531,21 +569,34 @@ class MainWindow(QMainWindow):
 
     # ---- slider handlers ------------------------------------------------
     def _on_current_changed(self, value: int) -> None:
+        previous = self.state.current_index
         self.state.set_current(value)
-        self.canvas.refresh()
+        try:
+            self.canvas.refresh()
+        except (OSError, ValueError, IndexError, cv2.error) as exc:
+            self.state.set_current(previous)
+            self.current_slider.setValue(previous)
+            QMessageBox.critical(self, "Frame load failed", str(exc))
+            return
         self._update_status()
         self._update_tool_states()
         self.signals.frame_changed.emit(self.state.current_index)
 
     def _on_reference_changed(self, value: int) -> None:
+        previous = self.state.reference_index
         self.state.set_reference(value)
         self._sync_range_constraints()
-        roi_cleared = self.state.roi is not None
-        if roi_cleared:
+        changed = self.state.reference_index != previous
+        roi_cleared = changed and self.state.roi is not None
+        features_cleared = changed and self.state.features is not None
+        if changed:
             self.state.roi = None
             self.state.features = None
             self.define_roi_action.setChecked(False)
-            self.statusBar().showMessage("ROI cleared (reference frame changed).", 4000)
+            if roi_cleared or features_cleared:
+                self.statusBar().showMessage(
+                    "ROI and reference points cleared (reference frame changed).", 4000
+                )
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
@@ -656,6 +707,15 @@ class MainWindow(QMainWindow):
     def _deactivate_point_tools(self) -> None:
         self._deactivate_point_tool(self.add_points_action)
         self._deactivate_point_tool(self.delete_points_action)
+
+    def _begin_roi_on_reference(self, shape: str) -> None:
+        """Jump to the reference frame, then start defining an ROI of ``shape``.
+
+        Bound to the n/r/c window shortcuts (n-gon / rectangle / circle)."""
+        if not self.state.has_sequence:
+            return
+        self._go_to_frame(self.state.reference_index)
+        self._begin_roi_definition(shape)
 
     def _begin_roi_definition(self, shape: str) -> None:
         """Start defining an ROI of the given shape on the reference frame."""
@@ -778,7 +838,11 @@ class MainWindow(QMainWindow):
     def _detect_shi_tomasi(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():
             return
-        gray = self.state.sequence.load_gray(self.state.reference_index)
+        try:
+            gray = self.state.sequence.load_gray(self.state.reference_index)
+        except (OSError, ValueError, IndexError, cv2.error) as exc:
+            QMessageBox.critical(self, "Detection failed", str(exc))
+            return
         h, w = gray.shape[:2]
         mask = self.state.roi.mask(h, w)
         self.state.features = shi_tomasi(gray, mask, self.state.shi_tomasi_params)
@@ -829,6 +893,9 @@ class MainWindow(QMainWindow):
                 self.state.lk_params,
                 progress,
             )
+        except (OSError, ValueError, IndexError, cv2.error) as exc:
+            QMessageBox.critical(self, "Tracking failed", str(exc))
+            return
         finally:
             dialog.close()
 
@@ -921,8 +988,17 @@ class MainWindow(QMainWindow):
         leave the active set), refreshes, and emits ``mask_changed``. No-op without a result."""
         if self.state.active_mask is None:
             return
+        keep = np.asarray(keep, dtype=bool)
+        if keep.shape != self.state.active_mask.shape:
+            raise ValueError(
+                f"keep mask shape {keep.shape} does not match active mask "
+                f"shape {self.state.active_mask.shape}"
+            )
+        updated = self.state.active_mask & keep
+        if np.array_equal(updated, self.state.active_mask):
+            return
         self.state.undo_stack.append(self.state.active_mask.copy())
-        self.state.active_mask = self.state.active_mask & keep
+        self.state.active_mask = updated
         self.canvas.refresh()
         self._update_tool_states()
         self.signals.mask_changed.emit()
@@ -1023,8 +1099,13 @@ class MainWindow(QMainWindow):
         if there is nothing to export or the user cancelled."""
         if self.state.result is None or self.state.active_mask is None:
             return None
-        if not self.state.active_mask.any():
-            QMessageBox.warning(self, "Nothing to export", "No points remain to export.")
+        export_mask = self._exportable_mask()
+        if export_mask is None or not export_mask.any():
+            QMessageBox.warning(
+                self,
+                "Nothing to export",
+                "No fully valid tracked points remain to export.",
+            )
             return None
         default_path = os.path.join(self.state.source_dir or "", default_name)
         path, _ = QFileDialog.getSaveFileName(self, caption, default_path, file_filter)
@@ -1032,20 +1113,33 @@ class MainWindow(QMainWindow):
             return None
         return os.path.dirname(path), os.path.basename(path)
 
+    def _exportable_mask(self):
+        """Active points that remained valid for every frame in the tracked range."""
+        result = self.state.result
+        active = self.state.active_mask
+        if result is None or active is None:
+            return None
+        return active & np.all(result.status_fw == 1, axis=0)
+
     def _export(self) -> None:
         target = self._export_target("coords.npy", "Export coordinates", "NumPy array (*.npy)")
         if target is None:
             return
         out_dir, filename = target
         result = self.state.result
-        coords_path, seq_path, shape = export(
-            result.coords_fw,
-            self.state.active_mask,
-            result.reference_index,
-            result.last_index,
-            out_dir,
-            filename,
-        )
+        export_mask = self._exportable_mask()
+        try:
+            coords_path, seq_path, shape = export(
+                result.coords_fw,
+                export_mask,
+                result.reference_index,
+                result.last_index,
+                out_dir,
+                filename,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
         self.statusBar().showMessage(
             f"Exported {shape[1]} points x {shape[0]} frames to "
             f"{os.path.basename(coords_path)} + sequence.txt",
@@ -1060,17 +1154,22 @@ class MainWindow(QMainWindow):
             return
         out_dir, filename = target
         result = self.state.result
+        export_mask = self._exportable_mask()
         frame_names = [
             os.path.basename(self.state.sequence.paths[g])
             for g in range(result.reference_index, result.last_index + 1)
         ]
-        csv_path, shape = export_csv(
-            result.coords_fw,
-            self.state.active_mask,
-            frame_names,
-            out_dir,
-            filename,
-        )
+        try:
+            csv_path, shape = export_csv(
+                result.coords_fw,
+                export_mask,
+                frame_names,
+                out_dir,
+                filename,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
         self.statusBar().showMessage(
             f"Exported {shape[1]} points x {shape[0]} frames to "
             f"{os.path.basename(csv_path)}",
@@ -1116,6 +1215,7 @@ class MainWindow(QMainWindow):
             lk_params=s.lk_params,
             shi_tomasi_params=s.shi_tomasi_params,
             grid_params=s.grid_params,
+            sequence_fingerprint=s.sequence.fingerprint,
         )
 
     def load_trackers_from(self, path):
@@ -1131,6 +1231,13 @@ class MainWindow(QMainWindow):
             raise ValueError(
                 f"This tracker file is for a {bundle['total_images']}-frame sequence, but the "
                 f"open sequence has {self.state.total_images} frames."
+            )
+        expected = bundle.get("sequence_fingerprint")
+        actual = self.state.sequence.fingerprint
+        if expected is not None and actual is not None and expected != actual:
+            raise ValueError(
+                "This tracker file belongs to a different image sequence. The frame count "
+                "matches, but the ordered image-content fingerprint does not."
             )
         self._apply_loaded_trackers(bundle)
         return bundle
@@ -1149,7 +1256,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.save_trackers_to(path)
-        except OSError as exc:
+        except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
         where = "with tracking" if s.result is not None else "reference points only"
@@ -1202,9 +1309,9 @@ class MainWindow(QMainWindow):
         self._preview_keep = None
         self.canvas.set_preview_mask(None)
 
-        # Indices: clamp to the open sequence so the slider invariant holds even for a bad file.
-        s.reference_index = max(0, min(bundle["reference_index"], s.total_images - 1))
-        s.last_index = max(s.reference_index, min(bundle["last_index"], s.total_images - 1))
+        # tracker_io has already validated the complete frame-range invariant.
+        s.reference_index = bundle["reference_index"]
+        s.last_index = bundle["last_index"]
         s.set_current(bundle["current_index"])
 
         # ROI (toggle off, mirroring _finish_roi_definition).
@@ -1226,9 +1333,9 @@ class MainWindow(QMainWindow):
             s.active_mask = None
 
         # Parameters that produced this session (merged over built-ins, like ProjectState).
-        s.lk_params = {**DEFAULT_LK, **bundle["lk_params"]}
-        s.shi_tomasi_params = {**DEFAULT_SHI_TOMASI, **bundle["shi_tomasi_params"]}
-        s.grid_params = {**DEFAULT_GRID, **bundle["grid_params"]}
+        s.lk_params = validate_lk(bundle["lk_params"])
+        s.shi_tomasi_params = validate_shi_tomasi(bundle["shi_tomasi_params"])
+        s.grid_params = validate_grid(bundle["grid_params"])
 
         self._configure_sliders()  # safe: LabeledSlider.setValue blocks signals
         self.canvas.refresh()
@@ -1245,6 +1352,8 @@ class MainWindow(QMainWindow):
             msg = f"Loaded {s.result.n_points} points, tracked over {s.result.n_frames} frames."
         else:
             msg = f"Loaded {len(s.features)} reference points."
+        if bundle.get("sequence_fingerprint") is None:
+            msg += " Legacy v1 file: sequence identity could not be verified."
         self.statusBar().showMessage(msg, 6000)
 
     # ---- tool enablement ------------------------------------------------
@@ -1272,7 +1381,8 @@ class MainWindow(QMainWindow):
         self.run_tracking_action.setEnabled(has_features)
         self.clear_tracking_action.setEnabled(has_result)
         self.cleanup_action.setEnabled(has_result)
-        can_export = has_result and bool(self.state.active_mask.any())
+        export_mask = self._exportable_mask() if has_result else None
+        can_export = export_mask is not None and bool(export_mask.any())
         self.export_action.setEnabled(can_export)
         self.export_toolbar_action.setEnabled(can_export)
         # Save needs seed points; Load overlays onto any open sequence.

@@ -81,7 +81,7 @@ class MtsUniaxialWindow(QWidget):
         self.pstate = MtsProjectState()
         self._syncing = False     # True while pushing state -> widgets (suppresses handlers)
         self._loading = False     # True while we drive ctx.load_sequence (ignore our own signal)
-        self._connected = False   # whether we're connected to ctx.signals (toggled on show/close)
+        self._connected = False   # signal subscription lives for the cached instance's lifetime
         self._root_candidate = None
 
         # Lazily-computed per-frame kinematics (invalidated by mask/result/reference changes), and
@@ -126,6 +126,7 @@ class MtsUniaxialWindow(QWidget):
             self._set_root_candidate(last_root)
 
         self._update_gating()
+        self._connect_signals()
 
     # ----------------------------------------------------------------- section builders
     def _build_load_section(self) -> QGroupBox:
@@ -146,8 +147,7 @@ class MtsUniaxialWindow(QWidget):
 
         form = QFormLayout()
         self.images_edit = QLineEdit(_DEFAULT_IMAGES_SUBDIR)
-        img_browse = QPushButton("…")
-        img_browse.setFixedWidth(28)
+        img_browse = QPushButton("...")
         img_browse.clicked.connect(self._on_browse_images)
         img_row = QHBoxLayout()
         img_row.addWidget(self.images_edit, 1)
@@ -155,8 +155,7 @@ class MtsUniaxialWindow(QWidget):
         form.addRow("Images folder:", img_row)
 
         self.sensor_edit = QLineEdit(_DEFAULT_SENSOR_REL)
-        sen_browse = QPushButton("…")
-        sen_browse.setFixedWidth(28)
+        sen_browse = QPushButton("...")
         sen_browse.clicked.connect(self._on_browse_sensor)
         sen_row = QHBoxLayout()
         sen_row.addWidget(self.sensor_edit, 1)
@@ -550,6 +549,11 @@ class MtsUniaxialWindow(QWidget):
         logs = sorted(glob.glob(os.path.join(images_dir, "*.log")))
         return logs[0] if logs else None
 
+    def _wipe_artifacts(self, root: str, filenames) -> None:
+        failures = project_io.wipe_files(project_io.project_dir(root), list(filenames))
+        if failures:
+            self.ctx.status("Could not remove stale artifact(s): " + "; ".join(failures), 8000)
+
     def _fresh_load(self, root, images_dir, sensor_path, log_path, image_log, sensor, ordered) -> None:
         st = MtsProjectState()
         st.root, st.images_dir, st.sensor_file, st.log_path = root, images_dir, sensor_path, log_path
@@ -562,25 +566,36 @@ class MtsUniaxialWindow(QWidget):
         st.material_thickness = self._read_float(self.thickness_edit, st.material_thickness)
         st.incompressible = self.incompressible_chk.isChecked()
         st.completed_through = int(Step.CROP)  # channel + crop have valid defaults
-        # Persist the new project to disk BEFORE swapping the core sequence, so an I/O failure
-        # aborts cleanly instead of leaving the loaded sequence pointing at a half-wiped project
-        # (wipe + save only read `st`, never the core state).
+        # Validate and install the sequence before touching an existing on-disk project. A corrupt
+        # candidate therefore cannot wipe a resumable project. If persistence later fails, the
+        # successfully loaded experiment remains usable in-memory and the user gets a clear warning.
+        self._loading = True
         try:
-            project_io.wipe_files(project_io.project_dir(root), _ALL_FILES)  # clear stale project
+            loaded = self.ctx.load_sequence(ordered, root)
+        finally:
+            self._loading = False
+        if not loaded:
+            self.ctx.status("Image validation failed; the existing MTS project was left untouched.")
+            return
+        self.pstate = st
+
+        try:
+            self._wipe_artifacts(root, _ALL_FILES)  # clear stale project
             project_io.save_load(st)
             project_io.save_channel(st)
             project_io.save_crop(st)
         except OSError as exc:
-            QMessageBox.critical(self, "Save failed",
-                                 f"Could not write the project files:\n\n{exc}")
-            return
+            QMessageBox.critical(
+                self,
+                "Save failed",
+                "The experiment is loaded in memory, but its project files could not be "
+                f"written:\n\n{exc}",
+            )
 
-        self.pstate = st
-        self._loading = True
-        self.ctx.load_sequence(ordered, root)
-        self._loading = False
-
-        self.ctx.save_settings({"last_root": root})
+        try:
+            self.ctx.save_settings({"last_root": root})
+        except OSError as exc:
+            self.ctx.status(f"Loaded experiment, but could not remember its folder: {exc}")
 
         self._sync_widgets_from_state()
         self._update_gating()
@@ -588,10 +603,15 @@ class MtsUniaxialWindow(QWidget):
 
     def _adopt_state(self, st: MtsProjectState) -> None:
         """Take over a resumed state: load the sequence and re-apply the frame range."""
-        self.pstate = st
         self._loading = True
-        self.ctx.load_sequence(st.ordered_paths, st.root)
-        self._loading = False
+        try:
+            loaded = self.ctx.load_sequence(st.ordered_paths, st.root)
+        finally:
+            self._loading = False
+        if not loaded:
+            self.ctx.status("Could not resume MTS project: its image sequence failed validation.")
+            return
+        self.pstate = st
         if st.done(Step.REFERENCE) and st.ref_image_global is not None:
             total = self.ctx.n_total_images
             self.ctx.set_last_frame(total - 1)
@@ -600,7 +620,10 @@ class MtsUniaxialWindow(QWidget):
             self.ctx.set_current_frame(int(st.ref_image_global))
             if st.done(Step.TRACK):
                 self._restore_trackers(st)
-        self.ctx.save_settings({"last_root": st.root})
+        try:
+            self.ctx.save_settings({"last_root": st.root})
+        except OSError as exc:
+            self.ctx.status(f"Resumed project, but could not remember its folder: {exc}")
         self._sync_widgets_from_state()
         self._update_gating()
         self.ctx.status("Resumed MTS Uniaxial project.")
@@ -632,9 +655,12 @@ class MtsUniaxialWindow(QWidget):
         st.force_channel = self.force_box.currentData()
         st.offset_ms = float(self.offset_spin.value())
         files = st.invalidate_from(Step.REFERENCE)  # offset/channel feed the reference, not the crop
-        project_io.wipe_files(project_io.project_dir(st.root), files)
+        self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.CROP)
-        project_io.save_channel(st)
+        try:
+            project_io.save_channel(st)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", f"Could not save channel settings:\n\n{exc}")
         self._refresh_crop_plot()
         self._refresh_reference_plot()
         self._sync_reference_widgets()
@@ -654,9 +680,12 @@ class MtsUniaxialWindow(QWidget):
                 self._set_slider(self.crop_lo, lo)
         st.crop_start, st.crop_end = lo, hi
         files = st.invalidate_from(Step.REFERENCE)
-        project_io.wipe_files(project_io.project_dir(st.root), files)
+        self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.CROP)
-        project_io.save_crop(st)
+        try:
+            project_io.save_crop(st)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", f"Could not save crop settings:\n\n{exc}")
         self._reset_ref_window(lo, hi)  # the search sub-window lives inside the new crop
         self._update_crop_labels()
         self._refresh_crop_plot()
@@ -731,9 +760,16 @@ class MtsUniaxialWindow(QWidget):
         st.zero_force = float(force_img[ref_global])
 
         files = st.invalidate_from(Step.TRACK)  # a new reference invalidates tracking/export
-        project_io.wipe_files(project_io.project_dir(st.root), files)
+        self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.REFERENCE)
-        project_io.save_reference(st)
+        try:
+            project_io.save_reference(st)
+        except OSError as exc:
+            st.invalidate_from(Step.REFERENCE)
+            QMessageBox.critical(self, "Save failed", f"Could not save the reference:\n\n{exc}")
+            self._sync_reference_widgets()
+            self._update_gating()
+            return
 
         # Drive the core: open the range fully, then set reference (clears ROI), then last.
         total = self.ctx.n_total_images
@@ -761,23 +797,20 @@ class MtsUniaxialWindow(QWidget):
             return
         st = self.pstate
         if st.done(Step.REFERENCE):
-            pdir = project_io.project_dir(st.root)
             if self.ctx.has_result:
                 files = st.invalidate_from(Step.EXPORT)  # any new/changed result voids a stale export
-                project_io.wipe_files(pdir, files)
+                self._wipe_artifacts(st.root, files)
                 # Persist the reloadable tracking result (the TRACK artifact) plus the manifest, so
                 # resume reaches TRACK and reinstalls it. Only mark TRACK once the file is written.
-                try:
-                    self.ctx.save_trackers(os.path.join(pdir, "trackers.npz"))
-                    st.completed_through = int(Step.TRACK)
-                    project_io.save_manifest(st)
-                except OSError as exc:
-                    self.ctx.status(f"Could not save trackers: {exc}")
+                self._persist_trackers()
             else:
                 # Result cleared: drop the saved trackers + the now-orphaned export.
                 files = st.invalidate_from(Step.TRACK)
-                project_io.wipe_files(pdir, files)
-                project_io.save_manifest(st)
+                self._wipe_artifacts(st.root, files)
+                try:
+                    project_io.save_manifest(st)
+                except OSError as exc:
+                    self.ctx.status(f"Could not update the MTS project manifest: {exc}")
         self._invalidate_kinematics()  # new/cleared result → recompute on next access
         self._refresh_outlier_preview()  # active set / result changed → re-judge the preview
         self._update_gating()
@@ -785,10 +818,34 @@ class MtsUniaxialWindow(QWidget):
     def _on_mask_changed(self) -> None:
         if self._loading:  # mask_changed also fires while reinstalling a saved result
             return
-        # The active set changed (our RANSAC, or the main window's Cleanup). Recompute kinematics.
+        # The active set changed (our RANSAC, or the main window's Cleanup). It is part of the
+        # reloadable tracking artifact, and any previous export now contains the wrong point set.
+        st = self.pstate
+        if st.done(Step.REFERENCE) and self.ctx.has_result:
+            self._wipe_artifacts(st.root, st.invalidate_from(Step.EXPORT))
+            self._persist_trackers()
         self._invalidate_kinematics()
         self._refresh_outlier_preview()  # re-judge the preview on the new active set
         self._update_gating()
+
+    def _persist_trackers(self) -> None:
+        """Atomically persist the live core result/mask or degrade to REFERENCE on failure."""
+        st = self.pstate
+        pdir = project_io.project_dir(st.root)
+        path = os.path.join(pdir, "trackers.npz")
+        try:
+            self.ctx.save_trackers(path)
+            st.completed_through = int(Step.TRACK)
+            project_io.save_manifest(st)
+        except (OSError, ValueError) as exc:
+            # An old tracking file would be more dangerous than no resume at all.
+            self._wipe_artifacts(st.root, ["trackers.npz"])
+            st.completed_through = int(Step.REFERENCE)
+            try:
+                project_io.save_manifest(st)
+            except OSError:
+                pass
+            self.ctx.status(f"Could not save trackers: {exc}")
 
     def _on_export(self) -> None:
         st = self.pstate
@@ -798,7 +855,19 @@ class MtsUniaxialWindow(QWidget):
         if coords is None or coords.shape[1] == 0:
             QMessageBox.warning(self, "Nothing to export", "There are no active points to export.")
             return
-        point_ids = self.ctx.point_indices()
+        status = self.ctx.track_status(active_only=True)
+        fully_valid = (
+            np.all(status == 1, axis=0)
+            if status is not None
+            else np.ones(coords.shape[1], dtype=bool)
+        )
+        if not fully_valid.any():
+            QMessageBox.warning(
+                self, "Nothing to export", "There are no active points valid for every frame."
+            )
+            return
+        coords = coords[:, fully_valid, :]
+        point_ids = self.ctx.point_indices()[fully_valid]
         sen, log = st.sensor, st.image_log
         stms = sync.sensor_time_ms(sen)
         disp_img, _ = sync.interp_to_images(log.time_ms, stms, sync.composite_displacement(sen), st.offset_ms)
@@ -820,10 +889,9 @@ class MtsUniaxialWindow(QWidget):
             ])
         try:
             paths = project_io.save_export(st, coords, point_ids, rows)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
-        st.completed_through = int(Step.EXPORT)
         self._update_gating()
         names = ", ".join(os.path.basename(p) for p in paths)
         self.export_info.setText(f"Exported {coords.shape[1]} points × {self.ctx.frame_count} frames "
@@ -900,7 +968,14 @@ class MtsUniaxialWindow(QWidget):
         st.incompressible = self.incompressible_chk.isChecked()
         self._update_a0_label()
         if st.done(Step.LOAD):
-            project_io.save_manifest(st)  # persist — but NOT a Step, so no invalidate_from
+            # Material parameters feed measures.csv. Remove that derived file rather than leaving
+            # a stale stress table beside a manifest containing the new specimen dimensions.
+            self._wipe_artifacts(st.root, ["measures.csv"])
+            self.measures_info.setText("Material parameters changed; re-export measures.")
+            try:
+                project_io.save_manifest(st)  # persist — but NOT a Step, so tracking stays valid
+            except OSError as exc:
+                self.ctx.status(f"Could not save material parameters: {exc}")
         # Geometry (λ/ε/directions) is independent of the cross-section, so the kinematics cache
         # stays valid; only the stress curves and the ε₂-incompressible overlay need a redraw.
         # The Cauchy (true-stress) curve σ=λ₁·P is valid only under incompressibility, so if the
@@ -917,7 +992,7 @@ class MtsUniaxialWindow(QWidget):
         """Parse a positive float from a line edit; revert to ``default`` (rewritten) on bad input."""
         try:
             val = float(edit.text().strip())
-            if val <= 0:
+            if not np.isfinite(val) or val <= 0:
                 raise ValueError
         except ValueError:
             edit.setText(f"{default:g}")
@@ -1129,7 +1204,7 @@ class MtsUniaxialWindow(QWidget):
             rows.append([self._fmt_cell(k, values[k]) for k in keys])
         try:
             path = project_io.save_measures(st, header, rows)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
         self.measures_info.setText(
@@ -1323,15 +1398,42 @@ class MtsUniaxialWindow(QWidget):
             self.export_info.setText(f"{self.ctx.n_active} points × {self.ctx.frame_count} frames ready.")
 
     # ----------------------------------------------------------------- lifecycle
-    def showEvent(self, event) -> None:
-        # Connect on show / disconnect on close (and re-connect on reopen) so a cached window
-        # always reacts to the app. Guarded so repeated shows don't double-connect.
-        super().showEvent(event)
+    def _connect_signals(self) -> None:
+        """Observe project-integrity changes for the plugin instance's full lifetime."""
+        if self._connected:
+            return
+        self.ctx.signals.result_changed.connect(self._on_result_changed)
+        self.ctx.signals.sequence_changed.connect(self._on_sequence_changed)
+        self.ctx.signals.mask_changed.connect(self._on_mask_changed)
+        self._connected = True
+
+    def _disconnect_signals(self) -> None:
         if not self._connected:
-            self.ctx.signals.result_changed.connect(self._on_result_changed)
-            self.ctx.signals.sequence_changed.connect(self._on_sequence_changed)
-            self.ctx.signals.mask_changed.connect(self._on_mask_changed)
-            self._connected = True
+            return
+        for sig, slot in (
+            (self.ctx.signals.result_changed, self._on_result_changed),
+            (self.ctx.signals.sequence_changed, self._on_sequence_changed),
+            (self.ctx.signals.mask_changed, self._on_mask_changed),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        self._connected = False
+
+    def dispose(self) -> None:
+        """Final teardown used on plugin reload; ordinary window closes keep state observation."""
+        self._disconnect_signals()
+        self._close_child_windows()
+        if self._outlier_overlay_on:
+            self.ctx.remove_overlay(self._paint_outliers)
+            self._outlier_overlay_on = False
+
+    def showEvent(self, event) -> None:
+        # Connections normally live for the cached instance's full lifetime; the idempotent call
+        # also makes a manually disposed/reused development window recover safely.
+        super().showEvent(event)
+        self._connect_signals()
         # Window is cached and reused: re-register the outlier overlay if it was left checked.
         if self.show_outliers_chk.isChecked() and not self._outlier_overlay_on:
             self.ctx.add_overlay(self._paint_outliers)
@@ -1344,15 +1446,4 @@ class MtsUniaxialWindow(QWidget):
         if self._outlier_overlay_on:
             self.ctx.remove_overlay(self._paint_outliers)
             self._outlier_overlay_on = False  # checkbox state kept, so reopen restores the preview
-        if self._connected:
-            for sig, slot in (
-                (self.ctx.signals.result_changed, self._on_result_changed),
-                (self.ctx.signals.sequence_changed, self._on_sequence_changed),
-                (self.ctx.signals.mask_changed, self._on_mask_changed),
-            ):
-                try:
-                    sig.disconnect(slot)
-                except (TypeError, RuntimeError):
-                    pass
-            self._connected = False
         super().closeEvent(event)

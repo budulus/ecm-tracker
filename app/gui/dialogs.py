@@ -1,12 +1,14 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QSlider,
     QSpinBox,
     QWidget,
@@ -24,7 +26,11 @@ def _add_buttons(dialog, form, section_getter, section_name):
     save_btn = buttons.addButton("Save as defaults", QDialogButtonBox.ButtonRole.ActionRole)
 
     def _save():
-        settings.update_section(section_name, section_getter())
+        try:
+            settings.update_section(section_name, section_getter())
+        except OSError as exc:
+            QMessageBox.critical(dialog, "Save failed", str(exc))
+            return
         save_btn.setText("Saved ✓")
         QTimer.singleShot(1500, lambda: save_btn.setText("Save as defaults"))
 
@@ -114,9 +120,11 @@ class TrackerDialog(QDialog):
         self.epsilon.setSingleStep(0.001)
         self.epsilon.setValue(float(params["epsilon"]))
 
-        self.flags = QSpinBox()
-        self.flags.setRange(0, 3)
-        self.flags.setValue(int(params["flags"]))
+        self.flags = QComboBox()
+        self.flags.addItem("Standard LK error", 0)
+        self.flags.addItem("Minimum eigenvalue", 8)
+        selected_flag = self.flags.findData(int(params["flags"]))
+        self.flags.setCurrentIndex(max(0, selected_flag))
 
         self.min_eig = QDoubleSpinBox()
         self.min_eig.setDecimals(6)
@@ -129,7 +137,7 @@ class TrackerDialog(QDialog):
         form.addRow("maxLevel", self.max_level)
         form.addRow("criteria max iter", self.max_iter)
         form.addRow("criteria epsilon", self.epsilon)
-        form.addRow("flags", self.flags)
+        form.addRow("error measure", self.flags)
         form.addRow("minEigThreshold", self.min_eig)
 
         _add_buttons(self, form, self.values, "lk")
@@ -140,7 +148,7 @@ class TrackerDialog(QDialog):
             max_level=self.max_level.value(),
             max_iter=self.max_iter.value(),
             epsilon=self.epsilon.value(),
-            flags=self.flags.value(),
+            flags=int(self.flags.currentData()),
             min_eig_threshold=self.min_eig.value(),
         )
 

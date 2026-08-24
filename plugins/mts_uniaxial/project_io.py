@@ -17,13 +17,19 @@ from typing import List, Optional
 
 import numpy as np
 
+from app.core.atomic_io import atomic_open, atomic_save_npy
+
 from .parsers import parse_image_log, parse_sensor, resolve_image_paths
 from .state import MtsProjectState, Step
-from .sync import OFFSET_CONVENTION
+from .sync import FORCE_CHANNELS, OFFSET_CONVENTION
 
 SCHEMA_VERSION = 1
 PROJECT_DIRNAME = "mts_uniaxial_project"
 MANIFEST = "manifest.json"
+
+
+def _reject_nonfinite(token):
+    raise ValueError(f"Non-finite JSON number {token!r} is not supported")
 
 
 def project_dir(root: str) -> str:
@@ -36,26 +42,31 @@ def _ensure(project_path: str) -> None:
 
 def _read_json(project_path: str, name: str) -> Optional[dict]:
     try:
-        with open(os.path.join(project_path, name)) as f:
-            return json.load(f)
+        with open(os.path.join(project_path, name), encoding="utf-8") as f:
+            return json.load(f, parse_constant=_reject_nonfinite)
     except (OSError, ValueError):
         return None
 
 
 def _write_json(project_path: str, name: str, data: dict) -> None:
     _ensure(project_path)
-    with open(os.path.join(project_path, name), "w") as f:
-        json.dump(data, f, indent=2)
+    with atomic_open(os.path.join(project_path, name)) as f:
+        json.dump(data, f, indent=2, allow_nan=False)
+        f.write("\n")
 
 
-def wipe_files(project_path: str, filenames: List[str]) -> None:
-    """Delete the given artifact files if present (downstream-invalidation wipe)."""
+def wipe_files(project_path: str, filenames: List[str]) -> List[str]:
+    """Delete artifacts and return human-readable failures; missing files are successful no-ops."""
+    failures = []
     for name in filenames:
         path = os.path.join(project_path, name)
         try:
             os.remove(path)
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as exc:
+            failures.append(f"{name}: {exc}")
+    return failures
 
 
 # --------------------------------------------------------------------------- manifest
@@ -106,13 +117,13 @@ def save_load(state: MtsProjectState) -> None:
     """Write the LOAD snapshots (image log + raw sensor) and the manifest."""
     pdir = project_dir(state.root)
     _ensure(pdir)
-    with open(os.path.join(pdir, "image_log.csv"), "w", newline="") as f:
+    with atomic_open(os.path.join(pdir, "image_log.csv"), newline="") as f:
         w = csv.writer(f)
         w.writerow(["filename", "time_ms", "path"])
         for name, t, path in zip(state.image_log.filenames, state.image_log.time_ms, state.ordered_paths):
             w.writerow([name, f"{t:.3f}", path])
     s = state.sensor
-    with open(os.path.join(pdir, "sensor_raw.csv"), "w", newline="") as f:
+    with atomic_open(os.path.join(pdir, "sensor_raw.csv"), newline="") as f:
         w = csv.writer(f)
         w.writerow(["time_s", "disp_a", "force_a", "disp_b", "force_b"])
         for i in range(s.n_samples):
@@ -152,15 +163,21 @@ def save_export(state: MtsProjectState, coords: np.ndarray, point_ids: np.ndarra
     coords_path = os.path.join(pdir, "tracked_coords.npy")
     ids_path = os.path.join(pdir, "point_indices.npy")
     aligned_path = os.path.join(pdir, "aligned_data.csv")
-    np.save(coords_path, coords.astype(np.float32))
-    np.save(ids_path, point_ids.astype(np.int64))
-    with open(aligned_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["frame_global", "image_time_ms", "displacement", "force", "in_range"])
-        for row in aligned_rows:
-            g, t, d, force, in_range = row
-            w.writerow([int(g), f"{t:.3f}", f"{d:.6g}", f"{force:.6g}", int(in_range)])
-    save_manifest(state)
+    previous_step = state.completed_through
+    try:
+        atomic_save_npy(coords_path, coords.astype(np.float32))
+        atomic_save_npy(ids_path, point_ids.astype(np.int64))
+        with atomic_open(aligned_path, newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["frame_global", "image_time_ms", "displacement", "force", "in_range"])
+            for row in aligned_rows:
+                g, t, d, force, in_range = row
+                w.writerow([int(g), f"{t:.3f}", f"{d:.6g}", f"{force:.6g}", int(in_range)])
+        state.completed_through = int(Step.EXPORT)
+        save_manifest(state)
+    except Exception:
+        state.completed_through = previous_step
+        raise
     return [coords_path, ids_path, aligned_path]
 
 
@@ -173,7 +190,7 @@ def save_measures(state: MtsProjectState, header: List[str], rows: List[list]) -
     pdir = project_dir(state.root)
     _ensure(pdir)
     path = os.path.join(pdir, "measures.csv")
-    with open(path, "w", newline="") as f:
+    with atomic_open(path, newline="") as f:
         w = csv.writer(f)
         w.writerow(header)
         w.writerows(rows)
@@ -193,7 +210,7 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     """
     pdir = project_dir(root)
     manifest = _read_json(pdir, MANIFEST)
-    if manifest is None:
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
         return None
 
     images_dir = manifest.get("images_dir")
@@ -207,11 +224,17 @@ def load_project(root: str) -> Optional[MtsProjectState]:
         return None
 
     st = MtsProjectState()
-    st.root = manifest.get("root", root)
+    # The selected folder is authoritative. A copied/moved project must never keep writing to the
+    # old absolute root recorded in its manifest.
+    st.root = root
     st.images_dir, st.sensor_file, st.log_path = images_dir, sensor_file, log_path
     st.image_log, st.sensor, st.ordered_paths = image_log, sensor, ordered
     st.completed_through = int(Step.LOAD)
-    stored = int(manifest.get("completed_through", Step.LOAD))
+    try:
+        stored = int(manifest.get("completed_through", Step.LOAD))
+    except (TypeError, ValueError):
+        return None
+    stored = max(int(Step.LOAD), min(stored, int(Step.EXPORT)))
 
     # Material parameters are not step-gated — restore them unconditionally (old manifests that
     # predate them fall back to the defaults). Guard the coercions so a malformed or explicit-null
@@ -219,33 +242,67 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     try:
         st.material_width = float(manifest.get("material_width", 10.0))
         st.material_thickness = float(manifest.get("material_thickness", 0.5))
-        st.incompressible = bool(manifest.get("incompressible", True))
+        incompressible = manifest.get("incompressible", True)
+        if (
+            not np.isfinite(st.material_width)
+            or not np.isfinite(st.material_thickness)
+            or st.material_width <= 0
+            or st.material_thickness <= 0
+            or not isinstance(incompressible, bool)
+        ):
+            return None
+        st.incompressible = incompressible
     except (ValueError, TypeError):
         return None
 
     sp = _read_json(pdir, "sync_params.json")
-    if stored >= Step.CHANNEL and sp:
-        st.force_channel = sp.get("force_channel", "average")
-        st.offset_ms = float(sp.get("offset_ms", 0.0))
-        st.completed_through = int(Step.CHANNEL)
+    if stored >= Step.CHANNEL and isinstance(sp, dict):
+        try:
+            channel = sp.get("force_channel", "average")
+            offset = float(sp.get("offset_ms", 0.0))
+        except (TypeError, ValueError):
+            channel, offset = None, np.nan
+        if channel in FORCE_CHANNELS and np.isfinite(offset):
+            st.force_channel = channel
+            st.offset_ms = offset
+            st.completed_through = int(Step.CHANNEL)
 
     cp = _read_json(pdir, "crop.json")
-    if st.done(Step.CHANNEL) and stored >= Step.CROP and cp:
-        cs, ce = cp.get("crop_start"), cp.get("crop_end")
-        if cs is not None and ce is not None and 0 <= cs <= ce < sensor.n_samples:
-            st.crop_start, st.crop_end = int(cs), int(ce)
+    if st.done(Step.CHANNEL) and stored >= Step.CROP and isinstance(cp, dict):
+        try:
+            cs, ce = int(cp["crop_start"]), int(cp["crop_end"])
+        except (KeyError, TypeError, ValueError):
+            cs = ce = -1
+        if 0 <= cs <= ce < sensor.n_samples:
+            st.crop_start, st.crop_end = cs, ce
             st.completed_through = int(Step.CROP)
 
     rf = _read_json(pdir, "reference.json")
-    if st.done(Step.CROP) and stored >= Step.REFERENCE and rf:
-        st.ref_algorithm = rf.get("ref_algorithm")
-        st.ref_sensor_index = rf.get("ref_sensor_index")
-        st.ref_image_global = rf.get("ref_image_global")
-        st.last_image_global = rf.get("last_image_global")
-        st.zero_disp = rf.get("zero_disp")
-        st.zero_force = rf.get("zero_force")
-        if (st.ref_image_global is not None and st.last_image_global is not None
-                and 0 <= st.ref_image_global <= st.last_image_global < image_log.n_images):
+    if st.done(Step.CROP) and stored >= Step.REFERENCE and isinstance(rf, dict):
+        try:
+            ref_image = int(rf["ref_image_global"])
+            last_image = int(rf["last_image_global"])
+            sensor_index = rf.get("ref_sensor_index")
+            sensor_index = int(sensor_index) if sensor_index is not None else None
+            zero_disp = float(rf["zero_disp"])
+            zero_force = float(rf["zero_force"])
+        except (KeyError, TypeError, ValueError):
+            ref_image = last_image = -1
+            sensor_index = None
+            zero_disp = zero_force = np.nan
+        valid_sensor = sensor_index is None or 0 <= sensor_index < sensor.n_samples
+        if (
+            0 <= ref_image <= last_image < image_log.n_images
+            and valid_sensor
+            and np.isfinite(zero_disp)
+            and np.isfinite(zero_force)
+        ):
+            st.ref_algorithm = rf.get("ref_algorithm")
+            st.ref_sensor_index = sensor_index
+            st.ref_image_global = ref_image
+            st.last_image_global = last_image
+            st.zero_disp = zero_disp
+            st.zero_force = zero_force
             st.completed_through = int(Step.REFERENCE)
 
     # The core tracking result is reinstalled by the plugin (it needs the app handle); here we

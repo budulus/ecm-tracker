@@ -82,15 +82,22 @@ def compute_metrics(
 
     max_err = np.full(p, np.inf, dtype=np.float32)
     mean_err = np.full(p, np.inf, dtype=np.float32)
+    if n == 1:
+        max_err.fill(0.0)
+        mean_err.fill(0.0)
     for j in range(p):
-        valid = sf[:, j] == 1
+        # Frame zero is a seed, not an LK transition; its synthetic zero error must not dilute the
+        # mean. A one-frame result is handled above as the legitimate no-transition case.
+        valid = sf[1:, j] == 1
         if valid.any():
-            e = ef[valid, j]
+            e = ef[1:, j][valid]
             max_err[j] = float(e.max())
             mean_err[j] = float(e.mean())
 
     # max single-frame displacement over consecutive frames where both endpoints are valid
-    step = np.full(p, np.inf, dtype=np.float32)
+    # A valid one-frame range has no movement, so its maximum step is exactly zero. Starting at
+    # +inf is still useful for multi-frame points that never have a valid consecutive pair.
+    step = np.zeros(p, dtype=np.float32) if n < 2 else np.full(p, np.inf, dtype=np.float32)
     if n >= 2:
         d = np.linalg.norm(cf[1:] - cf[:-1], axis=2)  # (N-1, P)
         valid_pair = (sf[1:] == 1) & (sf[:-1] == 1)
@@ -162,16 +169,27 @@ def thresholds_to_dict(thr: Thresholds) -> dict:
 
 def thresholds_from_dict(data: dict) -> Thresholds:
     """Rebuild Thresholds from persisted data, tolerant of missing/partial keys."""
+    data = data if isinstance(data, dict) else {}
     thr = Thresholds()
     for name in BAND_METRICS:
         d = data.get(name) or {}
+        d = d if isinstance(d, dict) else {}
+        try:
+            hi = float(d.get("hi", BAND_CAP))
+            cap = float(d.get("cap", BAND_CAP))
+        except (TypeError, ValueError):
+            hi = cap = BAND_CAP
+        if not np.isfinite(hi) or hi < 0:
+            hi = BAND_CAP
+        if not np.isfinite(cap) or cap <= 0:
+            cap = BAND_CAP
         setattr(
             thr,
             name,
             BandFilter(
                 enabled=bool(d.get("enabled", False)),
-                hi=float(d.get("hi", BAND_CAP)),
-                cap=float(d.get("cap", BAND_CAP)),
+                hi=hi,
+                cap=cap,
             ),
         )
     thr.drop_left_image = bool(data.get("drop_left_image", False))

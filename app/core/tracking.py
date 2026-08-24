@@ -20,20 +20,48 @@ ProgressCb = Callable[[int, int], bool]  # (done, total) -> cancel?
 
 
 def _cv_lk_kwargs(p: dict) -> dict:
+    required = set(DEFAULT_LK)
+    missing = sorted(required - set(p))
+    if missing:
+        raise ValueError(f"Missing LK parameter(s): {', '.join(missing)}")
+    try:
+        win_size = int(p["win_size"])
+        max_level = int(p["max_level"])
+        max_iter = int(p["max_iter"])
+        epsilon = float(p["epsilon"])
+        flags = int(p["flags"])
+        min_eig = float(p["min_eig_threshold"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("LK parameters must be numeric") from exc
+    if win_size < 3 or max_level < 0 or max_iter < 1 or epsilon <= 0 or min_eig < 0:
+        raise ValueError("LK parameters are outside their valid ranges")
+    if flags not in (0, cv2.OPTFLOW_LK_GET_MIN_EIGENVALS):
+        raise ValueError("LK flags must select standard error (0) or minimum-eigenvalue error (8)")
+    if not np.isfinite(epsilon) or not np.isfinite(min_eig):
+        raise ValueError("LK parameters must be finite")
     return dict(
-        winSize=(int(p["win_size"]), int(p["win_size"])),
-        maxLevel=int(p["max_level"]),
+        winSize=(win_size, win_size),
+        maxLevel=max_level,
         criteria=(
             cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
-            int(p["max_iter"]),
-            float(p["epsilon"]),
+            max_iter,
+            epsilon,
         ),
-        flags=int(p["flags"]),
-        minEigThreshold=float(p["min_eig_threshold"]),
+        flags=flags,
+        minEigThreshold=min_eig,
     )
 
 
-def _track_pass(get_gray, frame_order, seed_pts, lk_kwargs, progress, total, done0):
+def _track_pass(
+    get_gray,
+    frame_order,
+    seed_pts,
+    lk_kwargs,
+    progress,
+    total,
+    done0,
+    seed_valid=None,
+):
     """Run LK along `frame_order` (list of global indices). Results are stored at the
     *position within frame_order* (index 0 = the seed frame)."""
     n = len(frame_order)
@@ -43,7 +71,13 @@ def _track_pass(get_gray, frame_order, seed_pts, lk_kwargs, progress, total, don
     err = np.zeros((n, p), dtype=np.float32)
 
     coords[0] = seed_pts
-    status[0] = 1
+    alive = (
+        np.ones(p, dtype=bool)
+        if seed_valid is None
+        else np.asarray(seed_valid, dtype=bool).reshape(p).copy()
+    )
+    status[0] = alive.astype(np.uint8)
+    err[0, ~alive] = np.inf
 
     prev_gray = get_gray(frame_order[0])
     prev_pts = seed_pts.reshape(-1, 1, 2).astype(np.float32)
@@ -53,11 +87,37 @@ def _track_pass(get_gray, frame_order, seed_pts, lk_kwargs, progress, total, don
         nxt, st, er = cv2.calcOpticalFlowPyrLK(
             prev_gray, cur_gray, prev_pts, None, **lk_kwargs
         )
-        coords[i] = nxt.reshape(-1, 2)
-        status[i] = st.reshape(-1)
-        err[i] = er.reshape(-1)
+        # OpenCV's status describes only this one frame-to-frame transition. A point that has
+        # already been lost must never become valid again: its returned location is undefined and
+        # feeding that location into the next transition can create a plausible-looking "revived"
+        # track. Keep validity cumulative and freeze dead points at their last valid coordinate.
+        if nxt is None or st is None:
+            next_pts = coords[i - 1].copy()
+            step_valid = np.zeros(p, dtype=bool)
+            step_err = np.full(p, np.inf, dtype=np.float32)
+        else:
+            next_pts = np.asarray(nxt, dtype=np.float32).reshape(-1, 2)
+            step_valid = np.asarray(st).reshape(-1).astype(bool)
+            if next_pts.shape != (p, 2) or step_valid.shape != (p,):
+                raise ValueError("OpenCV returned an unexpected optical-flow result shape")
+            step_valid &= np.isfinite(next_pts).all(axis=1)
+            step_err = (
+                np.asarray(er, dtype=np.float32).reshape(-1)
+                if er is not None
+                else np.full(p, np.inf, dtype=np.float32)
+            )
+            if step_err.shape != (p,):
+                raise ValueError("OpenCV returned an unexpected optical-flow error shape")
+            step_err[~np.isfinite(step_err)] = np.inf
+
+        alive &= step_valid
+        next_pts[~alive] = coords[i - 1, ~alive]
+        step_err[~alive] = np.inf
+        coords[i] = next_pts
+        status[i] = alive.astype(np.uint8)
+        err[i] = step_err
         prev_gray = cur_gray
-        prev_pts = nxt  # carry forward predicted positions (failures flagged by status)
+        prev_pts = next_pts.reshape(-1, 1, 2)
         done += 1
         if progress is not None and progress(done, total):
             return None
@@ -67,6 +127,12 @@ def _track_pass(get_gray, frame_order, seed_pts, lk_kwargs, progress, total, don
 def _compute_fb_errors(coords_fw, coords_bw, status_fw, status_bw):
     diff = np.linalg.norm(coords_fw - coords_bw, axis=2)  # (N, P)
     valid = (status_fw == 1) & (status_bw == 1)  # (N, P)
+    if diff.shape[0] == 1:
+        zeros = np.zeros(diff.shape[1], dtype=np.float32)
+        return zeros, zeros.copy()
+    # The last frame is the backward seed, so its discrepancy is identically zero and carries no
+    # round-trip information. Including it would systematically bias every FB mean downward.
+    valid[-1] = False
     p = diff.shape[1]
     fb_mean = np.full(p, np.inf, dtype=np.float32)
     fb_max = np.full(p, np.inf, dtype=np.float32)
@@ -92,6 +158,10 @@ def track(
     coords_bw is reindexed so coords_bw[t] aligns with coords_fw[t] (cut 0 = reference).
     """
     seed_pts = np.asarray(seed_pts, dtype=np.float32).reshape(-1, 2)
+    if not 0 <= reference_index <= last_index < len(sequence):
+        raise ValueError("Tracking range is outside the loaded image sequence")
+    if seed_pts.shape[0] == 0 or not np.isfinite(seed_pts).all():
+        raise ValueError("Tracking requires at least one finite seed point")
     n = last_index - reference_index + 1
     lk_kwargs = _cv_lk_kwargs(lk_params)
     total = 2 * (n - 1)
@@ -108,7 +178,19 @@ def track(
     # Backward pass: seed from forward's last-frame positions, walk last -> reference.
     backward_order = list(range(last_index, reference_index - 1, -1))
     bw_seed = coords_fw[n - 1]
-    bw = _track_pass(get_gray, backward_order, bw_seed, lk_kwargs, progress_cb, total, done)
+    # A point that did not survive the complete forward pass has no trustworthy last-frame seed.
+    # Keep it invalid throughout the backward pass so FB metrics cannot be rescued by garbage.
+    bw_seed_valid = status_fw[n - 1].astype(bool)
+    bw = _track_pass(
+        get_gray,
+        backward_order,
+        bw_seed,
+        lk_kwargs,
+        progress_cb,
+        total,
+        done,
+        seed_valid=bw_seed_valid,
+    )
     if bw is None:
         return None
     coords_bw_rev, status_bw_rev, err_bw_rev, _ = bw

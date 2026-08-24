@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -298,7 +299,11 @@ class CleanupDialog(QDialog):
         self._apply_thresholds(self._defaults)
 
     def _on_save(self) -> None:
-        settings.update_section("cleanup", thresholds_to_dict(self.thresholds()))
+        try:
+            settings.update_section("cleanup", thresholds_to_dict(self.thresholds()))
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return
         self._defaults = self.thresholds()
         self._save_btn.setText("Saved ✓")
         QTimer.singleShot(1500, lambda: self._save_btn.setText("Save parameters"))

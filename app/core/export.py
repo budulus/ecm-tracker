@@ -3,6 +3,20 @@ import os
 
 import numpy as np
 
+from app.core.atomic_io import atomic_open, atomic_save_npy
+
+
+def _clean_coords(coords_fw, active_mask):
+    coords_fw = np.asarray(coords_fw)
+    active_mask = np.asarray(active_mask, dtype=bool)
+    if coords_fw.ndim != 3 or coords_fw.shape[2] != 2:
+        raise ValueError("Coordinates must have shape (frames, points, 2)")
+    if active_mask.shape != (coords_fw.shape[1],):
+        raise ValueError("Active mask length does not match the coordinate point axis")
+    if not np.isfinite(coords_fw[:, active_mask, :]).all():
+        raise ValueError("Selected export coordinates contain NaN or infinity")
+    return coords_fw[:, active_mask, :].astype(np.float32)
+
 
 def export(
     coords_fw: np.ndarray,
@@ -22,12 +36,12 @@ def export(
     if not filename.endswith(".npy"):
         filename += ".npy"
 
-    coords = coords_fw[:, active_mask, :].astype(np.float32)
+    coords = _clean_coords(coords_fw, active_mask)
     coords_path = os.path.join(out_dir, filename)
-    np.save(coords_path, coords)
+    atomic_save_npy(coords_path, coords)
 
     sequence_path = os.path.join(out_dir, "sequence.txt")
-    with open(sequence_path, "w") as f:
+    with atomic_open(sequence_path) as f:
         f.write(f"{reference_index} {last_index}\n")
 
     return coords_path, sequence_path, coords.shape
@@ -50,8 +64,10 @@ def export_csv(
     if not filename.endswith(".csv"):
         filename += ".csv"
 
-    coords = coords_fw[:, active_mask, :].astype(np.float32)  # (N, P_kept, 2)
+    coords = _clean_coords(coords_fw, active_mask)  # (N, P_kept, 2)
     n_frames, n_pts, _ = coords.shape
+    if len(frame_names) != n_frames:
+        raise ValueError("Frame-name count does not match the coordinate frame axis")
     flat = coords.reshape(n_frames, n_pts * 2)  # p0x,p0y,p1x,p1y,...
 
     header = ["filename"]
@@ -59,7 +75,7 @@ def export_csv(
         header += [f"p{p + 1}x", f"p{p + 1}y"]  # 1-based labels
 
     csv_path = os.path.join(out_dir, filename)
-    with open(csv_path, "w", newline="") as f:
+    with atomic_open(csv_path, newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         for i in range(n_frames):

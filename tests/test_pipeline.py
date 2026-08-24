@@ -110,7 +110,77 @@ def test_tracking_recovers_motion_and_fb():
     finite = np.isfinite(res.fb_mean_error)
     assert finite.sum() > 0.7 * res.n_points
     assert np.median(res.fb_mean_error[finite]) < 1.0
+    try:
+        res.coords_fw[0, 0, 0] = 0.0
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("TrackerResult arrays must be read-only")
     assert track(seq, 0, 11, seeds, DEFAULT_LK, progress_cb=lambda a, b: True) is None
+
+
+def test_tracking_failure_is_terminal():
+    """A failed point stays invalid and frozen even if a later LK call reports success."""
+    from unittest.mock import patch
+
+    from app.core.tracking import _track_pass, _cv_lk_kwargs
+
+    seed = np.array([[10.0, 10.0], [20.0, 20.0]], dtype=np.float32)
+    responses = [
+        (
+            np.array([[[999.0, 999.0]], [[21.0, 20.0]]], dtype=np.float32),
+            np.array([[0], [1]], dtype=np.uint8),
+            np.array([[1.0], [1.0]], dtype=np.float32),
+        ),
+        (
+            np.array([[[500.0, 500.0]], [[22.0, 20.0]]], dtype=np.float32),
+            np.ones((2, 1), dtype=np.uint8),
+            np.ones((2, 1), dtype=np.float32),
+        ),
+    ]
+    with patch("app.core.tracking.cv2.calcOpticalFlowPyrLK", side_effect=responses):
+        coords, status, errors, _done = _track_pass(
+            lambda _i: np.zeros((20, 20), dtype=np.uint8),
+            [0, 1, 2],
+            seed,
+            _cv_lk_kwargs(DEFAULT_LK),
+            None,
+            4,
+            0,
+        )
+    assert status[:, 0].tolist() == [1, 0, 0]
+    assert np.all(coords[:, 0] == seed[0])
+    assert np.isinf(errors[1:, 0]).all()
+    assert status[:, 1].tolist() == [1, 1, 1]
+
+
+def test_single_frame_distance_is_zero():
+    _, seq = _sequence(n=1)
+    seeds = np.array([[100.0, 100.0], [150.0, 120.0]], dtype=np.float32)
+    result = track(seq, 0, 0, seeds, DEFAULT_LK)
+    metrics = compute_metrics(result, None, seq.load_bgr(0).shape[:2])
+    assert np.array_equal(metrics.max_step, np.zeros(result.n_points, dtype=np.float32))
+
+    # Construction takes ownership of copied buffers; mutating a caller's source array cannot
+    # change a frozen result behind its back.
+    from app.models.tracker_result import TrackerResult
+
+    source = result.coords_fw.copy()
+    clone = TrackerResult(
+        reference_index=0,
+        last_index=0,
+        coords_fw=source,
+        status_fw=result.status_fw,
+        err_fw=result.err_fw,
+        coords_bw=result.coords_bw,
+        status_bw=result.status_bw,
+        err_bw=result.err_bw,
+        fb_mean_error=result.fb_mean_error,
+        fb_max_error=result.fb_max_error,
+        win_size=result.win_size,
+    )
+    source.fill(-1)
+    assert not np.array_equal(clone.coords_fw, source)
 
 
 def _metrics():
@@ -168,6 +238,22 @@ def test_settings_persistence():
         settings.update_section("grid", {"spacing_x": 15})
         assert settings.get_section("lk") == {"win_size": 31, "max_level": 2}
         assert settings.load_settings()["grid"]["spacing_x"] == 15
+        settings.update_section("display", {"marker_size": None, "marker_opacity": 999})
+        settings.update_section(
+            "lk", {"win_size": -1, "epsilon": "not-a-number", "flags": 3}
+        )
+        from app.models.project_state import DEFAULT_DISPLAY, ProjectState
+
+        state = ProjectState()
+        assert state.display_params["marker_size"] == DEFAULT_DISPLAY["marker_size"]
+        assert state.display_params["marker_opacity"] == DEFAULT_DISPLAY["marker_opacity"]
+        assert state.lk_params == DEFAULT_LK
+        assert not any(name.startswith(".settings-") for name in os.listdir(d))
+
+        # Python's JSON parser accepts NaN by default; the settings boundary deliberately does not.
+        with open(os.path.join(d, "settings.json"), "w", encoding="utf-8") as f:
+            f.write('{"lk": {"epsilon": NaN}}')
+        assert settings.load_settings() == {}
     finally:
         os.environ.pop("TRACKER_CONFIG_DIR", None)
 
@@ -629,6 +715,63 @@ def test_point_manager():
     assert w._point_manager is None
 
 
+def test_reference_change_clears_manual_seeds_and_failed_load_is_transactional():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    assert app is not None
+    src, _ = _sequence(n=4)
+    from app.gui.main_window import MainWindow
+
+    w = MainWindow()
+    w._load_paths(discover(src), src)
+    w.state.features = np.array([[10.0, 20.0]], dtype=np.float32)
+    w.state.roi = None
+    w._on_reference_changed(1)
+    assert w.state.features is None
+
+    # A missing/corrupt candidate must not replace or reset the active project.
+    w.state.features = np.array([[30.0, 40.0]], dtype=np.float32)
+    sequence = w.state.sequence
+    original_critical = QMessageBox.critical
+    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    try:
+        assert not w._load_paths([os.path.join(src, "missing.png")], src)
+    finally:
+        QMessageBox.critical = original_critical
+    assert w.state.sequence is sequence
+    assert np.array_equal(w.state.features, np.array([[30.0, 40.0]], dtype=np.float32))
+
+
+def test_tracker_fingerprint_rejects_same_length_wrong_sequence():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["TRACKER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="cfg_")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    assert app is not None
+    from app.gui.main_window import MainWindow
+
+    src_a, _ = _sequence(n=4, dx=1.0, dy=0.0)
+    src_b, _ = _sequence(n=4, dx=4.0, dy=2.0)
+    w1 = MainWindow()
+    w1._load_paths(discover(src_a), src_a)
+    w1.state.features = np.array([[100.0, 100.0]], dtype=np.float32)
+    path = os.path.join(tempfile.mkdtemp(prefix="trkfp_"), "trackers.npz")
+    w1.save_trackers_to(path)
+
+    w2 = MainWindow()
+    w2._load_paths(discover(src_b), src_b)
+    try:
+        w2.load_trackers_from(path)
+    except ValueError as exc:
+        assert "different image sequence" in str(exc)
+    else:
+        raise AssertionError("same-length but different image content should be rejected")
+
+
 _RESULT_KEYS = (
     "coords_fw", "status_fw", "err_fw", "coords_bw", "status_bw", "err_bw",
     "fb_mean_error", "fb_max_error",
@@ -652,6 +795,7 @@ def test_tracker_io_roundtrip():
         features=seeds, roi_corners=roi.corners, active_mask=mask,
         result_arrays=result_arrays, win_size=res.win_size,
         lk_params=DEFAULT_LK, shi_tomasi_params=DEFAULT_SHI_TOMASI, grid_params={"spacing_x": 5},
+        sequence_fingerprint="a" * 64,
     )
     b = load_trackers(path)
     assert b["has_result"] and b["total_images"] == 12
@@ -676,6 +820,7 @@ def test_tracker_io_roundtrip():
         features=seeds, roi_corners=None, active_mask=None, result_arrays=None,
         win_size=DEFAULT_LK["win_size"], lk_params=DEFAULT_LK,
         shi_tomasi_params=DEFAULT_SHI_TOMASI, grid_params={},
+        sequence_fingerprint="a" * 64,
     )
     b2 = load_trackers(path2)
     assert not b2["has_result"]
@@ -727,6 +872,71 @@ def test_tracker_io_rejects_bad_files():
     p = os.path.join(d, "plain.npy")
     np.save(p, np.zeros((3, 2), np.float32))
     _expect_valueerror(p)
+
+    # Required frame metadata must produce a controlled ValueError, never an escaping KeyError.
+    p = os.path.join(d, "missing_meta.npz")
+    np.savez(
+        p,
+        features=np.zeros((3, 2), np.float32),
+        meta=np.array(json.dumps({"format": "ecmtracker-trackers", "version": 1})),
+    )
+    _expect_valueerror(p)
+
+    # Every result array is shape-validated, not only coords_fw.
+    p = os.path.join(d, "bad_status.npz")
+    n, points = 3, 2
+    arrays = {
+        "coords_fw": np.zeros((n, points, 2), np.float32),
+        "status_fw": np.ones((1, points), np.uint8),  # deliberately wrong frame axis
+        "err_fw": np.zeros((n, points), np.float32),
+        "coords_bw": np.zeros((n, points, 2), np.float32),
+        "status_bw": np.ones((n, points), np.uint8),
+        "err_bw": np.zeros((n, points), np.float32),
+        "fb_mean_error": np.zeros(points, np.float32),
+        "fb_max_error": np.zeros(points, np.float32),
+        "active_mask": np.ones(points, bool),
+    }
+    np.savez(
+        p,
+        features=np.zeros((points, 2), np.float32),
+        meta=np.array(json.dumps({
+            "format": "ecmtracker-trackers", "version": 1, "total_images": n,
+            "reference_index": 0, "last_index": n - 1, "has_result": True,
+        })),
+        **arrays,
+    )
+    _expect_valueerror(p)
+
+
+def test_tracker_v1_migrates_revived_tracks():
+    import json
+
+    d = tempfile.mkdtemp(prefix="trkv1_")
+    p = os.path.join(d, "legacy.npz")
+    coords = np.array([[[1.0, 1.0]], [[999.0, 999.0]], [[5.0, 5.0]]], np.float32)
+    status = np.array([[1], [0], [1]], np.uint8)
+    error = np.zeros((3, 1), np.float32)
+    np.savez(
+        p,
+        features=np.array([[1.0, 1.0]], np.float32),
+        coords_fw=coords,
+        status_fw=status,
+        err_fw=error,
+        coords_bw=coords.copy(),
+        status_bw=np.ones((3, 1), np.uint8),
+        err_bw=error.copy(),
+        fb_mean_error=np.zeros(1, np.float32),
+        fb_max_error=np.zeros(1, np.float32),
+        active_mask=np.ones(1, bool),
+        meta=np.array(json.dumps({
+            "format": "ecmtracker-trackers", "version": 1, "total_images": 3,
+            "reference_index": 0, "last_index": 2, "has_result": True,
+        })),
+    )
+    bundle = load_trackers(p)
+    arrays = bundle["result_arrays"]
+    assert arrays["status_fw"][:, 0].tolist() == [1, 0, 0]
+    assert np.all(arrays["coords_fw"][:, 0] == np.array([1.0, 1.0]))
 
 
 def test_save_load_trackers_gui():

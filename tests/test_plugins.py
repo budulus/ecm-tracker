@@ -149,6 +149,26 @@ def test_apply_keep_mask_is_undoable():
     assert ctx.n_active == start // 2
 
 
+def test_keep_mask_rejects_multidimensional_input_and_access_is_read_only():
+    w = _tracked_window()
+    ctx = PluginContext(w, "test")
+    original = w.state.active_mask.copy()
+    try:
+        ctx.apply_keep_mask(np.ones((ctx.point_count, 1), dtype=bool))
+    except ValueError as exc:
+        assert "one-dimensional" in str(exc)
+    else:
+        raise AssertionError("a two-dimensional mask should be rejected")
+    assert w.state.active_mask.shape == original.shape
+    assert np.array_equal(w.state.active_mask, original)
+    try:
+        ctx.active_mask[0] = False
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("PluginContext.active_mask must be read-only")
+
+
 def test_overlay_is_painted():
     w = _tracked_window()
     ctx = PluginContext(w, "test")
@@ -207,6 +227,35 @@ def test_roi_cancel_leaves_plugin_interaction_intact():
     w._cancel_roi_definition()  # what pressing Esc triggers
     assert w.canvas._interaction is tool  # plugin interaction survives the cancel
     ctx.end_canvas_interaction()
+
+
+def test_plugin_interaction_cancels_partial_roi_and_respects_new_owner():
+    _app()
+    from app.gui.main_window import MainWindow
+
+    d = tempfile.mkdtemp(prefix="interaction_")
+    make_sequence(d, n_frames=3)
+    w = MainWindow()
+    w._load_paths(discover(d), d)
+    w._begin_roi_definition("ngon")
+    w.canvas._interaction.on_press(QPointF(20.0, 20.0), None)
+    assert w.state.roi is not None and not w.state.roi.is_complete
+
+    class Tool(CanvasInteraction):
+        pass
+
+    first_ctx = PluginContext(w, "first")
+    first = Tool()
+    first_ctx.begin_canvas_interaction(first)
+    assert w.state.roi is None and not w.define_roi_action.isChecked()
+
+    second_ctx = PluginContext(w, "second")
+    second = Tool()
+    second_ctx.begin_canvas_interaction(second)
+    first_ctx.end_canvas_interaction()
+    assert w.canvas._interaction is second
+    second_ctx.end_canvas_interaction()
+    assert w.canvas._interaction is None
 
 
 def test_example_plugins_launch():

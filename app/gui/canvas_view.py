@@ -1,3 +1,5 @@
+import logging
+
 import cv2
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
@@ -5,6 +7,8 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTr
 from PySide6.QtWidgets import QWidget
 
 from app.models.project_state import ProjectState
+
+logger = logging.getLogger(__name__)
 
 
 def bgr_to_qimage(bgr: np.ndarray) -> QImage:
@@ -121,7 +125,7 @@ class CanvasView(QWidget):
                 try:
                     cancel()
                 except Exception:  # a broken handler must not wedge the canvas
-                    pass
+                    logger.exception("Canvas interaction cancellation failed")
 
     def _dispatch_interaction(self, name: str, event) -> bool:
         """Send an image-space mouse event to the active interaction handler. Returns True if a
@@ -135,7 +139,7 @@ class CanvasView(QWidget):
         try:
             method(self.screen_to_image(event.position()), event)
         except Exception:
-            pass
+            logger.exception("Canvas interaction handler %s failed", name)
         return True
 
     def _right_press_consumed(self, event) -> bool:
@@ -154,7 +158,7 @@ class CanvasView(QWidget):
         try:
             method(self.screen_to_image(event.position()), event)
         except Exception:
-            pass
+            logger.exception("Canvas right-click interaction failed")
         return True
 
     def refresh(self) -> None:
@@ -306,6 +310,7 @@ class CanvasView(QWidget):
             try:
                 fn(painter, self)
             except Exception:
+                logger.exception("Canvas overlay failed and was removed")
                 self._overlays.remove(fn)
             finally:
                 painter.restore()
@@ -371,6 +376,8 @@ class CanvasView(QWidget):
         cut = state.global_to_cut(state.current_index)
         coords = result.coords_fw[cut]
         prev = result.coords_fw[cut - 1] if cut > 0 else None
+        valid = result.status_fw[cut].astype(bool)
+        prev_valid = result.status_fw[cut - 1].astype(bool) if cut > 0 else None
         active = state.active_mask
         preview = self._preview_keep_mask
 
@@ -398,6 +405,8 @@ class CanvasView(QWidget):
         for p in range(result.n_points):
             if active is not None and not active[p]:
                 continue
+            if not valid[p]:
+                continue
             keep = True if preview is None else bool(preview[p])
             pen, brush, trail_pen = (
                 (kept_pen, kept_brush, kept_trail) if keep
@@ -413,7 +422,7 @@ class CanvasView(QWidget):
                 painter.setPen(box_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(QRectF(tl, br))
-            if prev is not None:
+            if prev is not None and prev_valid[p]:
                 painter.setPen(trail_pen)
                 painter.drawLine(self.image_to_screen(prev[p][0], prev[p][1]), here)
             painter.setPen(pen)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import sys
 import traceback
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
 
 from app.plugins.api import PluginContext, TrackerPlugin
+
+logger = logging.getLogger(__name__)
 
 def _project_root() -> Path:
     """Locate the directory that holds the ``plugins/`` folder.
@@ -209,12 +212,12 @@ class PluginManager:
             try:
                 rec.instance.on_unload()
             except Exception:
-                pass
+                logger.exception("Plugin %s failed during unload", rec.plugin_id)
         if rec.window is not None:
             try:
                 rec.window.close()
             except Exception:
-                pass
+                logger.exception("Plugin window %s failed to close", rec.plugin_id)
         rec.instance = None
         rec.window = None
 

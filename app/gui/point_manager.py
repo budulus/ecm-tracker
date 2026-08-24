@@ -204,8 +204,10 @@ class PointManagerDialog(QDialog):
         if result is not None and state.active_mask is not None:
             if not state.current_in_range:
                 return None, None
-            coords = result.coords_fw[state.global_to_cut(state.current_index)]
-            return coords, list(self._row_to_index)
+            cut = state.global_to_cut(state.current_index)
+            coords = result.coords_fw[cut]
+            valid = result.status_fw[cut].astype(bool)
+            return coords, [p for p in self._row_to_index if valid[p]]
         # pre-track: seed points only exist (and are only drawn) on the reference frame
         if state.features is not None and state.current_index == state.reference_index:
             return state.features, list(range(len(state.features)))
@@ -241,7 +243,9 @@ class PointManagerDialog(QDialog):
         result = state.result
         if result is not None and state.active_mask is not None:
             if state.current_in_range:
-                coords = result.coords_fw[state.global_to_cut(state.current_index)]
+                cut = state.global_to_cut(state.current_index)
+                coords = result.coords_fw[cut]
+                valid = result.status_fw[cut].astype(bool)
         elif state.features is not None and state.current_index == state.reference_index:
             coords = state.features
         if coords is None:
@@ -251,6 +255,6 @@ class PointManagerDialog(QDialog):
         painter.setPen(QPen(SELECT_COLOR, 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for p in sel:
-            if 0 <= p < len(coords):
+            if 0 <= p < len(coords) and (result is None or valid[p]):
                 x, y = coords[p]
                 painter.drawEllipse(canvas.image_to_screen(float(x), float(y)), radius, radius)

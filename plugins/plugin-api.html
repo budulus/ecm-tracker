@@ -767,7 +767,7 @@ cur_cut = ctx.current_cut    # cut index of the shown frame, or None if outside 
       <div class="api">
         <div class="api-head"><svg class="ic"><use href="#i-scan"/></svg>ctx — tracked data</div>
         <div class="api-row"><div class="api-sig"><span class="m">coords</span>(<span class="a">active_only=True</span>) <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(frames, points, 2)</code> float32 <code>(x, y)</code>, <b>cut-indexed</b> (<code>coords[0]</code> = reference). <code>active_only=True</code> returns only kept points; <code>False</code> returns all <code>P</code>. <code>None</code> if no result.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">track_status</span>(<span class="a">active_only=True</span>) <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(frames, points)</code> uint8 aligned to <code>coords</code>: <code>1</code> = tracked OK that frame, <code>0</code> = LK failed and the position was carried forward.</div></div>
+        <div class="api-row"><div class="api-sig"><span class="m">track_status</span>(<span class="a">active_only=True</span>) <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(frames, points)</code> uint8 aligned to <code>coords</code>: <code>1</code> = valid through that frame, <code>0</code> = LK failed and the last valid position was carried forward. Validity is cumulative: a failed point never revives.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">point_indices</span>() <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(n_active,)</code> original column ids of the kept points, matching the point axis of <code>coords(active_only=True)</code>.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">active_mask</span> <span class="ret">: ndarray | None</span><span class="tag prop">prop</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(P,)</code> bool keep-mask: True where a point survived cleanup. Change it via <code>apply_keep_mask</code>.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">n_active</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Number of currently-kept points.</div></div>
@@ -923,8 +923,8 @@ ctx.status(f"{ctx.n_active} of {ctx.point_count} points kept across {ctx.frame_c
       <p>Activate and release through <code>ctx</code>:</p>
       <div class="api">
         <div class="api-head"><svg class="ic"><use href="#i-scan"/></svg>ctx — interaction</div>
-        <div class="api-row"><div class="api-sig"><span class="m">begin_canvas_interaction</span>(<span class="a">handler</span>)</div><div class="api-desc">Capture canvas mouse input with your <code>CanvasInteraction</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">end_canvas_interaction</span>()</div><div class="api-desc">Release capture and restore default ROI-click behavior.</div></div>
+        <div class="api-row"><div class="api-sig"><span class="m">begin_canvas_interaction</span>(<span class="a">handler</span>)</div><div class="api-desc">Cancel partial ROI/point tools, then capture canvas mouse input with your <code>CanvasInteraction</code>.</div></div>
+        <div class="api-row"><div class="api-sig"><span class="m">end_canvas_interaction</span>()</div><div class="api-desc">Release this context's capture. A newer interaction owner is left untouched.</div></div>
       </div>
 
       <div class="code" data-lang="python">
@@ -964,7 +964,7 @@ def _start_zone(self):
         <div class="api-head"><svg class="ic"><use href="#i-filter"/></svg>ctx — mutation</div>
         <div class="api-row">
           <div class="api-sig"><span class="m">apply_keep_mask</span>(<span class="a">keep</span>)<span class="tag mut">mut</span></div>
-          <div class="api-desc"><code>keep</code> is a bool array of length <code>P</code> <b>or</b> <code>n_active</code> (other lengths raise <code>ValueError</code>). Points marked <code>False</code> leave the active set. <b>Monotonic</b> — it only ever shrinks the set, never resurrects filtered-out points. Emits <code>mask_changed</code>; the user can Undo it in the Cleanup dialog.</div>
+          <div class="api-desc"><code>keep</code> is a one-dimensional bool array of length <code>P</code> <b>or</b> <code>n_active</code> (other shapes/lengths raise <code>ValueError</code>). Points marked <code>False</code> leave the active set. <b>Monotonic</b> — it only ever shrinks the set, never resurrects filtered-out points. Emits <code>mask_changed</code>; the user can Undo it in the Cleanup dialog.</div>
         </div>
       </div>
 

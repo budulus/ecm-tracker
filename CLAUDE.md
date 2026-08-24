@@ -19,6 +19,7 @@ single source of truth for deps.
 uv sync                                   # create .venv (managed Python 3.12) + install deps
 
 uv run python -m app.main                 # launch the GUI (run from project root)
+uv run python scripts/check.py            # full headless regression + syntax quality gate
 
 # Headless regression tests — runs every test_* function as a script:
 $env:QT_QPA_PLATFORM = "offscreen"; uv run python -m tests.test_pipeline
@@ -110,6 +111,10 @@ Every per-frame array and frame reference is in one of two coordinate systems �
 ### Tracking (`core/tracking.py`)
 
 `track()` runs LK **forward** (reference→last), then **backward** seeded from the forward pass's last-frame positions (last→reference). The backward arrays are reversed back into cut order so they align with the forward arrays. The per-point **forward-backward (FB) error** (distance between where a point started and where the round-trip returns it) is the primary quality signal. Points that never track validly get `+inf` error so filters can drop them. A `progress_cb(done, total) -> bool` is polled for cancellation; returning `True` aborts and `track()` returns `None`.
+
+LK validity is cumulative: once a point fails, it stays invalid and its coordinate is frozen at the
+last valid location. It cannot "revive" on a later transition. Display and built-in exports exclude
+invalid positions; coordinate-only exports keep only points valid across the complete range.
 
 ### Result immutability + active mask + undo (cleanup flow)
 

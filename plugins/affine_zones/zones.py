@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.roi import ROI
+from app.core.affine import fit_affine, principal_stretches, ransac_affine
+from app.core.atomic_io import atomic_open
 from app.plugins import CanvasInteraction
 
 MIN_ZONE_POINTS = 3  # an affine fit needs at least 3 correspondences
@@ -87,36 +89,8 @@ def fit_zone_deformation(polygon, ref_pts, cur_pts, valid=None):
     """
     inside = points_in_polygon(polygon, ref_pts)
     if valid is not None:
-        inside = inside & np.asarray(valid, dtype=bool)
-    local_idx = np.where(inside)[0]
-    if local_idx.size < MIN_ZONE_POINTS:
-        return None
-    src = ref_pts[local_idx].astype(np.float64)
-    dst = cur_pts[local_idx].astype(np.float64)
-    # Solve [x y 1] @ sol = [x' y'] in the least-squares sense; sol is 3×2.
-    P = np.column_stack([src, np.ones(src.shape[0])])
-    sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
-    F = np.array([[sol[0, 0], sol[1, 0]], [sol[0, 1], sol[1, 1]]])
-    b = sol[2, :].copy()
-    return local_idx, F, b
-
-
-def principal_stretches(F):
-    """Principal stretches and *current-configuration* directions of deformation gradient ``F``.
-
-    Returns ``(lam1, lam2, v1, v2)`` with ``lam1 >= lam2`` the square roots of the eigenvalues of
-    the **left** Cauchy–Green tensor ``B = F Fᵀ`` and ``v1, v2`` the matching unit eigenvectors —
-    the principal directions in the current (deformed) configuration, i.e. the frame the gauge draws
-    on. ``F = I`` ⇒ ``lam1 = lam2 = 1``. ``eig(B) == eig(C)`` (with ``C = Fᵀ F``), so the stretches
-    are identical to the referential tensor's; only the direction vectors differ.
-    """
-    B = F @ F.T
-    vals, vecs = np.linalg.eigh(B)  # ascending eigenvalues, orthonormal columns
-    lam = np.sqrt(np.maximum(vals, 0.0))
-    order = np.argsort(lam)[::-1]  # descending → lam1 first
-    lam = lam[order]
-    vecs = vecs[:, order]
-    return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
+        inside &= np.asarray(valid, dtype=bool)
+    return fit_affine(ref_pts, cur_pts, inside)
 
 
 def _ransac_affine(src, dst, sample_size, reproj, max_iters, confidence):
@@ -134,41 +108,14 @@ def _ransac_affine(src, dst, sample_size, reproj, max_iters, confidence):
     ``inliers`` a bool array aligned to the input rows. If there are too few points to separate
     signal from noise (``n <= sample_size``), every point is an inlier (nothing to clean).
     """
-    n = src.shape[0]
-    s = max(MIN_ZONE_POINTS, int(sample_size))
-    P = np.column_stack([src, np.ones(n)])  # homogeneous src, reused for every residual eval
-    if n <= s:
-        sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
-        return sol.T, np.ones(n, dtype=bool)
-
-    rng = np.random.default_rng(0)
-    thresh = float(reproj)
-    conf = min(max(float(confidence), 0.0), 1.0 - 1e-12)
-    best_inliers = np.zeros(n, dtype=bool)
-    best_count = 0
-    dynamic_iters = int(max_iters)
-
-    it = 0
-    while it < min(int(max_iters), dynamic_iters):
-        it += 1
-        idx = rng.choice(n, size=s, replace=False)
-        sol, *_ = np.linalg.lstsq(P[idx], dst[idx], rcond=None)  # 3×2
-        err = np.linalg.norm(P @ sol - dst, axis=1)
-        inliers = err <= thresh
-        count = int(inliers.sum())
-        if count > best_count:
-            best_count = count
-            best_inliers = inliers
-            w = count / n
-            if w >= 1.0:
-                break
-            denom = np.log1p(-(w ** s))  # log(1 - wᵏ), strictly < 0 for 0 < w < 1
-            dynamic_iters = int(np.ceil(np.log1p(-conf) / denom))
-
-    if best_count < MIN_ZONE_POINTS:
-        return None, best_inliers
-    sol, *_ = np.linalg.lstsq(P[best_inliers], dst[best_inliers], rcond=None)
-    return sol.T, best_inliers
+    return ransac_affine(
+        src,
+        dst,
+        sample_size=sample_size,
+        reproj=reproj,
+        max_iters=max_iters,
+        confidence=confidence,
+    )
 
 
 def fit_zone_affine(polygon, ref_pts, cur_pts, reproj=3.0, sample_size=3, max_iters=2000,
@@ -293,6 +240,18 @@ class AffineZonesWindow(QWidget):
         self._ransac_preview = None
         self.ctx.remove_overlay(self._paint)
         super().closeEvent(event)
+
+    def dispose(self):
+        """Final signal teardown for plugin reload; ordinary closes keep the cached view current."""
+        for signal, slot in (
+            (self.ctx.signals.frame_changed, self._refresh),
+            (self.ctx.signals.result_changed, self._refresh),
+            (self.ctx.signals.mask_changed, self._refresh),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
 
     # ---- drawing zones --------------------------------------------------
     def _start_zone(self):
@@ -519,7 +478,7 @@ class AffineZonesWindow(QWidget):
         ref_global = self.ctx.reference_index
         status = self.ctx.track_status(active_only=True)
         try:
-            with open(path, "w", newline="") as f:
+            with atomic_open(path, newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["zone", "frame_global", "n_points",
                             "lambda1", "lambda2", "v1x", "v1y", "v2x", "v2y"])

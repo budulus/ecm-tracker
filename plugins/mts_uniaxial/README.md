@@ -59,7 +59,8 @@ Individual, inspectable files, written after each step so work resumes on reopen
 | `sync_params.json` | channels | force channel + temporal offset |
 | `crop.json` | crop | first/last sensor index |
 | `reference.json` | reference | algorithm, reference/last frame, zero offsets |
-| `tracked_coords.npy` | export | `(frames, points, 2)` float32 (active points) |
+| `trackers.npz` | tracking | reloadable core result, cumulative statuses, ROI, and active mask |
+| `tracked_coords.npy` | export | `(frames, points, 2)` float32 (active, fully valid points) |
 | `point_indices.npy` | export | original ids of the exported points |
 | `aligned_data.csv` | export | per frame: `frame_global, image_time_ms, displacement, force, in_range` |
 | `measures.csv` | export | per frame: selected derived measures (time, strains, stretches, PK/Cauchy stress, …) |
@@ -71,8 +72,9 @@ is clamped to the nearest sensor endpoint).
 
 Steps form a strict dependency chain. Editing any step conservatively deletes everything
 downstream of it — in memory and on disk — so the project can never hold stale, mismatched data.
-Reopening restores up to the reference (the in-app tracking result is not persisted here, so
-re-run tracking to export again).
+Reopening restores the in-app result through the tracking step when `trackers.npz` is present.
+Cleanup/RANSAC mask changes rewrite that file immediately and invalidate prior exports, including
+while the plugin window is hidden.
 
 ## Reference-finding algorithms
 
@@ -84,13 +86,14 @@ sample above a user-set pre-force threshold — the one algorithm the UI passes 
 
 ## Kinematics module (`kinematics.py`)
 
-Qt-free, unit-tested numpy: `fit_deformation_gradient` (least-squares homogeneous affine fit over
+Qt-free, unit-tested numpy: `fit_deformation_gradient` (rank-guarded homogeneous affine fit over
 the valid points), `principal_decomposition_B` (stretches + current-config directions from
-B = F Fᵀ), `ransac_affine` (deterministic outlier filter, ported from `affine_zones`),
+B = F Fᵀ), `ransac_affine` (the shared deterministic, rank-guarded outlier filter),
 `eps_2_incompressible`, and `compute_series` (the per-frame `KinematicsSeries`). The window caches
 its output and invalidates it on `result_changed` / `mask_changed` / a new reference, so the plots
 always reflect the current active set. The material parameters (width/thickness/incompressible)
-are **not** a `Step` — they persist in the manifest and only redraw stresses, never wiping tracking.
+are **not** a `Step` — they persist in the manifest, never wipe tracking, and invalidate only a
+previously exported `measures.csv` whose stresses used the old cross-section.
 
 ## Extending (future stages)
 

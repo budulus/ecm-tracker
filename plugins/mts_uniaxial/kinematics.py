@@ -8,10 +8,9 @@ define the linear strains ``εᵢ = λᵢ − 1``. The translation ``b`` carries
 discarded; a rigid rotation is absorbed into ``B``'s eigenvectors (they rotate with the body), so
 the stretches are rotation-invariant.
 
-The affine fit and the RANSAC routine are ported (verbatim, deterministic seed 0) from the
-``affine_zones`` plugin; ``principal_decomposition_B`` differs only in using ``B = F Fᵀ`` (current
-config) rather than ``C = Fᵀ F`` (reference config) — ``eig(B) == eig(C)`` so the stretches are
-identical and only the direction vectors differ (B's live on the deformed frame the gauge draws).
+The affine fit and deterministic RANSAC routine are shared with ``affine_zones`` through the
+guarded Qt-free implementation in :mod:`app.core.affine`. ``principal_decomposition_B`` uses
+``B = F Fᵀ`` (current config); its directions therefore live on the deformed frame the gauge draws.
 
 Pure numpy — no Qt, no plugin API — so it runs headlessly and is unit-tested in
 ``tests/test_mts_uniaxial.py``.
@@ -22,6 +21,13 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import numpy as np
+
+from app.core.affine import (
+    fit_affine,
+    principal_directions_defined,
+    principal_stretches,
+    ransac_affine as _ransac_affine,
+)
 
 MIN_FIT_POINTS = 3  # an affine fit needs at least 3 correspondences
 
@@ -34,22 +40,8 @@ def fit_deformation_gradient(ref_pts, cur_pts, valid=None) -> Optional[Tuple[np.
     so dead tracks don't bias the fit. Returns ``(F 2×2, b 2,)`` or ``None`` if fewer than
     ``MIN_FIT_POINTS`` valid correspondences.
     """
-    ref_pts = np.asarray(ref_pts, dtype=np.float64)
-    cur_pts = np.asarray(cur_pts, dtype=np.float64)
-    if valid is None:
-        idx = np.arange(ref_pts.shape[0])
-    else:
-        idx = np.where(np.asarray(valid, dtype=bool))[0]
-    if idx.size < MIN_FIT_POINTS:
-        return None
-    src = ref_pts[idx]
-    dst = cur_pts[idx]
-    # Solve [x y 1] @ sol = [x' y'] in the least-squares sense; sol is 3×2.
-    P = np.column_stack([src, np.ones(src.shape[0])])
-    sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
-    F = np.array([[sol[0, 0], sol[1, 0]], [sol[0, 1], sol[1, 1]]])
-    b = sol[2, :].copy()
-    return F, b
+    fit = fit_affine(ref_pts, cur_pts, valid)
+    return None if fit is None else (fit[1], fit[2])
 
 
 def principal_decomposition_B(F) -> Tuple[float, float, np.ndarray, np.ndarray]:
@@ -60,14 +52,7 @@ def principal_decomposition_B(F) -> Tuple[float, float, np.ndarray, np.ndarray]:
     directions in the deformed frame). ``F = I`` ⇒ ``λ₁ = λ₂ = 1``. ``eig(B) == eig(C)`` so the
     stretches equal those from ``Fᵀ F``; only the directions differ.
     """
-    F = np.asarray(F, dtype=np.float64)
-    B = F @ F.T
-    vals, vecs = np.linalg.eigh(B)  # ascending eigenvalues, orthonormal columns
-    lam = np.sqrt(np.maximum(vals, 0.0))
-    order = np.argsort(lam)[::-1]  # descending → λ₁ first
-    lam = lam[order]
-    vecs = vecs[:, order]
-    return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
+    return principal_stretches(F)
 
 
 def ransac_affine(src, dst, sample_size=6, reproj=3.0, max_iters=2000, confidence=0.99
@@ -82,43 +67,14 @@ def ransac_affine(src, dst, sample_size=6, reproj=3.0, max_iters=2000, confidenc
     if no 3+-point consensus), ``inliers`` a bool array aligned to the input rows. ``n <= sample_size``
     ⇒ every point is an inlier (nothing to clean).
     """
-    src = np.asarray(src, dtype=np.float64)
-    dst = np.asarray(dst, dtype=np.float64)
-    n = src.shape[0]
-    s = max(MIN_FIT_POINTS, int(sample_size))
-    P = np.column_stack([src, np.ones(n)])  # homogeneous src, reused for every residual eval
-    if n <= s:
-        sol, *_ = np.linalg.lstsq(P, dst, rcond=None)
-        return sol.T, np.ones(n, dtype=bool)
-
-    rng = np.random.default_rng(0)
-    thresh = float(reproj)
-    conf = min(max(float(confidence), 0.0), 1.0 - 1e-12)
-    best_inliers = np.zeros(n, dtype=bool)
-    best_count = 0
-    dynamic_iters = int(max_iters)
-
-    it = 0
-    while it < min(int(max_iters), dynamic_iters):
-        it += 1
-        idx = rng.choice(n, size=s, replace=False)
-        sol, *_ = np.linalg.lstsq(P[idx], dst[idx], rcond=None)  # 3×2
-        err = np.linalg.norm(P @ sol - dst, axis=1)
-        inliers = err <= thresh
-        count = int(inliers.sum())
-        if count > best_count:
-            best_count = count
-            best_inliers = inliers
-            w = count / n
-            if w >= 1.0:
-                break
-            denom = np.log1p(-(w ** s))  # log(1 - wᵏ), strictly < 0 for 0 < w < 1
-            dynamic_iters = int(np.ceil(np.log1p(-conf) / denom))
-
-    if best_count < MIN_FIT_POINTS:
-        return None, best_inliers
-    sol, *_ = np.linalg.lstsq(P[best_inliers], dst[best_inliers], rcond=None)
-    return sol.T, best_inliers
+    return _ransac_affine(
+        src,
+        dst,
+        sample_size=sample_size,
+        reproj=reproj,
+        max_iters=max_iters,
+        confidence=confidence,
+    )
 
 
 def eps_2_incompressible(eps_1) -> np.ndarray:
@@ -186,6 +142,10 @@ def compute_series(coords, image_time_ms, status=None) -> KinematicsSeries:
             continue
         l1, l2, e1, e2 = principal_decomposition_B(fit[0])
         lambda_1[t], lambda_2[t] = l1, l2
+        if not principal_directions_defined(l1, l2):
+            # At isotropic stretch the eigenspace is degenerate: reporting an angle would turn
+            # numerical noise into a seemingly physical direction. Keep stretches, mark axes NaN.
+            continue
         v1[t], v2[t] = e1, e2
         angle_deg[t] = np.degrees(np.arctan2(e1[1], e1[0]))
 

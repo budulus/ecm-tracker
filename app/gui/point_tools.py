@@ -95,8 +95,10 @@ class DeletePointsTool:
         result, active = state.result, state.active_mask
         if result is None or active is None or not state.current_in_range:
             return
-        coords = result.coords_fw[state.global_to_cut(state.current_index)]
-        candidates = [p for p in range(result.n_points) if active[p]]
+        cut = state.global_to_cut(state.current_index)
+        coords = result.coords_fw[cut]
+        valid = result.status_fw[cut].astype(bool)
+        candidates = [p for p in range(result.n_points) if active[p] and valid[p]]
         i = self._nearest(image_pt, coords, candidates)
         if i < 0:
             return

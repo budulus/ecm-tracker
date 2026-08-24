@@ -550,6 +550,12 @@ def test_kinematics_rotation_invariance():
     d = (ang - theta) % np.pi
     assert min(d, np.pi - d) < 1e-6
 
+    # Pure rigid rotation has equal stretches, so no principal-strain direction exists.
+    rigid = np.stack([ref, ref @ R.T])
+    rigid_series = kinematics.compute_series(rigid, np.array([0.0, 1.0]))
+    assert np.isnan(rigid_series.angle_deg[1])
+    assert np.isnan(rigid_series.v1[1]).all()
+
 
 def test_eps_2_incompressible_formula():
     out = kinematics.eps_2_incompressible(np.array([0.0, 0.21, -0.5, -1.0, -2.0]))
@@ -569,6 +575,14 @@ def test_kinematics_degenerate_frame():
     assert s.lambda_1[0] == 1.0 and s.lambda_2[0] == 1.0
     assert np.isnan(s.lambda_1[1]) and np.isnan(s.eps_1[1]) and np.isnan(s.angle_deg[1])
     assert s.n_points[1] == 2
+
+
+def test_affine_fit_rejects_collinear_points():
+    ref = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
+    cur = ref * np.array([1.2, 0.8]) + np.array([2.0, 1.0])
+    assert kinematics.fit_deformation_gradient(ref, cur) is None
+    M, inliers = kinematics.ransac_affine(ref, cur, sample_size=3)
+    assert M is None and not inliers.any()
 
 
 def test_ransac_drops_planted_outlier():
@@ -736,6 +750,9 @@ def test_measures_export():
     if "pk_stress_MPa" in header:
         assert np.isfinite(float(rows[1][header.index("pk_stress_MPa")]))
     assert "measures.csv" in STEP_ARTIFACTS[Step.EXPORT]  # wiped with the aligned data
+    win.width_edit.setText("12.5")
+    win._on_material_param_changed()
+    assert not os.path.exists(mpath)  # stress table used the old cross-section and is now stale
     win.close()
 
 
@@ -775,6 +792,39 @@ def test_panels_gate_and_refresh():
             pw.replot()
             pw.close()
     win.close()
+
+
+def test_mask_changes_persist_and_invalidate_export_while_plugin_is_closed():
+    from app.core.tracker_io import load_trackers
+
+    w = _main_window()
+    win = _plugin_window(w)
+    d = tempfile.mkdtemp(prefix="mts_mask_")
+    exp = make_mts_experiment(d, n_frames=10)
+    win._set_root_candidate(exp["root"])
+    win._on_load()
+    win._on_detect_reference()
+    _track_in_app(w)
+    win._on_export()
+    pdir = project_io.project_dir(exp["root"])
+    export_path = os.path.join(pdir, "tracked_coords.npy")
+    assert os.path.isfile(export_path)
+
+    # Closing hides the UI but the cached plugin instance must continue protecting its project.
+    win.close()
+    keep = np.ones(win.ctx.n_active, dtype=bool)
+    keep[0] = False
+    win.ctx.apply_keep_mask(keep)
+    saved = load_trackers(os.path.join(pdir, "trackers.npz"))
+    assert np.array_equal(saved["active_mask"], w.state.active_mask)
+    assert not os.path.exists(export_path)
+    assert win.pstate.completed_through == int(Step.TRACK)
+
+    # An external sequence change while hidden must detach the old MTS state immediately.
+    other = tempfile.mkdtemp(prefix="other_sequence_")
+    make_sequence(other, n_frames=3)
+    w._load_paths(discover(other), other)
+    assert not win.pstate.done(Step.LOAD)
 
 
 if __name__ == "__main__":

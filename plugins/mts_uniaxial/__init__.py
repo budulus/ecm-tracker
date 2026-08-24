@@ -31,6 +31,7 @@ class MtsUniaxialPlugin(TrackerPlugin):
 
     def on_unload(self):
         if self._window is not None:
+            self._window.dispose()
             self._window.close()
             self._window = None
 

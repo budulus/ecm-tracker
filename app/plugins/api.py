@@ -99,6 +99,7 @@ class PluginContext:
         self._plugin_id = plugin_id
         self._overlay_wrappers: dict = {}
         self._metrics_cache: Optional[Tuple[tuple, Metrics]] = None
+        self._interaction_handler = None
 
     # ---- identity / plumbing -------------------------------------------
     @property
@@ -205,7 +206,7 @@ class PluginContext:
         self._window._set_last_frame(global_index)
 
     # ---- images ---------------------------------------------------------
-    def load_sequence(self, paths: List[str], source_dir: Optional[str] = None) -> None:
+    def load_sequence(self, paths: List[str], source_dir: Optional[str] = None) -> bool:
         """Load an explicit, pre-ordered list of image paths as the active sequence.
 
         Order is preserved verbatim (no filename sort) — pass the paths in the exact order you
@@ -214,7 +215,7 @@ class PluginContext:
         ``source_dir`` is remembered as the default save/open directory. Intended for loader
         plugins; most plugins never need this and should work with the already-loaded sequence.
         """
-        self._window.load_sequence_from_paths(list(paths), source_dir)
+        return self._window.load_sequence_from_paths(list(paths), source_dir)
 
     def save_trackers(self, path: str) -> None:
         """Save the current reference points and (if tracked) the full result to ``path``.
@@ -232,9 +233,9 @@ class PluginContext:
 
         Restores the seeds, tracking result, active mask, ROI and frame range, emitting
         ``signals.result_changed`` / ``mask_changed`` / ``roi_changed`` so the UI and plugins
-        refresh. The open sequence must have the same frame count the trackers were saved
-        against; otherwise (or on a bad/foreign file) this raises ``ValueError``. This is the
-        only way a plugin can install a full tracking result back into the core."""
+        refresh. Current files require the same ordered image-content fingerprint; legacy v1 files
+        can only be checked by frame count. A mismatch or bad/foreign file raises ``ValueError``.
+        This is the only way a plugin can install a full tracking result back into the core."""
         self._window.load_trackers_from(path)
 
     def image_size(self) -> Optional[Tuple[int, int]]:
@@ -280,7 +281,12 @@ class PluginContext:
     def active_mask(self) -> Optional[np.ndarray]:
         """The ``(P,)`` bool keep-mask: True where a point survived cleanup. ``None`` if no
         result. Read-only — change it with :meth:`apply_keep_mask`."""
-        return self._state.active_mask
+        mask = self._state.active_mask
+        if mask is None:
+            return None
+        view = mask.view()
+        view.setflags(write=False)
+        return view
 
     @property
     def n_active(self) -> int:
@@ -309,7 +315,8 @@ class PluginContext:
         coords = self._state.result.coords_fw
         mask = self.active_mask
         if active_only and mask is not None:
-            return coords[:, mask, :]
+            coords = coords[:, mask, :]
+            coords.setflags(write=False)
         return coords
 
     def track_status(self, active_only: bool = True) -> Optional[np.ndarray]:
@@ -322,7 +329,8 @@ class PluginContext:
         status = self._state.result.status_fw
         mask = self.active_mask
         if active_only and mask is not None:
-            return status[:, mask]
+            status = status[:, mask]
+            status.setflags(write=False)
         return status
 
     def metrics(self) -> Optional[Metrics]:
@@ -378,16 +386,18 @@ class PluginContext:
         if mask is None:
             return
         keep = np.asarray(keep, dtype=bool)
-        if keep.shape[0] == self.point_count:
+        if keep.ndim != 1:
+            raise ValueError(f"keep mask must be one-dimensional, got shape {keep.shape}")
+        if keep.size == self.point_count:
             full = keep
-        elif keep.shape[0] == self.n_active:
+        elif keep.size == self.n_active:
             # Expand to full length; inactive points are dropped by the `active & full` step
             # regardless, so they need no special handling here.
             full = np.zeros(self.point_count, dtype=bool)
             full[self.point_indices()] = keep
         else:
             raise ValueError(
-                f"keep mask length {keep.shape[0]} is neither P={self.point_count} "
+                f"keep mask length {keep.size} is neither P={self.point_count} "
                 f"nor n_active={self.n_active}"
             )
         self._window.apply_keep_mask(full)
@@ -402,6 +412,11 @@ class PluginContext:
         :meth:`remove_overlay` in your window's ``closeEvent`` / plugin ``on_unload``.
         """
         if fn in self._overlay_wrappers:
+            wrapper = self._overlay_wrappers[fn]
+            # Canvas removes a painter that raises. Permit an explicit re-add after the plugin has
+            # corrected transient state instead of leaving the context's registry permanently stale.
+            if wrapper not in self._window.canvas._overlays:
+                self._window.canvas.add_overlay(wrapper)
             return
 
         def wrapper(painter, _canvas, _fn=fn):
@@ -432,14 +447,19 @@ class PluginContext:
         :meth:`end_canvas_interaction` (e.g. when your window closes)."""
         win = self._window
         if getattr(win, "define_roi_action", None) is not None and win.define_roi_action.isChecked():
-            win.define_roi_action.setChecked(False)
+            win._cancel_roi_definition()
+        if hasattr(win, "_deactivate_point_tools"):
+            win._deactivate_point_tools()
         if getattr(win, "pan_tool_action", None) is not None and win.pan_tool_action.isChecked():
             win.pan_tool_action.setChecked(False)
         win.canvas.set_interaction(handler)
+        self._interaction_handler = handler
 
     def end_canvas_interaction(self) -> None:
-        """Release canvas mouse capture (restores the default ROI-click behavior)."""
-        self._window.canvas.clear_interaction()
+        """Release this context's mouse capture without disturbing a newer owner."""
+        handler, self._interaction_handler = self._interaction_handler, None
+        if handler is not None and self._window.canvas._interaction is handler:
+            self._window.canvas.clear_interaction()
 
     # ---- persistent settings -------------------------------------------
     def get_settings(self) -> dict:

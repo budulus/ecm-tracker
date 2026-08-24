@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -43,8 +44,7 @@ def _read_rows(path: str) -> List[List[str]]:
 
 def _is_float(cell: str) -> bool:
     try:
-        float(cell)
-        return True
+        return math.isfinite(float(cell))
     except (TypeError, ValueError):
         return False
 
@@ -105,9 +105,13 @@ def parse_image_log(log_path: str) -> ImageLog:
     if not filenames:
         raise ValueError(f"No image rows found in {log_path}")
 
+    time_ms = np.asarray(times, dtype=np.float64)
+    if np.any(np.diff(time_ms) < 0):
+        raise ValueError(f"Image timestamps are not monotonic in {log_path}")
+
     return ImageLog(
         filenames=filenames,
-        time_ms=np.asarray(times, dtype=np.float64),
+        time_ms=time_ms,
         log_path=log_path,
         header_rows=header_rows,
     )
@@ -275,6 +279,25 @@ def parse_sensor(dat_path: str) -> Sensor:
         order = np.argsort(time_s, kind="stable")
         time_s, disp_a, force_a, disp_b, force_b = (
             time_s[order], disp_a[order], force_a[order], disp_b[order], force_b[order]
+        )
+
+    # np.interp requires a strictly increasing x-axis. Average duplicate timestamp rows rather
+    # than allowing their implementation-dependent ordering to affect aligned measurements.
+    if np.any(np.diff(time_s) == 0):
+        warnings.append("Duplicate sensor timestamps were averaged.")
+        unique_time, inverse = np.unique(time_s, return_inverse=True)
+
+        def averaged(values):
+            sums = np.bincount(inverse, weights=values)
+            counts = np.bincount(inverse)
+            return sums / counts
+
+        time_s = unique_time
+        disp_a, force_a, disp_b, force_b = (
+            averaged(disp_a),
+            averaged(force_a),
+            averaged(disp_b),
+            averaged(force_b),
         )
 
     return Sensor(

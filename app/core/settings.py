@@ -8,6 +8,12 @@ import json
 import os
 from typing import Optional
 
+from app.core.atomic_io import atomic_open
+
+
+def _reject_nonfinite(token: str):
+    raise ValueError(f"Non-finite JSON number {token!r} is not supported")
+
 
 def _config_dir() -> str:
     override = os.environ.get("TRACKER_CONFIG_DIR")
@@ -26,18 +32,17 @@ def _config_path() -> str:
 def load_settings() -> dict:
     path = _config_path()
     try:
-        with open(path) as f:
-            data = json.load(f)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f, parse_constant=_reject_nonfinite)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
 def save_settings(data: dict) -> None:
-    directory = _config_dir()
-    os.makedirs(directory, exist_ok=True)
-    with open(_config_path(), "w") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
+    with atomic_open(_config_path()) as f:
+        json.dump(data, f, indent=2, sort_keys=True, allow_nan=False)
+        f.write("\n")
 
 
 def get_section(name: str) -> Optional[dict]:

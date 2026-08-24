@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+*.bmp binary
+*.ico binary
+*.exe binary
+*.zip binary
+*.npy binary
+*.npz binary

@@ -1,4 +1,4 @@
-import os
+import math
 from typing import Optional
 
 import numpy as np
@@ -19,6 +19,79 @@ DEFAULT_DISPLAY = dict(
 )
 
 
+def _validated(defaults: dict, values, ranges: dict) -> dict:
+    """Merge known, correctly typed finite values; replace invalid persisted input with defaults."""
+    values = values if isinstance(values, dict) else {}
+    result = dict(defaults)
+    for key, default in defaults.items():
+        if key not in values:
+            continue
+        value = values[key]
+        if isinstance(default, bool):
+            if isinstance(value, bool):
+                result[key] = value
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            continue
+        if isinstance(default, int) and not number.is_integer():
+            continue
+        low, high = ranges.get(key, (None, None))
+        if (low is not None and number < low) or (high is not None and number > high):
+            continue
+        result[key] = int(value) if isinstance(default, int) else number
+    return result
+
+
+def validate_shi_tomasi(values) -> dict:
+    return _validated(
+        DEFAULT_SHI_TOMASI,
+        values,
+        {
+            "maxCorners": (1, 1_000_000),
+            "qualityLevel": (0.0001, 1.0),
+            "minDistance": (0.0, 1000.0),
+            "blockSize": (1, 99),
+            "k": (0.0, 1.0),
+        },
+    )
+
+
+def validate_grid(values) -> dict:
+    return _validated(DEFAULT_GRID, values, {"spacing_x": (1, 1000), "spacing_y": (1, 1000)})
+
+
+def validate_lk(values) -> dict:
+    result = _validated(
+        DEFAULT_LK,
+        values,
+        {
+            "win_size": (3, 201),
+            "max_level": (0, 10),
+            "max_iter": (1, 1000),
+            "epsilon": (0.0001, 10.0),
+            "flags": (0, 8),
+            "min_eig_threshold": (0.0, 1.0),
+        },
+    )
+    # OpenCV defines bit 4 as USE_INITIAL_FLOW, which this app intentionally cannot select because
+    # it does not supply a separate initial next-point estimate. Bit 8 switches the error output
+    # to minimum eigenvalues; all other values are either meaningless here or unsafe.
+    if result["flags"] not in (0, 8):
+        result["flags"] = DEFAULT_LK["flags"]
+    return result
+
+
+def validate_display(values) -> dict:
+    return _validated(
+        DEFAULT_DISPLAY,
+        values,
+        {"marker_size": (1, 15), "marker_opacity": (0, 100)},
+    )
+
+
 class ProjectState:
     """Mutable per-session state. Holds the loaded sequence and the global frame indices.
 
@@ -37,10 +110,10 @@ class ProjectState:
         self.roi: Optional[ROI] = None
 
         # Built-in defaults merged with any persisted user defaults.
-        self.shi_tomasi_params: dict = {**DEFAULT_SHI_TOMASI, **(settings.get_section("shi_tomasi") or {})}
-        self.grid_params: dict = {**DEFAULT_GRID, **(settings.get_section("grid") or {})}
-        self.lk_params: dict = {**DEFAULT_LK, **(settings.get_section("lk") or {})}
-        self.display_params: dict = {**DEFAULT_DISPLAY, **(settings.get_section("display") or {})}
+        self.shi_tomasi_params: dict = validate_shi_tomasi(settings.get_section("shi_tomasi"))
+        self.grid_params: dict = validate_grid(settings.get_section("grid"))
+        self.lk_params: dict = validate_lk(settings.get_section("lk"))
+        self.display_params: dict = validate_display(settings.get_section("display"))
         self.features: Optional[np.ndarray] = None  # (N, 2) reference-frame seed points
         self.result = None  # TrackerResult, set after tracking
         self.active_mask: Optional[np.ndarray] = None  # (P,) bool, aligned to result points

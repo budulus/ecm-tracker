@@ -59,6 +59,26 @@ def interp_to_images(
     covered span, so every image frame gets a value; ``in_range`` flags which frames actually lie
     within sensor coverage (the rest are clamped, not real data).
     """
+    image_time_ms = np.asarray(image_time_ms, dtype=np.float64)
+    sensor_time_ms = np.asarray(sensor_time_ms, dtype=np.float64)
+    channel = np.asarray(channel, dtype=np.float64)
+    try:
+        offset_ms = float(offset_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Synchronization offset must be numeric") from exc
+    if image_time_ms.ndim != 1 or sensor_time_ms.ndim != 1 or channel.ndim != 1:
+        raise ValueError("Synchronization inputs must be one-dimensional")
+    if sensor_time_ms.size == 0 or channel.shape != sensor_time_ms.shape:
+        raise ValueError("Sensor timestamps and channel must be non-empty and equal-length")
+    if not (
+        np.isfinite(image_time_ms).all()
+        and np.isfinite(sensor_time_ms).all()
+        and np.isfinite(channel).all()
+        and np.isfinite(offset_ms)
+    ):
+        raise ValueError("Synchronization inputs must be finite")
+    if np.any(np.diff(sensor_time_ms) <= 0):
+        raise ValueError("Sensor timestamps must be strictly increasing")
     xs = sensor_time_ms + offset_ms
     values = np.interp(image_time_ms, xs, channel)
     in_range = (image_time_ms >= xs[0]) & (image_time_ms <= xs[-1])
@@ -76,5 +96,19 @@ def sensor_index_to_image_index(
     The reference must be a real frame (it carries the ROI), so this picks the nearest image
     rather than interpolating a fractional position.
     """
+    sensor_time_ms = np.asarray(sensor_time_ms, dtype=np.float64)
+    image_time_ms = np.asarray(image_time_ms, dtype=np.float64)
+    try:
+        offset_ms = float(offset_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Synchronization offset must be numeric") from exc
+    if not 0 <= sensor_index < sensor_time_ms.size:
+        raise IndexError(f"Sensor index {sensor_index} is out of range")
+    if image_time_ms.size == 0 or not (
+        np.isfinite(sensor_time_ms).all()
+        and np.isfinite(image_time_ms).all()
+        and np.isfinite(offset_ms)
+    ):
+        raise ValueError("Timeline inputs must be non-empty and finite")
     t = sensor_time_ms[sensor_index] + offset_ms
     return int(np.argmin(np.abs(image_time_ms - t)))

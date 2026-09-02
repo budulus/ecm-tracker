@@ -72,6 +72,8 @@ ctx.has_result                       # is there a tracking result?
 coords = ctx.coords()                # (frames, points, 2) float32, kept points, cut-indexed
 ids    = ctx.point_indices()         # original ids of those points
 img    = ctx.frame_bgr(ctx.current_index)   # current frame as an (H,W,3) BGR array
+paths  = ctx.frame_paths             # immutable tuple, ordered by global frame index
+folder = ctx.source_dir              # loaded image folder, or None
 ctx.roi, ctx.roi_contains(x, y), ctx.roi_mask()
 ctx.metrics()                        # per-point FB error, failures, max step, …
 ctx.reference_index, ctx.last_index, ctx.current_index

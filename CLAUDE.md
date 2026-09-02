@@ -155,6 +155,9 @@ two locations, deliberately separate:
   `reference_algorithms`, `state`, `project_io`) is unit-tested in `tests/test_mts_uniaxial.py`; it
   enforces data integrity with a `Step` dependency chain whose `invalidate_from()` wipes all
   downstream artifacts (memory + the `<root>/mts_uniaxial_project/` files) on any upstream edit.
+  `pressure_strain` is the focused sensor-analysis example: it uses the SDK's read-only ordered
+  frame paths, aligns `Elapsed_s` / `Raw_mbar` to image modification times, handles the global/cut
+  boundary explicitly, and plots or exports principal strain against pressure.
 
 **The façade (`PluginContext`)** is the whole point: a plugin only ever learns this one object
 (handed to it as `self.ctx`). It wraps `MainWindow`/`ProjectState`/`CanvasView` and **hides the

@@ -843,6 +843,8 @@ ctx.status(f"{ctx.n_active} of {ctx.point_count} points kept across {ctx.frame_c
       <p>All take a <strong>global</strong> index and return a NumPy array. <code>frame_bgr</code> / <code>frame_gray</code> raise if no sequence is loaded — guard with <code>ctx.has_sequence</code>.</p>
       <div class="api">
         <div class="api-head"><svg class="ic"><use href="#i-image"/></svg>ctx — images</div>
+        <div class="api-row"><div class="api-sig"><span class="m">source_dir</span> <span class="ret">: str | None</span><span class="tag prop">prop</span></div><div class="api-desc">Directory the active sequence was loaded from; useful as a nearby file-dialog default.</div></div>
+        <div class="api-row"><div class="api-sig"><span class="m">frame_paths</span> <span class="ret">: tuple[str, ...]</span><span class="tag prop">prop</span></div><div class="api-desc">Immutable ordered paths for all global frames; empty when no sequence is loaded.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">image_size</span>() <span class="ret">→ (H, W) | None</span></div><div class="api-desc">Frame dimensions, or <code>None</code> if no sequence.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">frame_bgr</span>(<span class="a">global_index</span>) <span class="ret">→ ndarray</span></div><div class="api-desc"><code>(H, W, 3)</code> uint8, OpenCV BGR order.</div></div>
         <div class="api-row"><div class="api-sig"><span class="m">frame_gray</span>(<span class="a">global_index</span>) <span class="ret">→ ndarray</span></div><div class="api-desc"><code>(H, W)</code> uint8 grayscale.</div></div>
@@ -1029,7 +1031,7 @@ ctx.signals.sequence_changed.connect(self._reload)
     <!-- EXAMPLES -->
     <section id="examples">
       <h2><svg class="ic"><use href="#i-code"/></svg>Worked examples</h2>
-      <p class="sec-sub">Two bundled plugins. Copy the closest and edit.</p>
+      <p class="sec-sub">Three bundled plugins. Copy the closest and edit.</p>
 
       <div class="ex">
         <div class="ex-head">
@@ -1052,6 +1054,18 @@ ctx.signals.sequence_changed.connect(self._reload)
         <div class="ex-body">
           <p>The foundational, full-application example. Loads an experiment (images in acquisition-log order plus an MTS <code>.dat</code> sensor stream), interpolates force/displacement onto the image timeline, crops the window, detects and zeroes a reference frame, and sets the core tracked range — then exports per-frame coords aligned with the zeroed sensor data.</p>
           <p><strong>Teaches:</strong> driving image loading with <code>ctx.load_sequence</code>, frame-range control (<code>set_reference_frame</code> / <code>set_last_frame</code>), and a multi-step plugin that persists its own project folder.</p>
+        </div>
+      </div>
+
+      <div class="ex">
+        <div class="ex-head">
+          <div class="ci"><svg class="ic"><use href="#i-image"/></svg></div>
+          <div class="et"><h4>Pressure–Strain</h4><span class="path">plugins/pressure_strain/</span></div>
+          <span class="pill">File metadata · sync · plot</span>
+        </div>
+        <div class="ex-body">
+          <p>Loads a pressure CSV, uses ordered frame-file modification times to interpolate pressure over the full sequence, then plots a selected principal strain over the correctly sliced tracked range.</p>
+          <p><strong>Teaches:</strong> using <code>source_dir</code> and <code>frame_paths</code>, keeping global sensor alignment separate from cut-indexed coordinates, reactive matplotlib plots, and atomic CSV export.</p>
         </div>
       </div>
 
@@ -1086,7 +1100,7 @@ ctx.signals.sequence_changed.connect(self._reload)
         <tbody>
           <tr><td>Status</td><td><code>has_sequence</code> · <code>has_result</code> · <code>n_total_images</code> · <code>status()</code> · <code>request_redraw()</code></td></tr>
           <tr><td>Frames</td><td><code>reference_index</code> · <code>last_index</code> · <code>current_index</code> · <code>current_cut</code> · <code>global_to_cut()</code> · <code>cut_to_global()</code> · <code>set_current_frame()</code> · <code>set_reference_frame()</code> · <code>set_last_frame()</code></td></tr>
-          <tr><td>Images</td><td><code>image_size()</code> · <code>frame_bgr()</code> · <code>frame_gray()</code> · <code>frame_rgb()</code></td></tr>
+          <tr><td>Images</td><td><code>source_dir</code> · <code>frame_paths</code> · <code>image_size()</code> · <code>frame_bgr()</code> · <code>frame_gray()</code> · <code>frame_rgb()</code></td></tr>
           <tr><td>Tracked data</td><td><code>coords()</code> · <code>track_status()</code> · <code>point_indices()</code> · <code>active_mask</code> · <code>n_active</code> · <code>point_count</code> · <code>frame_count</code> · <code>metrics()</code> · <code>result</code></td></tr>
           <tr><td>ROI</td><td><code>roi</code> · <code>roi_corners</code> · <code>roi_contains()</code> · <code>roi_mask()</code></td></tr>
           <tr><td>Overlays</td><td><code>add_overlay()</code> · <code>remove_overlay()</code> · <code>image_to_screen()</code> · <code>screen_to_image()</code></td></tr>

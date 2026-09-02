@@ -17,6 +17,7 @@ TEST_MODULES = (
     "tests.test_pipeline",
     "tests.test_plugins",
     "tests.test_mts_uniaxial",
+    "tests.test_pressure_strain",
 )
 SOURCE_ROOTS = ("app", "plugins", "tests", "scripts")
 

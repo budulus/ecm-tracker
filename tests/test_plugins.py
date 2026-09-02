@@ -19,7 +19,7 @@ from app.plugins import CanvasInteraction, PluginContext
 from app.plugins.manager import PluginManager
 from tests.synthetic import make_sequence
 
-EXPECTED_PLUGINS = {"affine_zones", "mts_uniaxial"}
+EXPECTED_PLUGINS = {"affine_zones", "mts_uniaxial", "pressure_strain"}
 
 
 _APP = None
@@ -71,6 +71,7 @@ def test_discovery_orders_by_plugin_order():
     mgr = PluginManager(None)
     order = [r.plugin_id for r in mgr.discover()]
     assert order.index("mts_uniaxial") < order.index("affine_zones")
+    assert order.index("affine_zones") < order.index("pressure_strain")
 
 
 def test_window_builds_plugin_menu():
@@ -116,6 +117,10 @@ def test_context_accessors():
     assert img.ndim == 3 and img.shape[2] == 3
     assert ctx.image_size() == img.shape[:2]
     assert ctx.frame_rgb(ctx.current_index).shape == img.shape
+    assert ctx.source_dir == w.state.source_dir
+    assert isinstance(ctx.frame_paths, tuple)
+    assert ctx.frame_paths == tuple(w.state.sequence.paths)
+    assert len(ctx.frame_paths) == ctx.n_total_images
 
     # ROI + metrics
     assert ctx.roi is not None and len(ctx.roi_corners) == 4

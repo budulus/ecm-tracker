@@ -137,6 +137,16 @@ class PluginContext:
         """Number of frames in the full loaded folder."""
         return self._state.total_images
 
+    @property
+    def source_dir(self) -> Optional[str]:
+        """Directory the active image sequence was loaded from, or ``None``.
+
+        This is the same directory the core application uses as the default location for
+        sequence-related open/save dialogs.  It is exposed read-only so plugins can choose a
+        nearby default without reaching through the façade into :class:`ProjectState`.
+        """
+        return self._state.source_dir
+
     def status(self, message: str, timeout: int = 4000) -> None:
         """Show a transient message in the main-window status bar."""
         self._window.statusBar().showMessage(message, timeout)
@@ -206,6 +216,17 @@ class PluginContext:
         self._window._set_last_frame(global_index)
 
     # ---- images ---------------------------------------------------------
+    @property
+    def frame_paths(self) -> tuple[str, ...]:
+        """Ordered image paths for all global frames as an immutable tuple.
+
+        The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
+        tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
+        these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+        """
+        sequence = self._state.sequence
+        return tuple(sequence.paths) if sequence is not None else ()
+
     def load_sequence(self, paths: List[str], source_dir: Optional[str] = None) -> bool:
         """Load an explicit, pre-ordered list of image paths as the active sequence.
 

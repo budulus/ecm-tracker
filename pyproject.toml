@@ -8,7 +8,7 @@ dependencies = [
     "opencv-python>=4.5,<5",
     "numpy>=1.21,<2",
     "scipy>=1.10,<2",  # used by bundled plugins (Delaunay triangulation, savemat)
-    "matplotlib>=3.7,<4",  # used by the affine_zones plugin (stretch-vs-frame curves)
+    "matplotlib>=3.7,<4",  # used by bundled analysis plugins for embedded plots
 ]
 
 [tool.uv]

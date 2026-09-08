@@ -47,6 +47,7 @@ class _DragTool:
         self.window._commit_interactive_roi(corners)
 
     def on_cancel(self) -> None:
+        self._start = None
         if self._done:
             return
         self.window.state.roi = None

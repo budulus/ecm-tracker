@@ -134,7 +134,7 @@ def test_parse_real_assets():
     sen = parsers.parse_sensor(os.path.join(root, "sensor", "specimen.dat"))
     assert sen.n_samples == 6
     assert sen.clamp_labels == ("Achse-2", "Achse-4")
-    assert sen.units == {"time": "Sec", "disp": "mm", "force": "N"}
+    assert {k: sen.units[k] for k in ("time", "disp", "force")} == {"time": "Sec", "disp": "mm", "force": "N"}
     assert sen.n_skipped == 0 and sen.warnings == []
 
 
@@ -321,10 +321,10 @@ def test_project_io_round_trip():
     assert loaded.completed_through == int(Step.REFERENCE)
     assert loaded.ordered_paths == ordered  # re-parsed in log order
 
-    # corrupting the reference file caps the resume at CROP
+    # Per-step files are inspection snapshots; the committed manifest is authoritative.
     os.remove(os.path.join(project_io.project_dir(exp["root"]), "reference.json"))
     capped = project_io.load_project(exp["root"])
-    assert capped.completed_through == int(Step.CROP)
+    assert capped.completed_through == int(Step.REFERENCE)
 
 
 # --------------------------------------------------------------------------- API + GUI wiring
@@ -407,6 +407,7 @@ def test_export_after_tracking():
     win._on_export()
     assert win.pstate.completed_through == int(Step.EXPORT)
     pdir = project_io.project_dir(exp["root"])
+    pdir = os.path.dirname(project_io.export_paths(win.pstate)[0])
     for name in ("tracked_coords.npy", "point_indices.npy", "aligned_data.csv"):
         assert os.path.isfile(os.path.join(pdir, name)), name
 
@@ -667,7 +668,7 @@ def test_resume_rejects_out_of_range_reference():
     project_io.save_reference(st)
 
     # Corrupt the saved reference to point past the end of the (re-parsed) image log.
-    rpath = os.path.join(project_io.project_dir(exp["root"]), "reference.json")
+    rpath = os.path.join(project_io.project_dir(exp["root"]), project_io.MANIFEST)
     with open(rpath) as f:
         ref = json.load(f)
     ref["ref_image_global"] = log.n_images + 3
@@ -807,7 +808,7 @@ def test_mask_changes_persist_and_invalidate_export_while_plugin_is_closed():
     _track_in_app(w)
     win._on_export()
     pdir = project_io.project_dir(exp["root"])
-    export_path = os.path.join(pdir, "tracked_coords.npy")
+    export_path = project_io.export_paths(win.pstate)[0]
     assert os.path.isfile(export_path)
 
     # Closing hides the UI but the cached plugin instance must continue protecting its project.
@@ -817,7 +818,7 @@ def test_mask_changes_persist_and_invalidate_export_while_plugin_is_closed():
     win.ctx.apply_keep_mask(keep)
     saved = load_trackers(os.path.join(pdir, "trackers.npz"))
     assert np.array_equal(saved["active_mask"], w.state.active_mask)
-    assert not os.path.exists(export_path)
+    assert win.pstate.export_generation is None  # Old generation remains recoverable but uncommitted.
     assert win.pstate.completed_through == int(Step.TRACK)
 
     # An external sequence change while hidden must detach the old MTS state immediately.

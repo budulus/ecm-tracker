@@ -13,6 +13,7 @@ import inspect
 import logging
 import sys
 import traceback
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Type
@@ -21,7 +22,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QLabel, QMenu, QMessageBox, QPushButton, QWidget
 
-from app.plugins.api import PluginContext, TrackerPlugin
+from app.core import settings
+from app.plugins.api import API_VERSION, PluginContext, TrackerPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,12 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
-PLUGINS_DIR = PROJECT_ROOT / "plugins"
+PLUGINS_DIR = PROJECT_ROOT / ("bundled_plugins" if globals().get("__compiled__") is not None else "plugins")
+
+
+def user_plugins_dir() -> Path:
+    """Writable user extensions live outside installed/signed application files."""
+    return Path(settings._config_dir()) / "plugins"
 
 
 def _clear_layout(layout) -> None:
@@ -66,6 +73,7 @@ class PluginRecord:
     error: Optional[str] = None  # import/discovery error message, if any
     instance: Optional[TrackerPlugin] = None
     window: Optional[QWidget] = field(default=None, repr=False)
+    context: Optional[PluginContext] = field(default=None, repr=False)
 
 
 class PluginManager:
@@ -80,13 +88,25 @@ class PluginManager:
     # ---- discovery ------------------------------------------------------
     def discover(self) -> List[PluginRecord]:
         """(Re)scan ``plugins/`` and return the records (also stored on the manager)."""
+        self.shutdown()
         self._records.clear()
         if str(PROJECT_ROOT) not in sys.path:
             sys.path.insert(0, str(PROJECT_ROOT))
-        if not PLUGINS_DIR.is_dir():
-            return []
+        legacy = PROJECT_ROOT / "plugins"
+        roots = (PLUGINS_DIR, legacy, user_plugins_dir()) if legacy != PLUGINS_DIR else (PLUGINS_DIR, user_plugins_dir())
+        importlib.invalidate_caches()
+        try:
+            package = importlib.import_module("plugins")
+        except ModuleNotFoundError as exc:
+            if exc.name != "plugins":
+                raise
+            package = types.ModuleType("plugins")
+            package.__package__ = "plugins"
+            sys.modules["plugins"] = package
+        package.__path__ = [str(root) for root in reversed(roots)]
+        entries = {p.name: p for root in roots if root.is_dir() for p in root.iterdir()}
         records: List[PluginRecord] = []
-        for entry in sorted(PLUGINS_DIR.iterdir()):
+        for entry in sorted(entries.values()):
             if not entry.is_dir() or entry.name.startswith((".", "_")):
                 continue
             if not (entry / "__init__.py").exists():
@@ -108,7 +128,15 @@ class PluginManager:
                     plugin_id, plugin_id,
                     error="No TrackerPlugin subclass found (expose PLUGIN = YourClass).",
                 )
-            name = getattr(cls, "NAME", plugin_id) or plugin_id
+            if type(cls.ORDER) is not int:
+                raise TypeError("ORDER must be an integer")
+            if not isinstance(cls.NAME, str) or not cls.NAME.strip():
+                raise TypeError("NAME must be a nonempty string")
+            if not isinstance(cls.DESCRIPTION, str):
+                raise TypeError("DESCRIPTION must be a string")
+            if type(cls.API_VERSION) is not int or cls.API_VERSION != API_VERSION:
+                raise ValueError(f"Unsupported API_VERSION; host supports {API_VERSION}")
+            name = cls.NAME
             return PluginRecord(plugin_id, name, getattr(cls, "DESCRIPTION", ""), cls=cls)
         except Exception:
             return PluginRecord(plugin_id, plugin_id, error=traceback.format_exc(limit=4))
@@ -116,8 +144,11 @@ class PluginManager:
     @staticmethod
     def _find_plugin_class(module) -> Optional[Type[TrackerPlugin]]:
         explicit = getattr(module, "PLUGIN", None)
-        if inspect.isclass(explicit) and issubclass(explicit, TrackerPlugin):
-            return explicit
+        if explicit is not None:
+            if inspect.isclass(explicit) and explicit is not TrackerPlugin and issubclass(explicit, TrackerPlugin):
+                return explicit
+            raise TypeError("PLUGIN must name a TrackerPlugin subclass")
+        candidates = set()
         for obj in vars(module).values():
             if (
                 inspect.isclass(obj)
@@ -125,8 +156,10 @@ class PluginManager:
                 and obj is not TrackerPlugin
                 and obj.__module__.startswith(module.__name__)
             ):
-                return obj
-        return None
+                candidates.add(obj)
+        if len(candidates) > 1:
+            raise ValueError("Ambiguous plugin classes; expose PLUGIN = YourClass.")
+        return next(iter(candidates), None)
 
     # ---- menu -----------------------------------------------------------
     def build_menu(self, menu: QMenu) -> None:
@@ -178,15 +211,25 @@ class PluginManager:
         rec = self._records.get(plugin_id)
         if rec is None or rec.cls is None:
             return
-        if rec.window is not None and rec.window.isVisible():
-            rec.window.raise_()
-            rec.window.activateWindow()
-            return
+        if rec.window is not None:
+            try:
+                if rec.window.isVisible():
+                    rec.window.raise_()
+                    rec.window.activateWindow()
+                    return
+            except RuntimeError:
+                rec.window = None  # Native widget is gone; context still needs disposal.
+                # WA_DeleteOnClose has already destroyed the native window.
+            self._unload(rec)
         try:
             if rec.instance is None:
-                rec.instance = rec.cls(PluginContext(self._window, plugin_id))
+                rec.context = PluginContext(self._window, plugin_id)
+                rec.instance = rec.cls(rec.context)
             window = rec.instance.launch()
+            if window is not None and not isinstance(window, QWidget):
+                raise TypeError("launch() must return a QWidget or None")
         except Exception:
+            self._unload(rec)
             QMessageBox.critical(
                 self._window,
                 f"Plugin error: {rec.name}",
@@ -195,6 +238,11 @@ class PluginManager:
             return
         if isinstance(window, QWidget):
             rec.window = window
+
+    def shutdown(self) -> None:
+        """Release every plugin resource when the host closes."""
+        for rec in self._records.values():
+            self._unload(rec)
 
     def reload(self) -> None:
         """Unload all plugins and re-scan (drops cached modules so code edits take effect)."""
@@ -216,11 +264,16 @@ class PluginManager:
         if rec.window is not None:
             try:
                 rec.window.close()
+                rec.window.deleteLater()
             except Exception:
                 logger.exception("Plugin window %s failed to close", rec.plugin_id)
+        if rec.context is not None:
+            rec.context.dispose()
+        rec.context = None
         rec.instance = None
         rec.window = None
 
     def _open_folder(self) -> None:
-        PLUGINS_DIR.mkdir(exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(PLUGINS_DIR)))
+        folder = user_plugins_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))

@@ -20,8 +20,8 @@ import numpy as np
 from app.core.atomic_io import atomic_open
 
 FORMAT = "ecmtracker-trackers"
-VERSION = 2
-SUPPORTED_VERSIONS = {1, VERSION}
+VERSION = 3
+SUPPORTED_VERSIONS = {1, 2, VERSION}
 
 # The eight TrackerResult arrays, with their on-disk dtypes (mirrors tracker_result.py).
 RESULT_ARRAY_DTYPES = {
@@ -56,6 +56,8 @@ def save_trackers(
     shi_tomasi_params,
     grid_params,
     sequence_fingerprint=None,
+    error_kind="unknown",
+    tracking_params=None,
 ):
     """Write a tracker session to ``path`` (a single ``.npz``); return the path written.
 
@@ -70,7 +72,13 @@ def save_trackers(
     if not path.endswith(".npz"):
         path += ".npz"
 
-    features = np.asarray(features, dtype=np.float32).reshape(-1, 2)
+    for name, value in (("total_images", total_images), ("reference_index", reference_index),
+                        ("last_index", last_index), ("current_index", current_index), ("win_size", win_size)):
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+            raise ValueError(f"{name} must be an integer")
+    features = np.asarray(features, dtype=np.float32)
+    if features.ndim != 2 or features.shape[1] != 2:
+        raise ValueError("features must have shape (points, 2)")
     has_result = result_arrays is not None
     if not (
         isinstance(sequence_fingerprint, str)
@@ -98,6 +106,8 @@ def save_trackers(
         "shi_tomasi_params": dict(shi_tomasi_params),
         "grid_params": dict(grid_params),
         "sequence_fingerprint": sequence_fingerprint,
+        "error_kind": error_kind,
+        "tracking_params": dict(tracking_params or {}),
     }
 
     arrays = {"features": features, "meta": np.array(json.dumps(meta, allow_nan=False))}
@@ -106,6 +116,11 @@ def save_trackers(
         for name, dtype in RESULT_ARRAY_DTYPES.items():
             arrays[name] = np.asarray(result_arrays[name], dtype=dtype)
 
+    class Bundle(dict):
+        @property
+        def files(self):
+            return list(self)
+    _parse(meta, Bundle(arrays))  # Validate before replacing a previously good file.
     with atomic_open(path, "wb") as f:
         np.savez(f, **arrays)
     return path
@@ -150,6 +165,9 @@ def _parse(meta, data):
         raise ValueError("Tracker file metadata must be a JSON object.")
     if meta.get("format") != FORMAT:
         raise ValueError("This file is not an ECM Tracker tracker file.")
+    for name in ("version", "total_images", "reference_index", "last_index", "current_index", "win_size"):
+        if name in meta and type(meta[name]) is not int:
+            raise ValueError(f"Tracker {name} must be an integer.")
     try:
         file_version = int(meta.get("version", 0))
     except (TypeError, ValueError, OverflowError) as exc:
@@ -231,6 +249,8 @@ def _parse(meta, data):
 
         if file_version == 1:
             result_arrays = _migrate_v1_result(result_arrays)
+        else:
+            _validate_result_semantics(result_arrays, features)
 
     roi_corners = meta.get("roi_corners")
     if roi_corners is not None:
@@ -266,6 +286,8 @@ def _parse(meta, data):
     if file_version >= 2 and fingerprint is None:
         raise ValueError("Tracker file is missing its required sequence fingerprint.")
 
+    if meta.get("error_kind", "unknown") not in {"photometric", "min_eigenvalue", "unknown"}:
+        raise ValueError("Unknown LK error kind.")
     try:
         win_size = int(meta.get("win_size", 0))
     except (TypeError, ValueError) as exc:
@@ -289,6 +311,8 @@ def _parse(meta, data):
         "grid_params": parameter_dict("grid_params"),
         "sequence_fingerprint": fingerprint,
         "file_version": file_version,
+        "error_kind": meta.get("error_kind", "unknown") if file_version >= 3 else "unknown",
+        "tracking_params": parameter_dict("tracking_params"),
     }
 
 
@@ -332,3 +356,26 @@ def _migrate_v1_result(arrays):
     migrated["fb_mean_error"] = mean
     migrated["fb_max_error"] = maximum
     return migrated
+
+def _validate_result_semantics(arrays, features):
+    """Reject revived tracks and inconsistent seeds; derive FB summaries from raw evidence."""
+    cf, sf = arrays["coords_fw"], arrays["status_fw"]
+    cb, sb = arrays["coords_bw"], arrays["status_bw"]
+    if not np.array_equal(features, cf[0]):
+        raise ValueError("Reference points do not match tracked reference coordinates.")
+    if not np.array_equal(cb[-1], cf[-1]):
+        raise ValueError("Backward seeds must match forward endpoints.")
+    if not sf[0].all() or np.any(np.diff(sf.astype(int), axis=0) > 0):
+        raise ValueError("Forward statuses must be cumulative from valid reference seeds.")
+    if np.any(np.diff(sb.astype(int), axis=0) < 0) or np.any(sb[-1] > sf[-1]):
+        raise ValueError("Backward statuses must be cumulative from valid forward endpoints.")
+    for name in ("err_fw", "err_bw", "fb_mean_error", "fb_max_error"):
+        if (arrays[name] < 0).any():
+            raise ValueError(f"{name} cannot be negative.")
+    for xy, status in ((cf, sf), (cb[::-1], sb[::-1])):
+        if not np.array_equal(xy[1:][status[1:] == 0], xy[:-1][status[1:] == 0]):
+            raise ValueError("Failed tracks must retain their last valid coordinates.")
+    # Summaries are derived, not authoritative serialized inputs.
+    derived = _migrate_v1_result(arrays)
+    arrays["fb_mean_error"] = derived["fb_mean_error"]
+    arrays["fb_max_error"] = derived["fb_max_error"]

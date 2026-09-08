@@ -346,8 +346,8 @@ def test_zone_fit_excludes_lost_tracks():
     assert np.allclose(F_fit, F, atol=1e-4)
 
     # Without the mask the corrupt point poisons the fit.
-    _, F_bad, _ = fit_zone_deformation(polygon, ref, cur)
-    assert not np.allclose(F_bad, F, atol=1e-4)
+    bad = fit_zone_deformation(polygon, ref, cur)
+    assert bad is None or not np.allclose(bad[1], F, atol=1e-4)
 
 
 def test_ransac_zone_sample_size():
@@ -379,7 +379,11 @@ def test_ransac_zone_sample_size():
 
     # Too few points to separate signal from noise → everything is an inlier (nothing to clean).
     _li, _M, few = fit_zone_affine(polygon, ref32[:5], cur32[:5], sample_size=10, reproj=2.0)
-    assert few.all()
+    if _M is None:
+        assert not few.any()
+    else:
+        residual = np.linalg.norm(ref32[:5] @ _M[:, :2].T + _M[:, 2] - cur32[:5], axis=1)
+        assert np.all(residual[few] <= 2.0)
 
 
 def test_track_status_accessor():

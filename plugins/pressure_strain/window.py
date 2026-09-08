@@ -156,7 +156,7 @@ class PressureStrainWindow(QWidget):
         self.path_edit.setText(pressure.source_path)
         self.path_edit.setToolTip(pressure.source_path)
         self.pressure_info.setText(
-            f"{pressure.source_rows:,} CSV rows synchronized to "
+            f"Assumed endpoint / file-mtime alignment: {pressure.source_rows:,} CSV rows to "
             f"{aligned.pressure_mbar.size:,} frames · "
             f"{aligned.pressure_mbar[0]:.4g} to {aligned.pressure_mbar[-1]:.4g} mbar"
         )

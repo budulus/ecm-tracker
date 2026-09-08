@@ -13,12 +13,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEST_MODULES = (
-    "tests.test_pipeline",
-    "tests.test_plugins",
-    "tests.test_mts_uniaxial",
-    "tests.test_pressure_strain",
-)
+TEST_MODULES = tuple("tests." + path.stem for path in sorted((ROOT / "tests").glob("test_*.py")))
 SOURCE_ROOTS = ("app", "plugins", "tests", "scripts")
 
 
@@ -27,6 +22,9 @@ def main() -> int:
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     with tempfile.TemporaryDirectory(prefix="ecmtracker-check-") as temporary_root:
+        fixtures = Path(temporary_root) / "fixtures"
+        fixtures.mkdir()
+        env["TMP"] = env["TEMP"] = env["TMPDIR"] = str(fixtures)
         env["MPLCONFIGDIR"] = str(Path(temporary_root) / "matplotlib")
         env["XDG_CACHE_HOME"] = str(Path(temporary_root) / "cache")
         for index, module in enumerate(TEST_MODULES):
@@ -39,13 +37,18 @@ def main() -> int:
                 cwd=ROOT,
                 env=env,
                 check=True,
+                timeout=180,
             )
+
+        subprocess.run([sys.executable, "run.py", "--check-plugin", "plugins/_sdk/example"], cwd=ROOT, env=env, check=True, timeout=60)
+        subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "plugins/_sdk/example", "-p", "test_*.py"], cwd=ROOT, env=env, check=True, timeout=60)
 
     files = sorted(
         path
         for source_root in SOURCE_ROOTS
         for path in (ROOT / source_root).rglob("*.py")
     )
+    files.extend(ROOT.glob("*.py"))
     for path in files:
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     print(f"\nParsed {len(files)} Python files. All checks passed.")

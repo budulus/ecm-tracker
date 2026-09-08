@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import csv
 import os
-from dataclasses import dataclass
+import json
+import hashlib
+from dataclasses import dataclass, field
 
 import numpy as np
 
-from app.core.affine import fit_affine, principal_stretches
-from app.core.atomic_io import atomic_open
+from app.plugins.analysis import fit_affine, principal_stretches
+from app.plugins.analysis import atomic_open
 
 
 STRAIN_MODES = ("epsilon_1", "epsilon_2", "mean")
@@ -22,6 +24,7 @@ class PressureData:
     elapsed_s: np.ndarray
     pressure_mbar: np.ndarray
     source_rows: int
+    source_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class AlignedPressure:
     image_mtime_s: np.ndarray
     image_elapsed_s: np.ndarray
     pressure_mbar: np.ndarray
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class PlotSeries:
     n_valid_points: np.ndarray
     strain_mode: str
     pressure_zeroed: bool
+    provenance: dict = field(default_factory=dict)
 
 
 def parse_pressure_csv(path: str) -> PressureData:
@@ -116,11 +121,14 @@ def parse_pressure_csv(path: str) -> PressureData:
         else:
             consolidated[group] = float(values.mean())
 
+    with open(path, "rb") as handle:
+        source_sha256 = hashlib.sha256(handle.read()).hexdigest()
     return PressureData(
         source_path=os.path.abspath(path),
         elapsed_s=unique_time,
         pressure_mbar=consolidated,
         source_rows=len(elapsed),
+        source_sha256=source_sha256,
     )
 
 
@@ -165,47 +173,23 @@ def align_pressure_to_images(
         image_mtime_s=image_mtime_s.copy(),
         image_elapsed_s=image_mtime_s - image_mtime_s[0],
         pressure_mbar=values,
+        provenance={"clock_model": "endpoint_mtime_affine_assumption",
+                    "pressure_source_sha256": pressure.source_sha256,
+                    "image_mtime_s": image_mtime_s.tolist(),
+                    "pressure_elapsed_anchors_s": [float(elapsed[0]), float(elapsed[-1])],
+                    "pressure_time_per_image_time": float((elapsed[-1] - elapsed[0]) / image_span)},
     )
 
 
 def compute_principal_strains(coords, status=None) -> StrainSeries:
     """Fit one homogeneous affine map per cut frame and return principal linear strains."""
+    from app.plugins.analysis import compute_series
     coords = np.asarray(coords, dtype=np.float64)
-    if coords.ndim != 3 or coords.shape[2] != 2:
-        raise ValueError("Tracked coordinates must have shape (frames, points, 2)")
-    frames, points, _ = coords.shape
-    if status is not None:
-        status = np.asarray(status)
-        if status.shape != (frames, points):
-            raise ValueError("Tracking status must have shape (frames, points)")
-
-    epsilon_1 = np.full(frames, np.nan, dtype=np.float64)
-    epsilon_2 = np.full(frames, np.nan, dtype=np.float64)
-    n_valid = np.zeros(frames, dtype=np.int64)
-    reference = coords[0]
-
-    for cut in range(frames):
-        valid = np.isfinite(reference).all(axis=1) & np.isfinite(coords[cut]).all(axis=1)
-        if status is not None:
-            valid &= status[cut] == 1
-        n_valid[cut] = int(valid.sum())
-        fit = fit_affine(reference, coords[cut], valid)
-        if fit is None:
-            continue
-        if cut == 0:
-            epsilon_1[cut] = epsilon_2[cut] = 0.0
-            continue
-        _indices, deformation, _translation = fit
-        lambda_1, lambda_2, _v1, _v2 = principal_stretches(deformation)
-        epsilon_1[cut] = lambda_1 - 1.0
-        epsilon_2[cut] = lambda_2 - 1.0
-
-    return StrainSeries(
-        epsilon_1=epsilon_1,
-        epsilon_2=epsilon_2,
-        mean=(epsilon_1 + epsilon_2) / 2.0,
-        n_valid_points=n_valid,
-    )
+    if coords.ndim != 3:
+        raise ValueError("coords must have shape (frames, points, 2)")
+    series = compute_series(coords, np.arange(coords.shape[0], dtype=float), status)
+    return StrainSeries(series.eps_1, series.eps_2,
+                        (series.eps_1 + series.eps_2) / 2, series.n_points)
 
 
 def build_plot_series(
@@ -238,6 +222,8 @@ def build_plot_series(
         n_valid_points=strains.n_valid_points.copy(),
         strain_mode=strain_mode,
         pressure_zeroed=bool(zero_pressure),
+        provenance={**aligned.provenance, "reference_global": reference_index,
+                    "last_global": last_index, "reference_pressure_mbar": float(aligned.pressure_mbar[reference_index])},
     )
 
 
@@ -258,6 +244,7 @@ def export_plot_csv(path: str, series: PlotSeries, frame_paths) -> None:
                 "strain_mode",
                 "pressure_zeroed",
                 "n_valid_points",
+                "provenance_json",
             ]
         )
         for i, global_index in enumerate(series.global_indices):
@@ -272,5 +259,6 @@ def export_plot_csv(path: str, series: PlotSeries, frame_paths) -> None:
                     series.strain_mode,
                     int(series.pressure_zeroed),
                     int(series.n_valid_points[i]),
+                    json.dumps(series.provenance, separators=(",", ":"), allow_nan=False) if i == 0 else "",
                 ]
             )

@@ -13,17 +13,19 @@ from __future__ import annotations
 import csv
 import json
 import os
+import hashlib
+import uuid
 from typing import List, Optional
 
 import numpy as np
 
-from app.core.atomic_io import atomic_open, atomic_save_npy
+from app.plugins.analysis import atomic_open, atomic_save_npy
 
 from .parsers import parse_image_log, parse_sensor, resolve_image_paths
 from .state import MtsProjectState, Step
 from .sync import FORCE_CHANNELS, OFFSET_CONVENTION
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECT_DIRNAME = "mts_uniaxial_project"
 MANIFEST = "manifest.json"
 
@@ -88,6 +90,8 @@ def _manifest_dict(state: MtsProjectState) -> dict:
         "units": sensor.units if sensor else None,
         "sensor_warnings": sensor.warnings if sensor else None,
         "n_skipped": sensor.n_skipped if sensor else None,
+        "sensor_skipped_rows": sensor.skipped_rows if sensor else [],
+        "image_log_skipped_rows": image_log.skipped_rows if image_log else [],
         "offset_convention": OFFSET_CONVENTION,
         "force_channel": state.force_channel,
         "offset_ms": state.offset_ms,
@@ -102,6 +106,12 @@ def _manifest_dict(state: MtsProjectState) -> dict:
         "material_width": state.material_width,
         "material_thickness": state.material_thickness,
         "incompressible": state.incompressible,
+        "raw_fingerprints": state.raw_fingerprints,
+        "relative_paths": {k: os.path.relpath(getattr(state, k), state.root) for k in ("images_dir", "sensor_file", "log_path") if getattr(state, k)},
+        "export_generation": state.export_generation,
+        "reference_parameters": state.reference_parameters,
+        "force_basis": state.force_basis,
+        "loading_axis_deg": state.loading_axis_deg,
         "stages": {},  # reserved for future post-processing stages
     }
 
@@ -115,6 +125,7 @@ def save_manifest(state: MtsProjectState) -> None:
 
 def save_load(state: MtsProjectState) -> None:
     """Write the LOAD snapshots (image log + raw sensor) and the manifest."""
+    state.raw_fingerprints = {k: _fingerprint(getattr(state, k)) for k in ("sensor_file", "log_path")}
     pdir = project_dir(state.root)
     _ensure(pdir)
     with atomic_open(os.path.join(pdir, "image_log.csv"), newline="") as f:
@@ -160,10 +171,14 @@ def save_export(state: MtsProjectState, coords: np.ndarray, point_ids: np.ndarra
     """Write the EXPORT artifacts; return the absolute paths written."""
     pdir = project_dir(state.root)
     _ensure(pdir)
+    generation = "export-" + uuid.uuid4().hex
+    pdir = os.path.join(pdir, generation)
+    _ensure(pdir)
     coords_path = os.path.join(pdir, "tracked_coords.npy")
     ids_path = os.path.join(pdir, "point_indices.npy")
     aligned_path = os.path.join(pdir, "aligned_data.csv")
     previous_step = state.completed_through
+    previous_generation = state.export_generation
     try:
         atomic_save_npy(coords_path, coords.astype(np.float32))
         atomic_save_npy(ids_path, point_ids.astype(np.int64))
@@ -174,9 +189,11 @@ def save_export(state: MtsProjectState, coords: np.ndarray, point_ids: np.ndarra
                 g, t, d, force, in_range = row
                 w.writerow([int(g), f"{t:.3f}", f"{d:.6g}", f"{force:.6g}", int(in_range)])
         state.completed_through = int(Step.EXPORT)
+        state.export_generation = generation
         save_manifest(state)
     except Exception:
         state.completed_through = previous_step
+        state.export_generation = previous_generation
         raise
     return [coords_path, ids_path, aligned_path]
 
@@ -210,12 +227,30 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     """
     pdir = project_dir(root)
     manifest = _read_json(pdir, MANIFEST)
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(manifest, dict) or manifest.get("schema_version") not in (1, SCHEMA_VERSION):
         return None
 
-    images_dir = manifest.get("images_dir")
-    sensor_file = manifest.get("sensor_file")
-    log_path = manifest.get("log_path")
+    def source_path(key):
+        relative = manifest.get("relative_paths", {}).get(key)
+        if relative is not None:
+            return os.path.normpath(os.path.join(root, relative))
+        old = manifest.get(key)
+        old_root = manifest.get("root")
+        if old and old_root:
+            relocated = os.path.normpath(os.path.join(root, os.path.relpath(old, old_root)))
+            if os.path.exists(relocated):
+                return relocated
+        return old
+    images_dir, sensor_file, log_path = (source_path(k) for k in ("images_dir", "sensor_file", "log_path"))
+    fingerprints = manifest.get("raw_fingerprints", {})
+    if not isinstance(fingerprints, dict):
+        return None
+    try:
+        if fingerprints and any(_fingerprint(path) != fingerprints.get(key)
+                                for key, path in (("sensor_file", sensor_file), ("log_path", log_path))):
+            return None  # Never combine changed raw measurements with saved scientific state.
+    except (OSError, TypeError):
+        return None
     try:
         image_log = parse_image_log(log_path)
         sensor = parse_sensor(sensor_file)
@@ -227,6 +262,29 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     # The selected folder is authoritative. A copied/moved project must never keep writing to the
     # old absolute root recorded in its manifest.
     st.root = root
+    st.raw_fingerprints = fingerprints
+    st.reference_parameters = manifest.get("reference_parameters", {})
+    if not isinstance(st.reference_parameters, dict):
+        return None
+    try:
+        for key in ("search_start", "search_end"):
+            if key in st.reference_parameters and type(st.reference_parameters[key]) is not int:
+                return None
+        if not np.isfinite(float(st.reference_parameters.get("preforce", 0))):
+            return None
+    except (TypeError, ValueError):
+        return None
+    st.force_basis = manifest.get("force_basis", "reference_change")
+    st.loading_axis_deg = manifest.get("loading_axis_deg")
+    if st.force_basis not in ("reference_change", "absolute"):
+        return None
+    try:
+        if st.loading_axis_deg is not None:
+            st.loading_axis_deg = float(st.loading_axis_deg)
+            if not np.isfinite(st.loading_axis_deg):
+                return None
+    except (ValueError, TypeError):
+        return None
     st.images_dir, st.sensor_file, st.log_path = images_dir, sensor_file, log_path
     st.image_log, st.sensor, st.ordered_paths = image_log, sensor, ordered
     st.completed_through = int(Step.LOAD)
@@ -235,6 +293,9 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     except (TypeError, ValueError):
         return None
     stored = max(int(Step.LOAD), min(stored, int(Step.EXPORT)))
+    if not fingerprints:
+        sensor.warnings.append("Legacy project has no raw-data provenance: reselect reference and rerun tracking.")
+        stored = min(stored, int(Step.CROP))  # Legacy provenance cannot validate saved reference/tracks.
 
     # Material parameters are not step-gated — restore them unconditionally (old manifests that
     # predate them fall back to the defaults). Guard the coercions so a malformed or explicit-null
@@ -255,7 +316,7 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     except (ValueError, TypeError):
         return None
 
-    sp = _read_json(pdir, "sync_params.json")
+    sp = manifest if manifest.get("schema_version") == 2 else _read_json(pdir, "sync_params.json")
     if stored >= Step.CHANNEL and isinstance(sp, dict):
         try:
             channel = sp.get("force_channel", "average")
@@ -267,7 +328,7 @@ def load_project(root: str) -> Optional[MtsProjectState]:
             st.offset_ms = offset
             st.completed_through = int(Step.CHANNEL)
 
-    cp = _read_json(pdir, "crop.json")
+    cp = manifest if manifest.get("schema_version") == 2 else _read_json(pdir, "crop.json")
     if st.done(Step.CHANNEL) and stored >= Step.CROP and isinstance(cp, dict):
         try:
             cs, ce = int(cp["crop_start"]), int(cp["crop_end"])
@@ -277,7 +338,7 @@ def load_project(root: str) -> Optional[MtsProjectState]:
             st.crop_start, st.crop_end = cs, ce
             st.completed_through = int(Step.CROP)
 
-    rf = _read_json(pdir, "reference.json")
+    rf = manifest if manifest.get("schema_version") == 2 else _read_json(pdir, "reference.json")
     if st.done(Step.CROP) and stored >= Step.REFERENCE and isinstance(rf, dict):
         try:
             ref_image = int(rf["ref_image_global"])
@@ -311,5 +372,30 @@ def load_project(root: str) -> Optional[MtsProjectState]:
         os.path.join(pdir, "trackers.npz")
     ):
         st.completed_through = int(Step.TRACK)
+        st.export_generation = manifest.get("export_generation")
+        if st.export_generation:
+            try:
+                paths = export_paths(st)
+                if stored >= Step.EXPORT and all(os.path.isfile(path) for path in paths):
+                    st.completed_through = int(Step.EXPORT)
+                else:
+                    st.export_generation = None
+            except (ValueError, TypeError, AttributeError):
+                st.export_generation = None
 
     return st
+
+def _fingerprint(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def export_paths(state):
+    """Resolve the authoritative committed export generation, never partial files."""
+    if not state.export_generation or not state.export_generation.startswith("export-") or "/" in state.export_generation or "\\" in state.export_generation:
+        raise ValueError("No valid committed export generation")
+    base = os.path.join(project_dir(state.root), state.export_generation)
+    return [os.path.join(base, name) for name in ("tracked_coords.npy", "point_indices.npy", "aligned_data.csv")]

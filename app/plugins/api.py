@@ -1,6 +1,6 @@
 """Public plugin SDK for the ECM Tracker.
 
-This is the **only** file a plugin author needs to read. A plugin is a small Python package
+Start with ``plugins/PLUGIN_CONTRACT.md`` for the standalone authoring contract. A plugin is a small Python package
 under ``plugins/`` that subclasses :class:`TrackerPlugin` and, when launched from the
 ``Plugins`` menu, builds a Qt window. Everything a plugin is allowed to touch — the tracked
 coordinates, the images, the ROI, the active mask, the canvas, mouse input, persistent
@@ -16,8 +16,9 @@ Three capabilities, three entry points:
   :class:`CanvasInteraction`; you receive clicks/drags in *image* coordinates.
 
 Plugins react to state changes through ``ctx.signals`` (a Qt signal hub) instead of polling.
-The only state a plugin may mutate is the keep-mask, via the safe, undoable
-``ctx.apply_keep_mask(...)``.
+The keep-mask is editable through undoable ``ctx.apply_keep_mask(...)``. Explicit
+workflow methods can also load a sequence/session and change the tracking range;
+changed bounds discard dependent tracking. See plugins/PLUGIN_CONTRACT.md.
 
 Index convention (important): every index in this API is a **global** frame index (position in
 the loaded folder, ``0 .. ctx.n_total_images-1``). The tracked-data arrays returned by
@@ -25,6 +26,11 @@ the loaded folder, ``0 .. ctx.n_total_images-1``). The tracked-data arrays retur
 ``ctx.global_to_cut`` / ``ctx.cut_to_global`` to convert; you never need to know the internals.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from copy import deepcopy
+from types import MappingProxyType
+from typing import Mapping
 
 from typing import Callable, List, Optional, Tuple
 
@@ -37,6 +43,36 @@ from app.core.cleanup import Metrics, compute_metrics
 
 # Overlay painter signature: fn(painter: QPainter, ctx: PluginContext) -> None
 OverlayFn = Callable[..., None]
+API_VERSION = 1
+
+
+def _readonly(array):
+    value = np.array(array, copy=True)
+    value.setflags(write=False)
+    return value
+
+
+@dataclass(frozen=True)
+class TrackingSnapshot:
+    """Aligned, detached read-only arrays. Axis 0 is frame_indices; axis 1 is point_ids.
+
+    A false valid entry is a frozen/failed track, NEVER a measured displacement.
+    revision belongs to the session that produced this snapshot.
+    """
+    revision: int
+    frame_indices: np.ndarray
+    point_ids: np.ndarray
+    coords: np.ndarray
+    valid: np.ndarray
+    quality: np.ndarray
+    error_kind: str
+    reference_index: int
+    last_index: int
+    tracking_params: Mapping = field(default_factory=dict)
+
+    def __post_init__(self):
+        object.__setattr__(self, "tracking_params", MappingProxyType(deepcopy(dict(self.tracking_params))))
+
 
 
 class PluginSignals(QObject):
@@ -58,6 +94,8 @@ class PluginSignals(QObject):
     result_changed = Signal()
     mask_changed = Signal()
     roi_changed = Signal()
+    range_changed = Signal()
+    seeds_changed = Signal()
 
 
 class CanvasInteraction:
@@ -100,6 +138,82 @@ class PluginContext:
         self._overlay_wrappers: dict = {}
         self._metrics_cache: Optional[Tuple[tuple, Metrics]] = None
         self._interaction_handler = None
+        self._subscriptions = []
+        self._snapshot_cache = {}
+        self._disposed = False
+
+    @property
+    def revision(self) -> int:
+        """Monotonic scientific-state version; display-only frame changes do not increment it."""
+        return self._state.revision
+
+    def subscribe(self, signal, callback):
+        """Connect a callback until unsubscribe() or host disposal; returns unsubscribe()."""
+        if self._disposed:
+            raise RuntimeError("Plugin context has been disposed")
+        signal.connect(callback)
+        pair = (signal, callback)
+        self._subscriptions.append(pair)
+
+        def unsubscribe():
+            if pair in self._subscriptions:
+                self._subscriptions.remove(pair)
+                try:
+                    signal.disconnect(callback)
+                except (RuntimeError, TypeError):
+                    pass
+        return unsubscribe
+
+    def dispose(self) -> None:
+        """Idempotently release host-managed callbacks, overlays and mouse capture."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for signal, callback in self._subscriptions:
+            try:
+                signal.disconnect(callback)
+            except (RuntimeError, TypeError):
+                pass
+        self._subscriptions.clear()
+        for fn in list(self._overlay_wrappers):
+            self.remove_overlay(fn)
+        self.end_canvas_interaction()
+        self._snapshot_cache.clear()
+        self._metrics_cache = None
+
+    def tracks(self, active_only: bool = True) -> Optional[TrackingSnapshot]:
+        """Return a coherent snapshot, cached until scientific state changes."""
+        result = self._state.result
+        if result is None:
+            self._snapshot_cache.clear()
+            return None
+        key = (self.revision, id(result), bool(active_only),
+               self._state.active_mask.tobytes() if self._state.active_mask is not None else None)
+        if key not in self._snapshot_cache:
+            ids = np.arange(result.n_points)
+            if active_only and self._state.active_mask is not None:
+                ids = ids[self._state.active_mask]
+            snapshot = TrackingSnapshot(
+                self.revision, _readonly(np.arange(result.reference_index, result.last_index + 1)),
+                _readonly(ids), _readonly(result.coords_fw[:, ids]),
+                _readonly(result.status_fw[:, ids].astype(bool)), _readonly(result.err_fw[:, ids]),
+                result.error_kind, result.reference_index, result.last_index, result.tracking_params)
+            self._snapshot_cache = {key: snapshot}
+        return self._snapshot_cache[key]
+
+    def frame_tracks(self, global_index: int, active_only: bool = True):
+        """Return (point_ids, xy, valid) for one global frame, or None outside the result."""
+        if isinstance(global_index, bool) or not isinstance(global_index, (int, np.integer)):
+            raise ValueError("Frame index must be an integer")
+        snap = self.tracks(active_only)
+        if snap is None or not snap.reference_index <= global_index <= snap.last_index:
+            return None
+        i = global_index - snap.reference_index
+        return snap.point_ids, snap.coords[i], snap.valid[i]
+
+    def set_frame_range(self, reference: int, last: int) -> None:
+        """Atomically set both global bounds; changed bounds discard the tracking result."""
+        self._window.set_frame_range(reference, last)
 
     # ---- identity / plumbing -------------------------------------------
     @property
@@ -119,6 +233,8 @@ class PluginContext:
 
     @property
     def _state(self):
+        if self._disposed:
+            raise RuntimeError("Plugin context has been disposed")
         return self._window.state
 
     # ---- session / status ----------------------------------------------
@@ -249,7 +365,7 @@ class PluginContext:
         ``OSError`` if the write fails."""
         self._window.save_trackers_to(path)
 
-    def load_trackers(self, path: str) -> None:
+    def load_trackers(self, path: str, *, expected_range=None) -> None:
         """Load a ``.npz`` written by :meth:`save_trackers` and overlay it onto the open sequence.
 
         Restores the seeds, tracking result, active mask, ROI and frame range, emitting
@@ -257,7 +373,7 @@ class PluginContext:
         refresh. Current files require the same ordered image-content fingerprint; legacy v1 files
         can only be checked by frame count. A mismatch or bad/foreign file raises ``ValueError``.
         This is the only way a plugin can install a full tracking result back into the core."""
-        self._window.load_trackers_from(path)
+        self._window.load_trackers_from(path, expected_range=expected_range)
 
     def image_size(self) -> Optional[Tuple[int, int]]:
         """``(height, width)`` of the frames, or ``None`` if no sequence is loaded."""
@@ -285,7 +401,7 @@ class PluginContext:
     @property
     def result(self):
         """The raw, immutable ``TrackerResult`` (escape hatch for advanced arrays such as the
-        backward pass and FB errors), or ``None``. Prefer ``coords()`` for the common case."""
+        backward pass and FB errors), or ``None``. Prefer validity-aware ``tracks()``."""
         return self._state.result
 
     @property
@@ -331,28 +447,16 @@ class PluginContext:
         Returns ``None`` if there is no result. Indexed by **cut** index on axis 0
         (``coords[0]`` is the reference frame).
         """
-        if not self.has_result:
-            return None
-        coords = self._state.result.coords_fw
-        mask = self.active_mask
-        if active_only and mask is not None:
-            coords = coords[:, mask, :]
-            coords.setflags(write=False)
-        return coords
+        snapshot = self.tracks(active_only)
+        return snapshot.coords if snapshot is not None else None
 
     def track_status(self, active_only: bool = True) -> Optional[np.ndarray]:
         """Forward per-frame tracking status as an ``(frames, points)`` uint8 array, aligned to
         :meth:`coords` (``1`` = the point was tracked OK at that frame, ``0`` = LK failed and the
         position was carried forward). Use it to drop dead/frozen tracks before fitting. Same
         ``active_only`` semantics as :meth:`coords`; ``None`` if there is no result."""
-        if not self.has_result:
-            return None
-        status = self._state.result.status_fw
-        mask = self.active_mask
-        if active_only and mask is not None:
-            status = status[:, mask]
-            status.setflags(write=False)
-        return status
+        snapshot = self.tracks(active_only)
+        return snapshot.valid.view(np.uint8) if snapshot is not None else None
 
     def metrics(self) -> Optional[Metrics]:
         """Per-point quality metrics (FB error, failure counts, max step, out-of-bounds …),
@@ -362,7 +466,7 @@ class PluginContext:
         result = self._state.result
         # Key on both the result and the ROI: the ``left_roi`` metric depends on the ROI, so the
         # cache must refresh when the ROI is set/cleared/replaced, not only when the result changes.
-        key = (id(result), id(self._state.roi))
+        key = (id(result), tuple(self.roi_corners))
         if self._metrics_cache is None or self._metrics_cache[0] != key:
             h, w = self._state.image_size()
             self._metrics_cache = (key, compute_metrics(result, self._state.roi, (h, w)))
@@ -371,8 +475,8 @@ class PluginContext:
     # ---- ROI ------------------------------------------------------------
     @property
     def roi(self):
-        """The current :class:`~app.core.roi.ROI`, or ``None``."""
-        return self._state.roi
+        """Detached ROI copy, or None; editing it cannot change the host."""
+        return deepcopy(self._state.roi)
 
     @property
     def roi_corners(self) -> List[Tuple[float, float]]:
@@ -394,7 +498,7 @@ class PluginContext:
         return roi.mask(size[0], size[1])
 
     # ---- safe state mutation -------------------------------------------
-    def apply_keep_mask(self, keep: np.ndarray) -> None:
+    def apply_keep_mask(self, keep: np.ndarray, *, revision: Optional[int] = None) -> None:
         """Filter the tracked points by a boolean keep-mask, undoably.
 
         ``keep`` may be length P (all points) or length ``n_active`` (current kept points only).
@@ -403,6 +507,8 @@ class PluginContext:
         ``signals.mask_changed``. No-op if there is no result. Points already filtered out stay
         filtered out — this only ever shrinks the active set, never resurrects points.
         """
+        if revision is not None and revision != self.revision:
+            raise ValueError("Stale tracking snapshot; refresh before applying a mask.")
         mask = self.active_mask
         if mask is None:
             return
@@ -502,9 +608,9 @@ class TrackerPlugin:
     Declare the package's plugin by assigning ``PLUGIN = YourClass`` in the package
     ``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
 
-    Lifecycle: the manager instantiates your class once (passing the :class:`PluginContext`),
-    then calls :meth:`launch` each time the user clicks your menu entry. The window you return
-    is kept alive by the manager; relaunching while it's still open just re-focuses it.
+    Lifecycle: the manager owns your context and returned window. A visible-window relaunch
+    re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+    Action-only plugins returning None may receive repeated launch calls on the same instance.
 
     Minimal example::
 
@@ -527,6 +633,7 @@ class TrackerPlugin:
     """
 
     #: Display name shown in the Plugins menu.
+    API_VERSION: int = API_VERSION
     NAME: str = "Unnamed Plugin"
     #: One-line description (used as the menu item's tooltip).
     DESCRIPTION: str = ""

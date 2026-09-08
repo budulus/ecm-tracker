@@ -63,19 +63,20 @@ class KinematicsPlotWindow(QWidget):
         series = self.owner.kinematics()
         if series is not None:
             t = series.time_s
-            self.ax_t.plot(t, series.eps_1, "-", color=_E1, label=r"$\varepsilon_1$ (tensile)")
-            self.ax_t.plot(t, series.eps_2, "-", color=_E2, label=r"$\varepsilon_2$ (lateral)")
+            self.ax_t.plot(t, series.eps_1, "-", color=_E1, label=r"$\varepsilon_1$ (major principal)")
+            self.ax_t.plot(t, series.eps_2, "-", color=_E2, label=r"$\varepsilon_2$ (minor principal)")
             self.ax_c.plot(series.eps_1, series.eps_2, "-", color=_E2,
                            label=r"$\varepsilon_2$ measured")
             if self.owner.pstate.incompressible:
                 self.ax_t.plot(t, series.eps_2_ico, "--", color=_ICO,
-                               label=r"$\varepsilon_2$ incompressible")
-                self.ax_c.plot(series.eps_1, series.eps_2_ico, "--", color=_ICO,
-                               label=r"$\varepsilon_2$ incompressible")
+                               label="equal-transverse uniaxial prediction")
+                if self.owner.pstate.loading_axis_deg is None:
+                    self.ax_c.plot(series.eps_1, series.eps_2_ico, "--", color=_ICO,
+                                   label="uniaxial major-axis prediction")
         self.ax_t.set_xlabel("time (s)")
         self.ax_t.set_ylabel(r"linear strain $\varepsilon$")
-        self.ax_c.set_xlabel(r"$\varepsilon_1$ (tensile)")
-        self.ax_c.set_ylabel(r"$\varepsilon_2$ (lateral)")
+        self.ax_c.set_xlabel(r"$\varepsilon_1$ (major principal)")
+        self.ax_c.set_ylabel(r"$\varepsilon_2$ (minor principal)")
         for ax in (self.ax_t, self.ax_c):
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize="small", loc="best")
@@ -128,13 +129,14 @@ class StressPlotWindow(QWidget):
     def replot(self):
         self.ax.clear()
         series = self.owner.kinematics()
+        self.ax.set_title("Force basis: " + self.owner.pstate.force_basis.replace("_", " "))
         force_N = self.owner.per_frame_force_N()
         a0 = self.owner.pstate.reference_area_mm2
         if series is not None and force_N is not None and a0 > 0:
             pk = force_N / a0  # N/mm² = MPa
-            y = pk if self.mode == "pk" else series.lambda_1 * pk
-            self.ax.plot(series.eps_1, y, "-", color=_ACCENT)
-        self.ax.set_xlabel(r"$\varepsilon_1$ (tensile)")
+            y = pk if self.mode == "pk" else series.axial_lambda * pk
+            self.ax.plot(series.axial_lambda - 1, y, "-", color=_ACCENT)
+        self.ax.set_xlabel("axial engineering strain (stretch − 1)")
         self.ax.set_ylabel(self._ylabel)
         self.ax.grid(True, alpha=0.3)
         self.canvas.draw_idle()

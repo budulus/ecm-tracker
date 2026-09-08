@@ -7,6 +7,8 @@ Public API for plugin authors (everything you need is in :mod:`app.plugins.api`)
 See ``plugins/README.md`` for the author's guide and the bundled example plugins.
 """
 from app.plugins.api import (
+    API_VERSION,
+    TrackingSnapshot,
     CanvasInteraction,
     PluginContext,
     PluginSignals,
@@ -14,6 +16,8 @@ from app.plugins.api import (
 )
 
 __all__ = [
+    "API_VERSION",
+    "TrackingSnapshot",
     "TrackerPlugin",
     "PluginContext",
     "CanvasInteraction",

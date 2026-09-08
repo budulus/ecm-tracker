@@ -42,11 +42,16 @@ class AddPointsTool:
 
     def on_press(self, image_pt: QPointF, event) -> None:
         state = self.window.state
+        size = state.image_size()
+        if size is None or not (0 <= image_pt.x() < size[1] and 0 <= image_pt.y() < size[0]):
+            return
         pt = np.array([[image_pt.x(), image_pt.y()]], dtype=np.float32)
         if state.features is None or len(state.features) == 0:
             state.features = pt
         else:
             state.features = np.vstack([state.features, pt]).astype(np.float32)
+        state.touch()
+        self.window.signals.seeds_changed.emit()
         self.window.canvas.update()        # overlay-only change: cheaper than a full refresh()
         self.window._update_tool_states()  # the first point enables Run Tracking
 
@@ -87,6 +92,8 @@ class DeletePointsTool:
             return
         feats = np.delete(feats, i, axis=0)
         state.features = feats if len(feats) else None  # match detection's empty convention
+        state.touch()
+        self.window.signals.seeds_changed.emit()
         self.window.canvas.update()
         self.window._update_tool_states()
 

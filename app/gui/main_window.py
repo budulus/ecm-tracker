@@ -107,6 +107,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ECM Tracker")
         self.resize(1400, 850)
 
+        self._export_cache = None
+        self._loading_sequence = False
         self.state = ProjectState()
         self.canvas = CanvasView(self.state)
         self.signals = PluginSignals()  # state-change hub broadcast to plugins
@@ -491,6 +493,8 @@ class MainWindow(QMainWindow):
         return self._load_paths(paths, source_dir)
 
     def _load_paths(self, paths, source_dir) -> bool:
+        if self._loading_sequence:
+            raise RuntimeError("An image sequence is already being validated.")
         if not paths:
             QMessageBox.warning(self, "No images", "No supported images were found.")
             return False
@@ -505,9 +509,11 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 return dialog.wasCanceled()
 
+            self._loading_sequence = True
             try:
                 valid = sequence.validate_all(progress)
             finally:
+                self._loading_sequence = False
                 dialog.close()
             if not valid:
                 self.statusBar().showMessage("Image loading cancelled.", 4000)
@@ -517,6 +523,7 @@ class MainWindow(QMainWindow):
             return False
         # Commit only after every frame has decoded and passed the common-shape check. A failed
         # candidate therefore leaves the existing project completely untouched.
+        self._teardown_session_ui()
         self.state.load_sequence(sequence, source_dir)
         self._configure_sliders()
         self.canvas.reset_view()
@@ -549,7 +556,21 @@ class MainWindow(QMainWindow):
                 settings.update_section("ui", {"left_pane_width": int(sizes[0])})
             except OSError as exc:
                 self.statusBar().showMessage(f"Could not save UI settings: {exc}", 5000)
+        self.plugin_manager.shutdown()
         super().closeEvent(event)
+
+    def _teardown_session_ui(self) -> None:
+        """Release old-state UI before committing a replacement."""
+        self._export_cache = None
+        self._cancel_roi_definition(silent=True)
+        self._deactivate_point_tools()
+        self.canvas.clear_interaction()
+        if self._cleanup_dialog is not None:
+            self._cleanup_dialog.close()
+        if self._point_manager is not None:
+            self._point_manager.close()
+        self._preview_keep = None
+        self.canvas.set_preview_mask(None)
 
     def _configure_sliders(self) -> None:
         total = self.state.total_images
@@ -583,31 +604,41 @@ class MainWindow(QMainWindow):
         self.signals.frame_changed.emit(self.state.current_index)
 
     def _on_reference_changed(self, value: int) -> None:
-        previous = self.state.reference_index
-        self.state.set_reference(value)
-        self._sync_range_constraints()
-        changed = self.state.reference_index != previous
-        roi_cleared = changed and self.state.roi is not None
-        features_cleared = changed and self.state.features is not None
-        if changed:
-            self.state.roi = None
-            self.state.features = None
-            self.define_roi_action.setChecked(False)
-            if roi_cleared or features_cleared:
-                self.statusBar().showMessage(
-                    "ROI and reference points cleared (reference frame changed).", 4000
-                )
+        self.set_frame_range(value, self.state.last_index)
+
+    def _on_last_changed(self, value: int) -> None:
+        self.set_frame_range(self.state.reference_index, value)
+
+    def set_frame_range(self, reference: int, last: int) -> None:
+        """Commit the final range once. Component notifications observe the complete change."""
+        if not self.state.has_sequence:
+            return
+        if any(isinstance(v, bool) or not isinstance(v, (int, np.integer)) for v in (reference, last)):
+            raise ValueError("Frame indices must be integers")
+        reference = max(0, min(int(reference), self.state.total_images - 1))
+        last = max(reference, min(int(last), self.state.total_images - 1))
+        s = self.state
+        if (reference, last) == (s.reference_index, s.last_index):
+            return
+        ref_changed = reference != s.reference_index
+        had_result = s.result is not None
+        self._teardown_session_ui()
+        s.reference_index, s.last_index = reference, last
+        s.result = s.active_mask = None
+        s.undo_stack = []
+        if ref_changed:
+            s.roi = s.features = None
+        s.touch()
+        self._configure_sliders()
         self.canvas.refresh()
         self._update_status()
         self._update_tool_states()
-        if roi_cleared:
+        self.signals.range_changed.emit()
+        if ref_changed:
             self.signals.roi_changed.emit()
-
-    def _on_last_changed(self, value: int) -> None:
-        self.state.set_last(value)
-        self._sync_range_constraints()
-        self._update_status()
-        self._update_tool_states()
+            self.signals.seeds_changed.emit()
+        if had_result:
+            self.signals.result_changed.emit()
 
     def _go_to_frame(self, global_index: int) -> None:
         """Move Current to ``global_index`` (clamped), driving the same refresh
@@ -619,36 +650,10 @@ class MainWindow(QMainWindow):
         self._on_current_changed(target)      # state + canvas + status + tools + signal
 
     def _set_reference_frame(self, global_index: int) -> None:
-        """Move Reference to ``global_index`` (clamped to ``0..last``), driving the same
-        path as the Reference slider (which also clears the ROI on the old reference).
-
-        If a tracking result exists, moving the reference shifts the cut origin and leaves the
-        result's cut-indexed arrays misaligned, so the result is discarded. The GUI slider is
-        disabled while a result exists; this guards the plugin ``ctx.set_reference_frame`` path.
-        """
-        if not self.state.has_sequence:
-            return
-        target = max(0, min(global_index, self.state.last_index))
-        if self.state.result is not None and target != self.state.reference_index:
-            self._clear_tracking()
-        self.reference_slider.setValue(target)  # sync widget (setValue blocks signals)
-        self._on_reference_changed(target)      # state + range constraints + ROI clear + refresh
+        self.set_frame_range(min(global_index, self.state.last_index), self.state.last_index)
 
     def _set_last_frame(self, global_index: int) -> None:
-        """Move Last to ``global_index`` (clamped to ``reference..total-1``), driving the
-        same path as the Last slider.
-
-        If a tracking result exists, re-scoping the range invalidates its cut-indexed arrays, so
-        the result is discarded. The GUI slider is disabled while a result exists; this guards the
-        plugin ``ctx.set_last_frame`` path.
-        """
-        if not self.state.has_sequence:
-            return
-        target = max(self.state.reference_index, min(global_index, self.state.total_images - 1))
-        if self.state.result is not None and target != self.state.last_index:
-            self._clear_tracking()
-        self.last_slider.setValue(target)  # sync widget (setValue blocks signals)
-        self._on_last_changed(target)      # state + range constraints + refresh
+        self.set_frame_range(self.state.reference_index, global_index)
 
     # ---- ROI ------------------------------------------------------------
     def _on_pan_tool_toggled(self, checked: bool) -> None:
@@ -753,6 +758,7 @@ class MainWindow(QMainWindow):
         self.define_roi_action.setChecked(False)
         self.canvas.clear_interaction()
         self.statusBar().showMessage("ROI complete.", 4000)
+        self.state.touch()
         self.signals.roi_changed.emit()
         self.canvas.refresh()
         self._update_tool_states()
@@ -781,6 +787,8 @@ class MainWindow(QMainWindow):
         self.canvas.clear_interaction()
         self.state.roi = None
         self.state.features = None
+        self.state.touch()
+        self.signals.seeds_changed.emit()
         if self.define_roi_action.isChecked():
             self.define_roi_action.setChecked(False)
         self.canvas.refresh()
@@ -855,6 +863,8 @@ class MainWindow(QMainWindow):
         self._after_detection()
 
     def _after_detection(self) -> None:
+        self.state.touch()
+        self.signals.seeds_changed.emit()
         n = 0 if self.state.features is None else len(self.state.features)
         self.statusBar().showMessage(f"Detected {n} feature points.", 4000)
         self.canvas.refresh()
@@ -872,7 +882,12 @@ class MainWindow(QMainWindow):
         feats = self.state.features
         if feats is None or len(feats) == 0:
             return
-        n = self.state.n_cut
+        revision = self.state.revision
+        sequence = self.state.sequence
+        reference, last = self.state.reference_index, self.state.last_index
+        feats = feats.copy()
+        params = dict(self.state.lk_params)
+        n = last - reference + 1
         total = max(1, 2 * (n - 1))
         dialog = QProgressDialog("Tracking...", "Cancel", 0, total, self)
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
@@ -886,11 +901,11 @@ class MainWindow(QMainWindow):
 
         try:
             result = track(
-                self.state.sequence,
-                self.state.reference_index,
-                self.state.last_index,
+                sequence,
+                reference,
+                last,
                 feats,
-                self.state.lk_params,
+                params,
                 progress,
             )
         except (OSError, ValueError, IndexError, cv2.error) as exc:
@@ -899,6 +914,9 @@ class MainWindow(QMainWindow):
         finally:
             dialog.close()
 
+        if self.state.revision != revision:
+            self.statusBar().showMessage("Tracking inputs changed; discarded the stale result.", 5000)
+            return
         if result is None:
             self.statusBar().showMessage("Tracking cancelled.", 4000)
             return
@@ -910,6 +928,7 @@ class MainWindow(QMainWindow):
         self.state.undo_stack = []
         self.canvas.set_preview_mask(None)
         self._preview_keep = None
+        self.state.touch()
         self.state.result = result
         self.state.active_mask = np.ones(result.n_points, dtype=bool)
         self.statusBar().showMessage(
@@ -939,8 +958,10 @@ class MainWindow(QMainWindow):
         return False
 
     def _clear_tracking(self) -> None:
+        self._export_cache = None
         if self._cleanup_dialog is not None:
             self._cleanup_dialog.close()
+        self.state.touch()
         self.state.result = None
         self.state.active_mask = None
         self.state.undo_stack = []
@@ -971,7 +992,7 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def _cleanup_preview(self) -> None:
-        if self._cleanup_dialog is None:
+        if self._cleanup_dialog is None or self.state.active_mask is None:
             return
         keep = build_mask(self._cleanup_metrics, self._cleanup_dialog.thresholds())
         self._preview_keep = keep
@@ -998,12 +1019,14 @@ class MainWindow(QMainWindow):
         if np.array_equal(updated, self.state.active_mask):
             return
         self.state.undo_stack.append(self.state.active_mask.copy())
+        self.state.touch()
         self.state.active_mask = updated
         self.canvas.refresh()
         self._update_tool_states()
         self.signals.mask_changed.emit()
 
     def _cleanup_apply(self) -> None:
+        self._cleanup_preview()  # Apply current controls, never a cached preview.
         if self._preview_keep is None:
             return
         self.apply_keep_mask(self._preview_keep)
@@ -1012,6 +1035,7 @@ class MainWindow(QMainWindow):
     def _cleanup_undo(self) -> None:
         if not self.state.undo_stack:
             return
+        self.state.touch()
         self.state.active_mask = self.state.undo_stack.pop()
         self.canvas.refresh()
         self._update_tool_states()
@@ -1047,6 +1071,7 @@ class MainWindow(QMainWindow):
         self.signals.mask_changed.connect(dialog.rebuild)
         self.signals.result_changed.connect(dialog.rebuild)
         self.signals.sequence_changed.connect(dialog.rebuild)
+        self.signals.seeds_changed.connect(dialog.rebuild)
         self._point_manager = dialog
         self.canvas.add_overlay(dialog._paint_selected)
         self.canvas.set_interaction(PointSelectInteraction(dialog))
@@ -1072,7 +1097,8 @@ class MainWindow(QMainWindow):
             self.state.features = feats if len(feats) else None  # match detection's empty convention
             self.canvas.update()
             self._update_tool_states()
-            dialog.rebuild()  # no signal fires for seed edits
+            self.state.touch()
+            self.signals.seeds_changed.emit()
 
     def _point_manager_closed(self, _result=None) -> None:
         dialog = self._point_manager
@@ -1082,6 +1108,7 @@ class MainWindow(QMainWindow):
                 self.signals.mask_changed,
                 self.signals.result_changed,
                 self.signals.sequence_changed,
+                self.signals.seeds_changed,
             ):
                 try:
                     sig.disconnect(dialog.rebuild)
@@ -1119,7 +1146,9 @@ class MainWindow(QMainWindow):
         active = self.state.active_mask
         if result is None or active is None:
             return None
-        return active & np.all(result.status_fw == 1, axis=0)
+        if self._export_cache is None or self._export_cache[0] is not result:
+            self._export_cache = (result, np.all(result.status_fw == 1, axis=0))
+        return active & self._export_cache[1]
 
     def _export(self) -> None:
         target = self._export_target("coords.npy", "Export coordinates", "NumPy array (*.npy)")
@@ -1216,9 +1245,11 @@ class MainWindow(QMainWindow):
             shi_tomasi_params=s.shi_tomasi_params,
             grid_params=s.grid_params,
             sequence_fingerprint=s.sequence.fingerprint,
+            error_kind=result.error_kind if result is not None else "unknown",
+            tracking_params=dict(result.tracking_params) if result is not None else {},
         )
 
-    def load_trackers_from(self, path):
+    def load_trackers_from(self, path, *, expected_range=None):
         """Load a tracker ``.npz`` and overlay it onto the open sequence; return the bundle.
 
         The dialog-free load path shared by ``File -> Load Trackers`` and the plugin API
@@ -1239,6 +1270,8 @@ class MainWindow(QMainWindow):
                 "This tracker file belongs to a different image sequence. The frame count "
                 "matches, but the ordered image-content fingerprint does not."
             )
+        if expected_range is not None and tuple(expected_range) != (bundle["reference_index"], bundle["last_index"]):
+            raise ValueError("Saved tracker range does not match the expected project reference.")
         self._apply_loaded_trackers(bundle)
         return bundle
 
@@ -1300,6 +1333,13 @@ class MainWindow(QMainWindow):
         does not re-enter ``_on_reference_changed`` and wipe the ROI we just restored.
         """
         s = self.state
+        candidate = (TrackerResult(reference_index=bundle["reference_index"],
+                                   last_index=bundle["last_index"], win_size=bundle["win_size"],
+                                   error_kind=bundle.get("error_kind", "unknown"),
+                                   tracking_params=bundle.get("tracking_params", {}),
+                                   **bundle["result_arrays"]) if bundle["has_result"] else None)
+        self._teardown_session_ui()
+        s.touch()
         # Tear down UI bound to any previous result (cached metrics / stale selections).
         if self._cleanup_dialog is not None:
             self._cleanup_dialog.close()
@@ -1321,12 +1361,7 @@ class MainWindow(QMainWindow):
         # Seed points + (optional) tracking result + active mask.
         s.features = bundle["features"]
         if bundle["has_result"]:
-            s.result = TrackerResult(
-                reference_index=s.reference_index,
-                last_index=s.last_index,
-                win_size=bundle["win_size"],
-                **bundle["result_arrays"],
-            )
+            s.result = candidate
             s.active_mask = bundle["active_mask"]
         else:
             s.result = None
@@ -1343,6 +1378,8 @@ class MainWindow(QMainWindow):
         self._update_tool_states()
 
         # Refresh reactive consumers (plugins, point manager) atomically after the full swap.
+        self.signals.range_changed.emit()
+        self.signals.seeds_changed.emit()
         self.signals.roi_changed.emit()
         self.signals.result_changed.emit()
         self.signals.mask_changed.emit()

@@ -102,6 +102,7 @@ class ProjectState:
     """
 
     def __init__(self) -> None:
+        self.revision = 0
         self.sequence: Optional[ImageSequence] = None
         self.source_dir: Optional[str] = None
         self.reference_index: int = 0
@@ -119,8 +120,13 @@ class ProjectState:
         self.active_mask: Optional[np.ndarray] = None  # (P,) bool, aligned to result points
         self.undo_stack: list = []  # previous active_mask snapshots for cleanup undo
 
+    def touch(self) -> None:
+        """Advance scientific state; display-only navigation does not change this revision."""
+        self.revision += 1
+
     # ---- sequence -------------------------------------------------------
     def load_sequence(self, sequence: ImageSequence, source_dir: Optional[str]) -> None:
+        self.touch()
         self.sequence = sequence
         self.source_dir = source_dir
         self.reference_index = 0

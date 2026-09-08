@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from app.core.roi import ROI
-from app.models.tracker_result import TrackerResult
+from app.core.result import TrackerResult
 
 # Spin-box ceiling for band bounds; also the "no upper limit" display value.
 BAND_CAP = 1_000_000.0
@@ -18,11 +18,12 @@ BAND_METRICS = {
     "fb_mean": "fb_mean",
     "fb_max": "fb_max",
     "distance": "max_step",
+    "min_eigenvalue": "min_eigenvalue",
 }
 COUNT_BANDS = ("fw_failures", "bw_failures")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Metrics:
     """Per-point quality metrics derived once from a TrackerResult. Points that never tracked
     validly get +inf error/step so the error filters can drop them once tightened."""
@@ -38,6 +39,15 @@ class Metrics:
     max_step: np.ndarray  # (P,) float, max single-frame displacement
     left_image: np.ndarray  # (P,) bool
     left_roi: np.ndarray  # (P,) bool
+    error_kind: str = "photometric"
+    min_eigenvalue: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        for name, value in vars(self).items():
+            if isinstance(value, np.ndarray):
+                value = value.copy()
+                value.setflags(write=False)
+                object.__setattr__(self, name, value)
 
 
 @dataclass
@@ -63,6 +73,7 @@ class Thresholds:
     fb_mean: BandFilter = field(default_factory=BandFilter)
     fb_max: BandFilter = field(default_factory=BandFilter)
     distance: BandFilter = field(default_factory=BandFilter)
+    min_eigenvalue: BandFilter = field(default_factory=lambda: BandFilter(hi=0.0, cap=BAND_CAP))
     drop_left_image: bool = False
     drop_left_roi: bool = False
 
@@ -119,6 +130,11 @@ def compute_metrics(
                     left_roi[j] = True
                     break
 
+    eigen = np.zeros(p, dtype=np.float32)
+    if result.error_kind == "min_eigenvalue" and n > 1:
+        for j in range(p):
+            values = ef[1:, j][sf[1:, j] == 1]
+            eigen[j] = float(values.min()) if values.size else 0.0
     return Metrics(
         n_frames=n,
         n_points=p,
@@ -131,6 +147,8 @@ def compute_metrics(
         max_step=step,
         left_image=left_image,
         left_roi=left_roi,
+        error_kind=result.error_kind,
+        min_eigenvalue=eigen,
     )
 
 
@@ -146,6 +164,12 @@ def build_mask(metrics: Metrics, thr: Thresholds) -> np.ndarray:
     for name, metric_attr in BAND_METRICS.items():
         band: BandFilter = getattr(thr, name)
         if not band.enabled:
+            continue
+        if name in {"opencv_error", "mean_error"} and metrics.error_kind != "photometric":
+            continue  # Eigenvalue quality is higher-is-better; legacy quality is unknown.
+        if name == "min_eigenvalue":
+            if metrics.error_kind == "min_eigenvalue" and metrics.min_eigenvalue is not None:
+                keep &= metrics.min_eigenvalue >= band.hi
             continue
         values = getattr(metrics, metric_attr)
         keep &= values <= band.hi

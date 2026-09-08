@@ -39,6 +39,7 @@ BAND_LABELS = {
     "fb_mean": "FB mean error",
     "fb_max": "FB max error",
     "distance": "Distance (max single step)",
+    "min_eigenvalue": "Minimum LK eigenvalue (keep ≥)",
 }
 
 # Resolution of the float-metric sliders (integer count metrics use 0..cap directly).
@@ -78,7 +79,7 @@ class _BandRow(QWidget):
         else:
             self.cap_box = QDoubleSpinBox()
             self.cap_box.setRange(0.0, float(hi_cap))
-            self.cap_box.setDecimals(3)
+            self.cap_box.setDecimals(6)
             self.cap_box.setSingleStep(0.1)
 
         self._set_cap_box(min(hi_initial, hi_cap))
@@ -129,7 +130,7 @@ class _BandRow(QWidget):
 
     def _refresh_label(self) -> None:
         self.value_label.setText(
-            str(int(round(self._hi))) if self._integer else f"{self._hi:.3f}"
+            str(int(round(self._hi))) if self._integer else f"{self._hi:.6g}"
         )
 
     def _set_enabled(self, on: bool) -> None:
@@ -193,13 +194,14 @@ class CleanupDialog(QDialog):
             "fb_mean": _finite_max(metrics.fb_mean),
             "fb_max": _finite_max(metrics.fb_max),
             "distance": _finite_max(metrics.max_step),
+            "min_eigenvalue": 0.0,
         }
 
         # Data-driven baseline: every band disabled, scale + threshold at the metric's max
         # (keep everything). Used as the Reset target and when no settings are saved.
         baseline = Thresholds()
         for name in BAND_METRICS:
-            setattr(baseline, name, BandFilter(False, initial_hi[name], initial_hi[name]))
+            setattr(baseline, name, BandFilter(False, initial_hi[name], (_finite_max(metrics.min_eigenvalue) if name == "min_eigenvalue" and metrics.min_eigenvalue is not None else max(initial_hi[name], 1e-6))))
 
         if defaults is not None:
             merged = Thresholds(
@@ -209,21 +211,27 @@ class CleanupDialog(QDialog):
             for name in BAND_METRICS:
                 saved = getattr(defaults, name)
                 # A missing/sentinel cap falls back to the data-driven scale.
-                cap = saved.cap if 0 < saved.cap < BAND_CAP else initial_hi[name]
+                cap = saved.cap if 0 < saved.cap < BAND_CAP else getattr(baseline, name).cap
                 setattr(merged, name, BandFilter(saved.enabled, min(saved.hi, cap), cap))
             self._defaults = merged
         else:
             self._defaults = baseline
 
         grid = QGridLayout()
-        grid.addWidget(QLabel("threshold (keep ≤)"), 0, 1)
+        grid.addWidget(QLabel("threshold"), 0, 1)
         grid.addWidget(QLabel("max"), 0, 4)
         grid.setColumnStretch(1, 1)
         self._rows = {}
         for i, name in enumerate(BAND_METRICS, start=1):
             integer = name in COUNT_BANDS
             cap = metrics.n_frames if integer else BAND_CAP
-            row = _BandRow(BAND_LABELS[name], integer, cap, initial_hi[name])
+            row = _BandRow(BAND_LABELS[name], integer, cap, getattr(baseline, name).cap)
+            applicable = ((name not in {"opencv_error", "mean_error"} or metrics.error_kind == "photometric")
+                          and (name != "min_eigenvalue" or metrics.error_kind == "min_eigenvalue"))
+            if not applicable:
+                row.enable.setEnabled(False)
+                row.enable.setToolTip("Unavailable for this result's LK quality kind.")
+                getattr(self._defaults, name).enabled = False
             row.changed.connect(self.thresholdsChanged)
             setattr(self, name, row)
             self._rows[name] = row
@@ -238,7 +246,7 @@ class CleanupDialog(QDialog):
         self.drop_left_image.toggled.connect(self.thresholdsChanged)
         self.drop_left_roi.toggled.connect(self.thresholdsChanged)
 
-        filters_box = QGroupBox("Filters (keep when metric ≤ threshold; unchecked = ignored)")
+        filters_box = QGroupBox("Filters (keep ≤ threshold, eigenvalue ≥; unchecked = ignored)")
         box_layout = QVBoxLayout(filters_box)
         box_layout.addLayout(grid)
         box_layout.addWidget(self.drop_left_image)

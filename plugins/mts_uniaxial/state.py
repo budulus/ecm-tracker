@@ -59,6 +59,11 @@ class MtsProjectState:
     image_log: Optional[ImageLog] = None
     sensor: Optional[Sensor] = None
     ordered_paths: Optional[List[str]] = None  # absolute, in acquisition-log order
+    raw_fingerprints: dict = field(default_factory=dict)
+    export_generation: Optional[str] = None
+    reference_parameters: dict = field(default_factory=dict)
+    force_basis: str = "reference_change"
+    loading_axis_deg: Optional[float] = None
     # CHANNEL
     force_channel: str = "average"  # "A" | "B" | "average"
     offset_ms: float = 0.0
@@ -98,6 +103,10 @@ class MtsProjectState:
         just-edited step's fields *after* this returns, then sets ``completed_through``.
         """
         step = Step(step)
+        if step <= Step.EXPORT:
+            self.export_generation = None
+        if step <= Step.REFERENCE:
+            self.reference_parameters = {}
         if step <= Step.LOAD:
             self.root = self.images_dir = self.sensor_file = self.log_path = None
             self.image_log = self.sensor = self.ordered_paths = None

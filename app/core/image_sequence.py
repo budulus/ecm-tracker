@@ -35,7 +35,7 @@ def discover(path_or_files: Union[str, Sequence[str]]) -> List[str]:
     return files
 
 
-def _normalize_to_bgr_u8(img: np.ndarray) -> np.ndarray:
+def _normalize_to_bgr_u8(img: np.ndarray, float_scale=None) -> np.ndarray:
     """Coerce any decoded image to a 3-channel uint8 BGR array (deterministic across frames)."""
     if img.dtype == np.uint16:
         img = (img // 257).astype(np.uint8)
@@ -48,7 +48,10 @@ def _normalize_to_bgr_u8(img: np.ndarray) -> np.ndarray:
         hi = float(img.max()) if img.size else 0.0
         # The common floating image convention is [0, 1]. Preserve ordinary [0, 255]
         # floating images without per-frame contrast normalization, which would destabilize LK.
-        if lo >= 0.0 and hi <= 1.0:
+        unit_range = (lo >= 0.0 and hi <= 1.0)
+        if float_scale == 255 and not unit_range:
+            raise ValueError("Float image exceeds the sequence [0, 1] intensity convention")
+        if float_scale == 255 or (float_scale is None and unit_range):
             img = np.rint(img * 255.0).astype(np.uint8)
         else:
             img = np.clip(img, 0, 255).astype(np.uint8)
@@ -80,6 +83,7 @@ class ImageSequence:
         self._cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
         self._cache_size = cache_size
         self._frame_shape = None
+        self._float_scale = None
         self._fingerprint = None
         self._file_signatures = None
 
@@ -105,7 +109,9 @@ class ImageSequence:
         if raw is None:
             raise IOError(f"Failed to load image: {self.paths[index]}")
         try:
-            img = _normalize_to_bgr_u8(raw)
+            if np.issubdtype(raw.dtype, np.floating) and self._float_scale is None:
+                self._float_scale = 255 if np.isfinite(raw).all() and raw.min() >= 0 and raw.max() <= 1 else 1
+            img = _normalize_to_bgr_u8(raw, self._float_scale)
         except ValueError as exc:
             raise ValueError(f"Invalid image {self.paths[index]}: {exc}") from exc
 

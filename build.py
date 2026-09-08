@@ -1,6 +1,6 @@
 """Build a shippable Windows package of ECM Tracker with Nuitka.
 
-The application is COMPILED into a standalone binary; the ``plugins/`` folder is
+The application is COMPILED into a standalone binary; the ``bundled_plugins/`` folder is
 shipped as plain Python *next to* the exe, so clients can read the SDK and write
 or edit their own plugins (which import the compiled ``app`` package at runtime).
 
@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 import tomllib
 from pathlib import Path
 
@@ -29,7 +30,7 @@ ROOT = Path(__file__).resolve().parent
 # intermediate files mid-build to sync them, which makes Nuitka's delete-after-use
 # race fail with "WinError 32 ... used by another process". Only the final artifacts
 # (dist/) stay in the repo. Same reason .venv is never synced (see CLAUDE.md).
-BUILD_DIR = Path(tempfile.gettempdir()) / "ecmtracker-build"
+BUILD_DIR = Path(tempfile.gettempdir()) / ("ecmtracker-build-" + uuid.uuid4().hex)
 DIST_DIR = ROOT / "dist"
 ENTRY = ROOT / "run.py"
 ICON = ROOT / "assets" / "app_icon.ico"
@@ -111,7 +112,7 @@ def _stage_payload() -> Path:
     if payload.exists():
         shutil.rmtree(payload)
     (BUILD_DIR / "run.dist").rename(payload)
-    shutil.copytree(ROOT / "plugins", payload / "plugins", ignore=_DONT_COPY)
+    shutil.copytree(ROOT / "plugins", payload / "bundled_plugins", ignore=_DONT_COPY)
     return payload
 
 
@@ -154,7 +155,10 @@ def main() -> int:
     version = _version()
     print(f"Building {DISPLAY_NAME} {version} ...")
     if BUILD_DIR.exists():
-        shutil.rmtree(BUILD_DIR)
+        raise RuntimeError("Build scratch directory unexpectedly exists")
+    BUILD_DIR.mkdir()
+    subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
+    subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
     DIST_DIR.mkdir(exist_ok=True)
 
     subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)

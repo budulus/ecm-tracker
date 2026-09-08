@@ -60,6 +60,7 @@ class ImageLog:
     time_ms: np.ndarray  # (M,) float64, elapsed milliseconds from acquisition start
     log_path: str
     header_rows: List[List[str]] = field(default_factory=list)
+    skipped_rows: List[int] = field(default_factory=list)
 
     @property
     def n_images(self) -> int:
@@ -93,11 +94,18 @@ def parse_image_log(log_path: str) -> ImageLog:
 
     filenames: List[str] = []
     times: List[float] = []
-    for r in rows[data_start:]:
+    skipped_rows = []
+    for row_number, r in enumerate(rows[data_start:], start=data_start + 1):
         if len(r) <= max(file_col, ms_col):
+            if any(c.strip() for c in r):
+                skipped_rows.append(row_number)
             continue
         name = r[file_col].strip()
         if not name or not _is_float(r[ms_col]):
+            if os.path.splitext(name)[1].lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}:
+                raise ValueError(f"Image log row {row_number} has an invalid timestamp; frames cannot be skipped.")
+            if any(c.strip() for c in r):
+                skipped_rows.append(row_number)
             continue
         filenames.append(name)
         times.append(float(r[ms_col]))
@@ -114,6 +122,7 @@ def parse_image_log(log_path: str) -> ImageLog:
         time_ms=time_ms,
         log_path=log_path,
         header_rows=header_rows,
+        skipped_rows=skipped_rows,
     )
 
 
@@ -150,6 +159,7 @@ class Sensor:
     header_rows: List[List[str]] = field(default_factory=list)
     n_skipped: int = 0
     warnings: List[str] = field(default_factory=list)
+    skipped_rows: List[int] = field(default_factory=list)
 
     @property
     def n_samples(self) -> int:
@@ -238,6 +248,8 @@ def parse_sensor(dat_path: str) -> Sensor:
                 "time": unit_cells[idx[0]] if idx[0] < len(unit_cells) else "",
                 "disp": unit_cells[idx[1]] if idx[1] < len(unit_cells) else "",
                 "force": unit_cells[idx[2]] if idx[2] < len(unit_cells) else "",
+                "disp_b": unit_cells[idx[3]] if idx[3] < len(unit_cells) else "",
+                "force_b": unit_cells[idx[4]] if idx[4] < len(unit_cells) else "",
             }
             data_start = header_idx + 2
         else:
@@ -256,10 +268,12 @@ def parse_sensor(dat_path: str) -> Sensor:
     need = max(idx)
     cols_data: List[List[float]] = [[], [], [], [], []]
     n_skipped = 0
-    for r in rows[data_start:]:
+    skipped_rows = []
+    for row_number, r in enumerate(rows[data_start:], start=data_start + 1):
         if len(r) <= need or not all(_is_float(r[c]) for c in idx):
             if any(c.strip() for c in r):  # ignore truly blank lines
                 n_skipped += 1
+                skipped_rows.append(row_number)
             continue
         for j, c in enumerate(idx):
             cols_data[j].append(float(r[c]))
@@ -273,13 +287,27 @@ def parse_sensor(dat_path: str) -> Sensor:
     disp_b = np.asarray(cols_data[3], dtype=np.float64)
     force_b = np.asarray(cols_data[4], dtype=np.float64)
 
-    # np.interp requires increasing x; sort by time if the export isn't monotonic.
+    # Normalize both clamps independently. Unitless legacy files retain explicit s/mm/N assumptions.
+    def factor(key, accepted, default):
+        unit = units.get(key, "").strip().strip("[]()").lower()
+        if not unit:
+            warnings.append(f"Missing {key} unit; assumed {default}.")
+            unit = default.lower()
+        if unit not in accepted:
+            raise ValueError(f"Unsupported {key} unit: {unit!r}")
+        return accepted[unit]
+    time_s *= factor("time", {"s": 1, "sec": 1, "ms": .001, "min": 60}, "s")
+    displacement_units = {"mm": 1, "m": 1000, "um": .001, "µm": .001}
+    force_units = {"n": 1, "kn": 1000, "mn": .001}
+    disp_a *= factor("disp", displacement_units, "mm")
+    disp_b *= factor("disp_b", displacement_units, "mm")
+    force_a *= factor("force", force_units, "N")
+    force_b *= factor("force_b", force_units, "N")
+    units = {**units, "canonical_time": "s", "canonical_displacement": "mm", "canonical_force": "N"}
+
+    # Clock resets are not reorderings: they make synchronization ambiguous.
     if np.any(np.diff(time_s) < 0):
-        warnings.append("Sensor time was not monotonic; rows were sorted by time.")
-        order = np.argsort(time_s, kind="stable")
-        time_s, disp_a, force_a, disp_b, force_b = (
-            time_s[order], disp_a[order], force_a[order], disp_b[order], force_b[order]
-        )
+        raise ValueError("Sensor time goes backwards; resolve the clock reset before loading.")
 
     # np.interp requires a strictly increasing x-axis. Average duplicate timestamp rows rather
     # than allowing their implementation-dependent ordering to affect aligned measurements.
@@ -311,4 +339,5 @@ def parse_sensor(dat_path: str) -> Sensor:
         header_rows=header_rows,
         n_skipped=n_skipped,
         warnings=warnings,
+        skipped_rows=skipped_rows,
     )

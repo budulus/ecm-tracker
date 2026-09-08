@@ -118,8 +118,8 @@ class DirectionGaugeWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.canvas, 1)
         legend = QLabel(
-            f"<span style='color:{_V1_COLOR}'>■</span> major axis (λ₁, tensile)   "
-            f"<span style='color:{_V2_COLOR}'>■</span> minor axis (λ₂, lateral)"
+            f"<span style='color:{_V1_COLOR}'>■</span> major axis (λ₁)   "
+            f"<span style='color:{_V2_COLOR}'>■</span> minor axis (λ₂)"
         )
         layout.addWidget(legend)
         layout.addWidget(self.info)

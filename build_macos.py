@@ -8,7 +8,7 @@ Mirrors build.py (Windows) but emits, under dist/:
   * ECMTracker-<version>.dmg          — drag-to-Applications disk image
 
 As on Windows the app is COMPILED while the plugins/ folder ships as plain Python
-*inside the bundle* next to the binary (Contents/MacOS/plugins), so the frozen-path
+*inside the bundle* next to the binary (Contents/MacOS/bundled_plugins), so the frozen-path
 logic in app/plugins/manager.py (__compiled__.containing_dir) finds the loose plugins
 unchanged — no manager.py change is needed for macOS.
 
@@ -39,11 +39,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BUILD_DIR = Path(tempfile.gettempdir()) / "ecmtracker-build"   # outside Dropbox (see build.py)
+BUILD_DIR = Path(tempfile.gettempdir()) / ("ecmtracker-build-" + uuid.uuid4().hex)   # outside Dropbox (see build.py)
 DIST_DIR = ROOT / "dist"
 ENTRY = ROOT / "run.py"
 ICNS = ROOT / "assets" / "app_icon.icns"
@@ -99,10 +100,13 @@ def _stage_app() -> Path:
         apps[0].rename(target)
     # Plugins sit next to the binary so manager.py's __compiled__.containing_dir logic
     # finds them with no platform branch (same contract as the Windows build).
-    plugins_dest = target / "Contents" / "MacOS" / "plugins"
+    plugins_dest = target / "Contents" / "MacOS" / "bundled_plugins"
     if plugins_dest.exists():
         shutil.rmtree(plugins_dest)
     shutil.copytree(ROOT / "plugins", plugins_dest, ignore=_DONT_COPY)
+    # The loose SDK/plugins change bundle contents: sign and verify only after staging.
+    subprocess.run(["codesign", "--force", "--deep", "--sign", os.environ.get("MACOS_SIGN_IDENTITY", "-"), str(target)], check=True)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(target)], check=True)
     return target
 
 
@@ -139,7 +143,10 @@ def main() -> int:
     if not ICNS.exists():
         print(f"  ! {ICNS.name} not found — building with a generic icon (see header to make one).")
     if BUILD_DIR.exists():
-        shutil.rmtree(BUILD_DIR)
+        raise RuntimeError("Build scratch directory unexpectedly exists")
+    BUILD_DIR.mkdir()
+    subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
+    subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
     DIST_DIR.mkdir(exist_ok=True)
 
     subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)

@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 MIN_AFFINE_POINTS = 3
+MAX_GEOMETRY_CONDITION = 1e4  # Reject near-line clouds; scale-independent SVD ratio.
 
 
 def principal_directions_defined(lambda_1: float, lambda_2: float) -> bool:
@@ -44,7 +45,8 @@ def fit_affine(src, dst, valid=None) -> Optional[Tuple[np.ndarray, np.ndarray, n
     y_mean = y.mean(axis=0)
     xc = x - x_mean
     yc = y - y_mean
-    if np.linalg.matrix_rank(xc) < 2:
+    singular = np.linalg.svd(xc, compute_uv=False)
+    if singular[0] <= 0 or singular[-1] <= singular[0] / MAX_GEOMETRY_CONDITION:
         return None
 
     linear_t, *_ = np.linalg.lstsq(xc, yc, rcond=None)
@@ -60,6 +62,8 @@ def principal_stretches(F) -> Tuple[float, float, np.ndarray, np.ndarray]:
     F = np.asarray(F, dtype=np.float64)
     if F.shape != (2, 2) or not np.isfinite(F).all():
         raise ValueError("F must be a finite 2x2 matrix")
+    if np.linalg.det(F) <= 0 or np.linalg.cond(F) > 1e8:
+        raise ValueError("Mechanics requires a nonsingular orientation-preserving F")
     B = F @ F.T
     vals, vecs = np.linalg.eigh(B)
     lam = np.sqrt(np.maximum(vals, 0.0))
@@ -73,6 +77,8 @@ def principal_stretches(F) -> Tuple[float, float, np.ndarray, np.ndarray]:
         dominant = int(np.argmax(np.abs(vector)))
         if vector[dominant] < 0:
             vecs[:, column] *= -1
+    if not principal_directions_defined(float(lam[0]), float(lam[1])):
+        vecs[:] = np.nan
     return float(lam[0]), float(lam[1]), vecs[:, 0].copy(), vecs[:, 1].copy()
 
 
@@ -90,6 +96,8 @@ def ransac_affine(
     dst = np.asarray(dst, dtype=np.float64)
     if src.ndim != 2 or src.shape[1:] != (2,) or dst.shape != src.shape:
         raise ValueError("RANSAC inputs must be matching (N, 2) arrays")
+    if not np.isfinite(reproj) or reproj < 0 or not 0 < confidence < 1 or max_iters < 1:
+        raise ValueError("RANSAC needs finite reproj >= 0, max_iters >= 1, and 0 < confidence < 1")
     n = src.shape[0]
     finite = np.isfinite(src).all(axis=1) & np.isfinite(dst).all(axis=1)
     eligible = np.flatnonzero(finite)
@@ -103,7 +111,9 @@ def ransac_affine(
         if fit is None:
             return None, output
         indices, F, b = fit
-        output[indices] = True
+        output[indices] = np.linalg.norm(src[indices] @ F.T + b - dst[indices], axis=1) <= float(reproj)
+        if output.sum() < MIN_AFFINE_POINTS:
+            return None, np.zeros(n, dtype=bool)
         return np.column_stack([F, b]), output
 
     threshold = max(0.0, float(reproj))
@@ -136,7 +146,7 @@ def ransac_affine(
             ratio = count / eligible.size
             if ratio >= 1.0:
                 break
-            success = ratio**s
+            success = float(np.prod([(count - j) / (eligible.size - j) for j in range(s)])) if count >= s else 0.0
             if success > 0.0 and conf > 0.0:
                 dynamic_limit = max(
                     1,
@@ -149,4 +159,9 @@ def ransac_affine(
     if fit is None:
         return None, best
     _indices, F, b = fit
+    # Publish membership for the returned model, not the pre-refit hypothesis.
+    best[:] = False
+    best[eligible] = np.linalg.norm(src[eligible] @ F.T + b - dst[eligible], axis=1) <= threshold
+    if best.sum() < MIN_AFFINE_POINTS:
+        return None, np.zeros(n, dtype=bool)
     return np.column_stack([F, b]), best

@@ -1,0 +1,405 @@
+app.plugins.api
+
+Public plugin SDK for the ECM Tracker.
+
+Start with ``plugins/PLUGIN_CONTRACT.md`` for the standalone authoring contract. A plugin is a small Python package
+under ``plugins/`` that subclasses :class:`TrackerPlugin` and, when launched from the
+``Plugins`` menu, builds a Qt window. Everything a plugin is allowed to touch — the tracked
+coordinates, the images, the ROI, the active mask, the canvas, mouse input, persistent
+settings — is reached through a single :class:`PluginContext` instance handed to the plugin
+as ``self.ctx``.
+
+Three capabilities, three entry points:
+
+* **Read data** — ``ctx.coords()``, ``ctx.frame_bgr(i)``, ``ctx.roi``, ``ctx.metrics()`` …
+* **Draw overlays** — ``ctx.add_overlay(fn)`` where ``fn(painter, ctx)`` paints in *screen*
+  space (use ``ctx.image_to_screen(x, y)`` to place things).
+* **Capture the mouse** — ``ctx.begin_canvas_interaction(handler)`` with a
+  :class:`CanvasInteraction`; you receive clicks/drags in *image* coordinates.
+
+Plugins react to state changes through ``ctx.signals`` (a Qt signal hub) instead of polling.
+The keep-mask is editable through undoable ``ctx.apply_keep_mask(...)``. Explicit
+workflow methods can also load a sequence/session and change the tracking range;
+changed bounds discard dependent tracking. See plugins/PLUGIN_CONTRACT.md.
+
+Index convention (important): every index in this API is a **global** frame index (position in
+the loaded folder, ``0 .. ctx.n_total_images-1``). The tracked-data arrays returned by
+``coords()`` are indexed by **cut** index (``0`` = the reference frame). Use
+``ctx.global_to_cut`` / ``ctx.cut_to_global`` to convert; you never need to know the internals.
+
+TrackingSnapshot
+Aligned, detached read-only arrays. Axis 0 is frame_indices; axis 1 is point_ids.
+
+A false valid entry is a frozen/failed track, NEVER a measured displacement.
+revision belongs to the session that produced this snapshot.
+
+  revision: int
+
+  frame_indices: np.ndarray
+
+  point_ids: np.ndarray
+
+  coords: np.ndarray
+
+  valid: np.ndarray
+
+  quality: np.ndarray
+
+  error_kind: str
+
+  reference_index: int
+
+  last_index: int
+
+  tracking_params: Mapping = field(default_factory=dict)
+
+PluginSignals
+A Qt signal hub broadcasting tracker state changes to plugins.
+
+Connect to these to refresh your view reactively, e.g.::
+
+    self.ctx.signals.frame_changed.connect(self._redraw)
+
+* ``sequence_changed`` — a new image sequence was loaded (all downstream state reset).
+* ``frame_changed(int)`` — the displayed frame changed; argument is the global index.
+* ``result_changed`` — a tracking result was produced or discarded.
+* ``mask_changed`` — the active (keep) mask changed (cleanup applied/undone).
+* ``roi_changed`` — the ROI was completed or cleared.
+
+CanvasInteraction
+Base class for a temporary canvas mouse-capture mode.
+
+Install one with ``ctx.begin_canvas_interaction(self)`` and remove it with
+``ctx.end_canvas_interaction()``. While installed, left-button press/move/release are
+delivered here (instead of the built-in ROI click); middle/right-drag still pans, and the
+ROI/Pan tools are switched off to avoid conflicts. All points are in **image** coordinates.
+
+Override only the methods you need; the defaults are no-ops. Exceptions raised here are
+swallowed by the canvas so a bug can't crash the app — log inside your handler if needed.
+
+  on_press(self, image_pt: QPointF, event) -> None
+Left-button press at ``image_pt`` (a QPointF in image coordinates).
+
+  on_move(self, image_pt: QPointF, event) -> None
+Mouse move at ``image_pt`` (fires continuously; ignore if you only want clicks).
+
+  on_release(self, image_pt: QPointF, event) -> None
+Left-button release at ``image_pt``.
+
+  on_cancel(self) -> None
+Called when the interaction is force-removed (replaced or ended). Clean up here.
+
+PluginContext
+The façade a plugin uses to reach everything in the app.
+
+One instance is created per plugin and passed as ``self.ctx``. It is a thin, stable wrapper
+over the main window; it deliberately hides ``MainWindow`` / ``ProjectState`` internals so
+plugins keep working as the core evolves. Treat every array returned here as **read-only**
+unless a method name says otherwise.
+
+  revision(self) -> int
+Monotonic scientific-state version; display-only frame changes do not increment it.
+
+  subscribe(self, signal, callback)
+Connect a callback until unsubscribe() or host disposal; returns unsubscribe().
+
+  dispose(self) -> None
+Idempotently release host-managed callbacks, overlays and mouse capture.
+
+  tracks(self, active_only: bool=True) -> Optional[TrackingSnapshot]
+Return a coherent snapshot, cached until scientific state changes.
+
+  frame_tracks(self, global_index: int, active_only: bool=True)
+Return (point_ids, xy, valid) for one global frame, or None outside the result.
+
+  set_frame_range(self, reference: int, last: int) -> None
+Atomically set both global bounds; changed bounds discard the tracking result.
+
+  window(self)
+The ``MainWindow`` — use as the parent for your plugin's Qt windows/dialogs.
+
+  canvas(self)
+The :class:`CanvasView`. Prefer the helpers below, but it's here for advanced use.
+
+  signals(self) -> PluginSignals
+The :class:`PluginSignals` hub — connect to react to state changes.
+
+  has_sequence(self) -> bool
+True once an image sequence is loaded.
+
+  has_result(self) -> bool
+True once tracking has produced a result.
+
+  n_total_images(self) -> int
+Number of frames in the full loaded folder.
+
+  source_dir(self) -> Optional[str]
+Directory the active image sequence was loaded from, or ``None``.
+
+This is the same directory the core application uses as the default location for
+sequence-related open/save dialogs.  It is exposed read-only so plugins can choose a
+nearby default without reaching through the façade into :class:`ProjectState`.
+
+  status(self, message: str, timeout: int=4000) -> None
+Show a transient message in the main-window status bar.
+
+  request_redraw(self) -> None
+Repaint the canvas (call after changing what your overlay draws).
+
+  reference_index(self) -> int
+Global index of the reference frame (cut 0).
+
+  last_index(self) -> int
+Global index of the last tracked frame.
+
+  current_index(self) -> int
+Global index of the frame currently shown on the canvas.
+
+  current_cut(self) -> Optional[int]
+Cut index of the current frame, or ``None`` if it is outside the tracked range.
+
+  global_to_cut(self, global_index: int) -> int
+Convert a global frame index to a cut index (``global - reference``).
+
+  cut_to_global(self, cut_index: int) -> int
+Convert a cut index to a global frame index (``reference + cut``).
+
+  set_current_frame(self, global_index: int) -> None
+Move the app's current frame to ``global_index`` (clamped to the loaded range).
+
+Drives the same path as the main Current slider: updates the canvas, status bar and tool
+states, and emits ``signals.frame_changed``. No-op if no sequence is loaded.
+
+  set_reference_frame(self, global_index: int) -> None
+Move the reference (start) frame to ``global_index`` (clamped to ``0 .. last_index``).
+
+Drives the same path as the main Reference slider: re-scopes the tracked range and, because
+the ROI is defined on the reference frame, clears any existing ROI and seed features
+(emitting ``signals.roi_changed``). If a tracking result exists and the reference actually
+moves, the result is discarded (its cut-indexed arrays are tied to the old reference),
+emitting ``signals.result_changed``. No-op if no sequence is loaded.
+
+  set_last_frame(self, global_index: int) -> None
+Move the last frame to ``global_index`` (clamped to ``reference_index .. last loaded
+frame``).
+
+Drives the same path as the main Last slider: re-scopes the tracked range. If a tracking
+result exists and the last frame actually moves, the result is discarded (re-scoping the
+range invalidates its cut-indexed arrays), emitting ``signals.result_changed``. No-op if
+no sequence is loaded.
+
+  frame_paths(self) -> tuple[str, ...]
+Ordered image paths for all global frames as an immutable tuple.
+
+The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
+tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
+these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+
+  load_sequence(self, paths: List[str], source_dir: Optional[str]=None) -> bool
+Load an explicit, pre-ordered list of image paths as the active sequence.
+
+Order is preserved verbatim (no filename sort) — pass the paths in the exact order you
+want them indexed (e.g. acquisition-log order). Resets all downstream state (ROI, seed
+features, result, mask) and emits ``signals.sequence_changed``, just like File -> Open.
+``source_dir`` is remembered as the default save/open directory. Intended for loader
+plugins; most plugins never need this and should work with the already-loaded sequence.
+
+  save_trackers(self, path: str) -> None
+Save the current reference points and (if tracked) the full result to ``path``.
+
+Writes a single self-contained ``.npz`` (see :mod:`app.core.tracker_io`) holding the
+seed points, the tracking arrays + active mask, the ROI, the frame range and the
+detection/LK parameters — the same format as ``File -> Save Trackers``. Use it to
+persist the tracking state alongside your plugin's own project files, then restore it
+with :meth:`load_trackers`. Raises ``ValueError`` if there are no reference points and
+``OSError`` if the write fails.
+
+  load_trackers(self, path: str, *, expected_range=None) -> None
+Load a ``.npz`` written by :meth:`save_trackers` and overlay it onto the open sequence.
+
+Restores the seeds, tracking result, active mask, ROI and frame range, emitting
+``signals.result_changed`` / ``mask_changed`` / ``roi_changed`` so the UI and plugins
+refresh. Current files require the same ordered image-content fingerprint; legacy v1 files
+can only be checked by frame count. A mismatch or bad/foreign file raises ``ValueError``.
+This is the only way a plugin can install a full tracking result back into the core.
+
+  image_size(self) -> Optional[Tuple[int, int]]
+``(height, width)`` of the frames, or ``None`` if no sequence is loaded.
+
+  frame_bgr(self, global_index: int) -> np.ndarray
+Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order).
+
+  frame_gray(self, global_index: int) -> np.ndarray
+Frame at ``global_index`` as an ``(H, W)`` uint8 grayscale array.
+
+  frame_rgb(self, global_index: int) -> np.ndarray
+Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **RGB** array (for Qt/matplotlib).
+
+  result(self)
+The raw, immutable ``TrackerResult`` (escape hatch for advanced arrays such as the
+backward pass and FB errors), or ``None``. Prefer validity-aware ``tracks()``.
+
+  frame_count(self) -> int
+Number of frames in the tracked range (``coords`` axis 0). 0 if no result.
+
+  point_count(self) -> int
+Total number of tracked points P (before filtering). 0 if no result.
+
+  active_mask(self) -> Optional[np.ndarray]
+The ``(P,)`` bool keep-mask: True where a point survived cleanup. ``None`` if no
+result. Read-only — change it with :meth:`apply_keep_mask`.
+
+  n_active(self) -> int
+Number of currently-kept points.
+
+  point_indices(self) -> Optional[np.ndarray]
+Original column indices (into the full P points) of the kept points, matching the
+order of ``coords(active_only=True)``'s second axis. ``None`` if no result.
+
+  coords(self, active_only: bool=True) -> Optional[np.ndarray]
+Tracked forward coordinates as an ``(frames, points, 2)`` float32 array of ``(x, y)``.
+
+With ``active_only=True`` (default) only kept points are returned, so the point axis
+matches :meth:`point_indices`. With ``active_only=False`` all P points are returned.
+Returns ``None`` if there is no result. Indexed by **cut** index on axis 0
+(``coords[0]`` is the reference frame).
+
+  track_status(self, active_only: bool=True) -> Optional[np.ndarray]
+Forward per-frame tracking status as an ``(frames, points)`` uint8 array, aligned to
+:meth:`coords` (``1`` = the point was tracked OK at that frame, ``0`` = LK failed and the
+position was carried forward). Use it to drop dead/frozen tracks before fitting. Same
+``active_only`` semantics as :meth:`coords`; ``None`` if there is no result.
+
+  metrics(self) -> Optional[Metrics]
+Per-point quality metrics (FB error, failure counts, max step, out-of-bounds …),
+computed once and cached. ``None`` if no result. See ``app/core/cleanup.py:Metrics``.
+
+  roi(self)
+Detached ROI copy, or None; editing it cannot change the host.
+
+  roi_corners(self) -> List[Tuple[float, float]]
+The ROI corner points ``[(x, y), …]`` in image coordinates (empty if no ROI).
+
+  roi_contains(self, x: float, y: float) -> bool
+True if image point ``(x, y)`` lies inside a *complete* ROI.
+
+  roi_mask(self) -> Optional[np.ndarray]
+A filled ``(H, W)`` uint8 (0/255) ROI mask at image resolution, or ``None``.
+
+  apply_keep_mask(self, keep: np.ndarray, *, revision: Optional[int]=None) -> None
+Filter the tracked points by a boolean keep-mask, undoably.
+
+``keep`` may be length P (all points) or length ``n_active`` (current kept points only).
+Points marked False are removed from the active set; the operation is pushed onto the
+cleanup undo stack (the user can Undo it in the Cleanup dialog) and emits
+``signals.mask_changed``. No-op if there is no result. Points already filtered out stay
+filtered out — this only ever shrinks the active set, never resurrects points.
+
+  add_overlay(self, fn: OverlayFn) -> None
+Register an overlay painter ``fn(painter, ctx)``.
+
+``fn`` is called on every repaint, in **screen** space, after the built-in overlays.
+Convert image coordinates with :meth:`image_to_screen`. Keep it fast (it runs on the UI
+thread each paint). A painter that raises is auto-removed. Remember to
+:meth:`remove_overlay` in your window's ``closeEvent`` / plugin ``on_unload``.
+
+  remove_overlay(self, fn: OverlayFn) -> None
+Unregister an overlay painter previously added with :meth:`add_overlay`.
+
+  image_to_screen(self, x: float, y: float) -> QPointF
+Map an image-space point to widget/screen coordinates (for overlay painting).
+
+  screen_to_image(self, point: QPointF) -> QPointF
+Map a widget/screen point back to image coordinates.
+
+  begin_canvas_interaction(self, handler: CanvasInteraction) -> None
+Capture canvas mouse input with ``handler`` (a :class:`CanvasInteraction`).
+
+The ROI and Pan tools are switched off so they don't conflict. Always pair with
+:meth:`end_canvas_interaction` (e.g. when your window closes).
+
+  end_canvas_interaction(self) -> None
+Release this context's mouse capture without disturbing a newer owner.
+
+  get_settings(self) -> dict
+Return this plugin's persisted settings dict (empty if none saved yet). Stored in the
+shared ``settings.json`` under a key unique to your plugin.
+
+  save_settings(self, data: dict) -> None
+Persist this plugin's settings dict (overwrites the previous one).
+
+TrackerPlugin
+Base class for a plugin. Subclass it and implement :meth:`launch`.
+
+Declare the package's plugin by assigning ``PLUGIN = YourClass`` in the package
+``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
+
+Lifecycle: the manager owns your context and returned window. A visible-window relaunch
+re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+Action-only plugins returning None may receive repeated launch calls on the same instance.
+
+Minimal example::
+
+    from PySide6.QtWidgets import QLabel
+    from app.plugins import TrackerPlugin
+
+    class HelloPlugin(TrackerPlugin):
+        NAME = "Hello"
+        DESCRIPTION = "Reports how many points are tracked."
+
+        def launch(self):
+            n = self.ctx.n_active
+            w = QLabel(f"{n} points tracked", parent=self.ctx.window)
+            w.setWindowFlags(w.windowFlags() | 0x00000001)  # Qt.WindowType.Window
+            w.setWindowTitle(self.NAME)
+            w.show()
+            return w
+
+    PLUGIN = HelloPlugin
+
+  API_VERSION: int = API_VERSION
+
+  NAME: str = 'Unnamed Plugin'
+
+  DESCRIPTION: str = ''
+
+  ORDER: int = 100
+
+  launch(self)
+Build and show the plugin's window; return it (a ``QWidget``) so it stays alive.
+
+Called on the Qt main thread each time the menu entry is clicked. Returning ``None`` is
+allowed (e.g. for a plugin that just runs an action), but then the plugin is responsible
+for keeping any windows it creates referenced.
+
+  on_unload(self) -> None
+Optional: called when plugins are reloaded. Remove overlays / interactions here.
+
+app.plugins.analysis
+
+Stable Qt-free SDK helpers. Import these instead of implementation modules.
+
+fit_affine: (N,2) reference/current arrays -> (eligible indices, F, translation) or None.
+Rejects fewer than three finite points or geometry condition >= 1e4.
+principal_stretches: B=F F.T, descending stretches, current-image unit axes; axes NaN
+for equal stretches. Rejects det(F)<=0 or condition(F)>1e8.
+compute_series: (frames,points,2), milliseconds, optional 0/1 status -> aligned
+engineering strains lambda-1. Invalid rows/undefined axes are NaN, not zero.
+ransac_affine: deterministic; returned inliers satisfy the returned model's threshold.
+ROI: plugin-owned polygon helper. Never mutates the host ROI.
+atomic_open/atomic_save_npy: atomic replacement of ONE file, not a multi-file transaction.
+
+app.plugins.testing
+
+Small SDK-only test fixture for plugin calculations (no MainWindow knowledge required).
+
+sample_tracks()
+Three frames/four points: identity, 20% x stretch, then one failed track.
+
+FakeContext
+Read-only fixture for calculation tests, NOT a replacement Qt lifecycle emulator.
+
+  tracks(self, active_only=True)
+
+
+  revision(self)

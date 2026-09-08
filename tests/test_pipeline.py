@@ -262,10 +262,10 @@ def test_export(tmp=None):
     cf = np.arange(3 * 5 * 2, dtype=np.float32).reshape(3, 5, 2)
     mask = np.array([True, False, True, False, True])
     d = tempfile.mkdtemp(prefix="exp_")
-    cpath, spath, shape = export(cf, mask, 12, 83, d, "coords")
+    cpath, spath, shape = export(cf, mask, 12, 14, d, "coords")
     assert shape == (3, 3, 2)
     assert np.array_equal(np.load(cpath), cf[:, mask, :])
-    assert open(spath).read().strip() == "12 83"
+    assert open(spath).read().strip() == "12 14"
 
 
 def test_export_csv(tmp=None):
@@ -308,6 +308,7 @@ def test_gui_pipeline():
         ngon.on_press(QPointF(*c), None)
     ngon.on_right_press(QPointF(60, 180), None)  # right-click closes the polygon
     w._detect_shi_tomasi()
+    w.state.lk_params["flags"] = 0  # This test exercises photometric upper thresholds.
     w._run_tracking()
     assert w.state.result is not None
     w._open_cleanup()

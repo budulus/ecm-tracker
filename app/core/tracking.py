@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from app.core.image_sequence import ImageSequence
-from app.models.tracker_result import TrackerResult
+from app.core.result import TrackerResult
 
 # Flat LK parameters (assembled into cv2 kwargs by _cv_lk_kwargs).
 DEFAULT_LK = dict(
@@ -162,6 +162,9 @@ def track(
         raise ValueError("Tracking range is outside the loaded image sequence")
     if seed_pts.shape[0] == 0 or not np.isfinite(seed_pts).all():
         raise ValueError("Tracking requires at least one finite seed point")
+    h, w = sequence.load_gray(reference_index).shape[:2]
+    if np.any(seed_pts < 0) or np.any(seed_pts[:, 0] >= w) or np.any(seed_pts[:, 1] >= h):
+        raise ValueError("Tracking seeds must be inside the reference image")
     n = last_index - reference_index + 1
     lk_kwargs = _cv_lk_kwargs(lk_params)
     total = 2 * (n - 1)
@@ -214,4 +217,6 @@ def track(
         fb_mean_error=fb_mean,
         fb_max_error=fb_max,
         win_size=int(lk_params["win_size"]),
+        error_kind="min_eigenvalue" if int(lk_params.get("flags", 0)) & 8 else "photometric",
+        tracking_params=dict(lk_params),
     )

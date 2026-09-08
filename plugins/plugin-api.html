@@ -1,1200 +1,595 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ECM Tracker · Plugin SDK</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
-<style>
-/* ============================================================
-   ECM Tracker — Plugin SDK reference
-   Palette + idioms mirror app/gui/theme.py (light, Fusion,
-   #2563eb accent, hairline #d6dade borders, 6-8px radii).
-   ============================================================ */
-:root{
-  --bg:#f4f5f7;
-  --surface:#ffffff;
-  --surface-2:#f8fafc;
-  --border:#d6dade;
-  --border-2:#e3e7ec;
-  --border-soft:#eef1f6;
-  --text:#2b2f33;
-  --text-2:#6b727a;
-  --text-3:#9aa1aa;
-  --text-disabled:#b3b9c0;
-  --accent:#2563eb;
-  --accent-h:#1d4ed8;
-  --accent-d:#1a45c0;
-  --accent-tint:#e7efff;
-  --accent-tint-2:#eef4ff;
-  --accent-tint-border:#b9d2ff;
-  --hover:#eef1f6;
-  --warn:#9a6a00;
-  --warn-text:#7a5300;
-  --warn-bg:#fdf7ea;
-  --warn-border:#eedfb6;
-  --sans:'IBM Plex Sans',system-ui,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
-  --mono:'IBM Plex Mono','SFMono-Regular',Menlo,Consolas,monospace;
-  --shadow-sm:0 1px 2px rgba(34,40,49,.04);
-  --shadow:0 6px 24px -12px rgba(34,40,49,.18);
-  --radius:8px;
-  --topbar-h:56px;
-}
-*{box-sizing:border-box;}
-html{scroll-behavior:smooth;}
-body{
-  margin:0;
-  font-family:var(--sans);
-  font-size:15px;
-  line-height:1.65;
-  color:var(--text);
-  background:var(--bg);
-  -webkit-font-smoothing:antialiased;
-  text-rendering:optimizeLegibility;
-}
-/* faint feature-point graph-paper backdrop — evokes tracked points on a frame */
-body::before{
-  content:"";
-  position:fixed;inset:0;z-index:0;pointer-events:none;
-  background-image:
-    radial-gradient(circle, rgba(37,99,235,.05) 1px, transparent 1.4px);
-  background-size:26px 26px;
-  background-position:13px 13px;
-  -webkit-mask-image:linear-gradient(to bottom, rgba(0,0,0,.9), rgba(0,0,0,.5) 60%, transparent);
-  mask-image:linear-gradient(to bottom, rgba(0,0,0,.9), rgba(0,0,0,.5) 60%, transparent);
-}
-a{color:var(--accent);text-decoration:none;}
-a:hover{text-decoration:underline;}
-
-/* ---------- icon system (Lucide, stroke=currentColor) ---------- */
-.ic{width:1em;height:1em;display:inline-block;vertical-align:-0.125em;
-    fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;}
-
-/* ---------- top bar ---------- */
-.topbar{
-  position:sticky;top:0;z-index:50;height:var(--topbar-h);
-  display:flex;align-items:center;gap:14px;
-  padding:0 22px;
-  background:rgba(255,255,255,.86);
-  backdrop-filter:saturate(180%) blur(10px);
-  border-bottom:1px solid var(--border);
-}
-.brand{display:flex;align-items:center;gap:11px;font-weight:600;letter-spacing:-.01em;}
-.brand .logo{width:30px;height:30px;flex:none;border-radius:8px;box-shadow:var(--shadow-sm);}
-.brand .b1{color:var(--text);}
-.brand .b-sep{color:var(--border);font-weight:300;}
-.brand .b2{color:var(--accent);}
-.topbar .ver{
-  font-family:var(--mono);font-size:11px;color:var(--text-2);
-  border:1px solid var(--border);border-radius:20px;padding:2px 10px;background:var(--surface);
-}
-.topbar .spacer{flex:1;}
-.topbar .tlink{
-  display:inline-flex;align-items:center;gap:7px;
-  font-size:13px;color:var(--text-2);font-weight:500;
-  padding:6px 11px;border-radius:7px;
-}
-.topbar .tlink .ic{width:16px;height:16px;}
-.topbar .tlink:hover{background:var(--hover);color:var(--text);text-decoration:none;}
-.menu-btn{display:none;}
-
-/* ---------- layout shell ---------- */
-.shell{
-  position:relative;z-index:1;
-  display:grid;grid-template-columns:282px minmax(0,1fr);
-  max-width:1240px;margin:0 auto;
-  align-items:start;
-}
-
-/* ---------- sidebar / TOC ---------- */
-.sidebar{
-  position:sticky;top:var(--topbar-h);
-  height:calc(100vh - var(--topbar-h));
-  overflow-y:auto;
-  padding:30px 14px 60px 22px;
-}
-.sidebar::-webkit-scrollbar{width:8px;}
-.sidebar::-webkit-scrollbar-thumb{background:#dfe3e8;border-radius:8px;}
-.nav-group{margin-bottom:22px;}
-.nav-group h4{
-  font-family:var(--mono);font-size:10px;font-weight:600;
-  letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);
-  margin:0 0 8px 12px;
-}
-.nav-group a{
-  display:flex;align-items:center;gap:9px;
-  padding:6px 12px;margin:1px 0;border-radius:7px;
-  color:var(--text-2);font-size:13.5px;font-weight:500;
-  border:1px solid transparent;
-  transition:background .12s,color .12s;
-}
-.nav-group a .ic{width:15px;height:15px;color:var(--text-3);transition:color .12s;}
-.nav-group a:hover{background:var(--hover);color:var(--text);text-decoration:none;}
-.nav-group a:hover .ic{color:var(--text-2);}
-.nav-group a.active{
-  background:var(--accent-tint);color:var(--accent-h);
-  border-color:var(--accent-tint-border);font-weight:600;
-}
-.nav-group a.active .ic{color:var(--accent);}
-
-/* ---------- main content ---------- */
-main{
-  padding:38px 48px 120px;
-  min-width:0;
-}
-.wrap{max-width:820px;margin:0 auto;}
-section{scroll-margin-top:calc(var(--topbar-h) + 22px);margin-bottom:64px;}
-section:last-child{margin-bottom:0;}
-
-h1{font-size:42px;line-height:1.1;font-weight:600;letter-spacing:-.025em;margin:0 0 14px;}
-h2{font-size:27px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px;
-   display:flex;align-items:center;gap:12px;}
-h2 .ic{width:22px;height:22px;color:var(--accent);flex:none;}
-h3{font-size:18px;font-weight:600;letter-spacing:-.01em;margin:34px 0 10px;color:var(--text);}
-.lead{font-size:17px;color:var(--text-2);line-height:1.6;margin:0 0 4px;}
-.sec-sub{color:var(--text-2);margin:2px 0 24px;font-size:15.5px;}
-p{margin:0 0 14px;}
-ul,ol{margin:0 0 16px;padding-left:22px;}
-li{margin:5px 0;}
-strong{font-weight:600;color:var(--text);}
-
-/* inline code */
-code{
-  font-family:var(--mono);font-size:.86em;
-  background:var(--border-soft);color:#384559;
-  padding:.12em .42em;border-radius:5px;
-  border:1px solid #e4e8ee;
-}
-.api-desc code,td code,li code,p code{white-space:nowrap;}
-
-/* ---------- hero ---------- */
-.hero{position:relative;padding-top:18px;margin-bottom:54px;}
-.hero::after{
-  content:"";position:absolute;left:-80px;top:-60px;width:480px;height:300px;z-index:-1;
-  background:radial-gradient(ellipse at top left, rgba(37,99,235,.10), transparent 70%);
-  pointer-events:none;
-}
-.eyebrow{
-  display:inline-flex;align-items:center;gap:8px;
-  font-family:var(--mono);font-size:12px;font-weight:500;
-  letter-spacing:.18em;text-transform:uppercase;color:var(--accent);
-  margin-bottom:18px;
-}
-.eyebrow .ic{width:15px;height:15px;}
-.hero .lead{font-size:18.5px;max-width:660px;}
-.hero-rule{height:1px;background:linear-gradient(to right,var(--border),transparent);margin:30px 0 0;}
-
-/* capability cards */
-.caps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:30px 0 6px;}
-.cap{
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:18px 18px 16px;box-shadow:var(--shadow-sm);
-  transition:transform .16s ease, box-shadow .16s ease, border-color .16s;
-}
-.cap:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:var(--accent-tint-border);}
-.cap .ci{
-  width:38px;height:38px;border-radius:9px;display:grid;place-items:center;
-  background:var(--accent-tint);color:var(--accent);margin-bottom:13px;
-}
-.cap .ci .ic{width:20px;height:20px;}
-.cap h4{margin:0 0 5px;font-size:15px;font-weight:600;}
-.cap p{margin:0;font-size:13.5px;color:var(--text-2);line-height:1.5;}
-
-/* the "one object" banner */
-.oneobject{
-  display:flex;gap:16px;align-items:flex-start;
-  background:linear-gradient(180deg,var(--accent-tint-2),var(--surface));
-  border:1px solid var(--accent-tint-border);border-radius:var(--radius);
-  padding:18px 20px;margin:26px 0 0;
-}
-.oneobject .ic{width:22px;height:22px;color:var(--accent);margin-top:3px;flex:none;}
-.oneobject p{margin:0;font-size:15px;color:#33405c;}
-.oneobject b{color:var(--accent-h);}
-
-/* ---------- callouts ---------- */
-.callout{
-  display:flex;gap:13px;align-items:flex-start;
-  border:1px solid var(--border-2);border-left-width:3px;border-radius:var(--radius);
-  padding:14px 16px;margin:20px 0;background:var(--surface);font-size:14.5px;
-}
-.callout .ic{width:19px;height:19px;margin-top:2px;flex:none;}
-.callout p:last-child{margin-bottom:0;}
-.callout p:first-child{margin-top:0;}
-.callout.note{border-left-color:var(--accent);background:var(--accent-tint-2);}
-.callout.note .ic{color:var(--accent);}
-.callout.warn{border-left-color:var(--warn);background:var(--warn-bg);border-color:var(--warn-border);}
-.callout.warn .ic{color:var(--warn);}
-.callout.warn strong{color:var(--warn-text);}
-.callout .co-title{font-weight:600;}
-
-/* ---------- code blocks ---------- */
-.code{
-  background:var(--surface);border:1px solid var(--border);border-radius:10px;
-  overflow:hidden;margin:18px 0;box-shadow:var(--shadow-sm);
-}
-.code-head{
-  display:flex;align-items:center;gap:9px;
-  padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--border-2);
-}
-.code-head .fname{font-family:var(--mono);font-size:12px;color:var(--text-2);}
-.code-head .ic.file{width:14px;height:14px;color:var(--text-3);}
-.code-head .spacer{flex:1;}
-.copy-btn{
-  display:inline-flex;align-items:center;gap:6px;cursor:pointer;
-  font-family:var(--mono);font-size:11px;color:var(--text-2);
-  background:transparent;border:1px solid var(--border);border-radius:6px;
-  padding:3px 9px;transition:all .12s;
-}
-.copy-btn .ic{width:13px;height:13px;}
-.copy-btn:hover{background:var(--surface);color:var(--text);border-color:#c7ccd3;}
-.copy-btn.done{color:var(--accent-h);border-color:var(--accent-tint-border);background:var(--accent-tint);}
-pre{margin:0;padding:16px 18px;overflow-x:auto;}
-pre code{
-  font-family:var(--mono);font-size:13px;line-height:1.7;
-  background:none;border:none;padding:0;color:#3a4150;white-space:pre;
-}
-pre code::-webkit-scrollbar{height:8px;}
-/* token colors — restrained, tuned to the blue accent */
-.t-com{color:#93a1ad;font-style:italic;}
-.t-str{color:#0e8a6e;}
-.t-kw{color:#2563eb;font-weight:500;}
-.t-self{color:#7a828b;font-style:italic;}
-.t-dec{color:#9a6a00;}
-.t-num{color:#b4690e;}
-
-/* plain file-tree block */
-.tree{
-  font-family:var(--mono);font-size:13px;line-height:1.75;color:var(--text-2);
-  background:var(--surface);border:1px solid var(--border);border-radius:10px;
-  padding:16px 18px;margin:18px 0;box-shadow:var(--shadow-sm);white-space:pre;overflow-x:auto;
-}
-.tree .f{color:var(--accent-h);}
-.tree .cmt{color:var(--text-3);}
-
-/* ---------- API reference rows ---------- */
-.api{border:1px solid var(--border);border-radius:10px;overflow:hidden;
-     margin:18px 0;box-shadow:var(--shadow-sm);background:var(--surface);}
-.api-head{
-  display:flex;align-items:center;gap:9px;padding:11px 16px;
-  background:var(--surface-2);border-bottom:1px solid var(--border-2);
-  font-weight:600;font-size:13.5px;color:var(--text);
-}
-.api-head .ic{width:16px;height:16px;color:var(--accent);}
-.api-row{
-  display:grid;grid-template-columns:minmax(220px,40%) 1fr;gap:18px;
-  padding:13px 16px;border-top:1px solid var(--border-soft);
-}
-.api-row:first-of-type{border-top:none;}
-.api-row:hover{background:#fbfcfe;}
-.api-sig{font-family:var(--mono);font-size:12.5px;line-height:1.55;align-self:start;word-break:break-word;}
-.api-sig .m{color:var(--accent-h);font-weight:600;}
-.api-sig .ret{color:var(--text-3);}
-.api-sig .a{color:#7a828b;}
-.api-desc{font-size:13.7px;color:var(--text-2);line-height:1.55;align-self:center;}
-.api-desc b{color:var(--text);}
-.tag{
-  display:inline-block;font-family:var(--mono);font-size:9.5px;font-weight:600;
-  letter-spacing:.04em;text-transform:uppercase;
-  padding:1px 6px;border-radius:4px;vertical-align:middle;margin-left:6px;
-}
-.tag.prop{background:#eef4ff;color:#3457a8;border:1px solid #d4e2fb;}
-.tag.ro{background:#f2f3f5;color:#7a828b;border:1px solid #e3e7ec;}
-.tag.mut{background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn-border);}
-
-.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:0 0 16px;}
-.legend span{display:inline-flex;align-items:center;gap:6px;}
-
-/* ---------- tables ---------- */
-.tbl{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px;
-     border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow-sm);}
-.tbl thead th{
-  background:var(--surface-2);text-align:left;font-weight:600;color:var(--text);
-  padding:10px 14px;border-bottom:1px solid var(--border-2);font-size:12.5px;
-}
-.tbl td{padding:9px 14px;border-top:1px solid var(--border-soft);color:var(--text-2);vertical-align:top;}
-.tbl tbody tr:hover{background:#fbfcfe;}
-.tbl td:first-child{white-space:nowrap;}
-.tbl code{white-space:nowrap;}
-
-/* ---------- global vs cut diagram ---------- */
-.diagram{
-  background:var(--surface);border:1px solid var(--border);border-radius:12px;
-  padding:26px 24px 20px;margin:22px 0;box-shadow:var(--shadow-sm);overflow-x:auto;
-}
-.dwrap{min-width:520px;}
-.drow{display:flex;align-items:center;gap:6px;}
-.drow + .drow{margin-top:8px;}
-.dlabel{
-  font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.08em;
-  text-transform:uppercase;color:var(--text-3);width:58px;flex:none;text-align:right;
-  padding-right:10px;
-}
-.cell{
-  width:46px;height:42px;flex:none;display:grid;place-items:center;
-  font-family:var(--mono);font-size:14px;color:var(--text-2);
-  border:1px solid var(--border);border-radius:7px;background:var(--surface);
-}
-.cell.ghost{border-color:transparent;background:transparent;}
-.cell.track{background:var(--accent-tint-2);border-color:var(--accent-tint-border);color:var(--accent-h);font-weight:500;}
-.cell.ref{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;box-shadow:0 2px 8px -2px rgba(37,99,235,.5);}
-.cell.last{background:var(--accent-tint);border-color:var(--accent);color:var(--accent-d);font-weight:600;}
-.dbracket{
-  margin:14px 0 4px 58px;height:22px;position:relative;min-width:520px;
-}
-.dbracket .band{
-  position:absolute;left:110px;width:254px;top:0;height:100%;
-  border:1px solid var(--accent-tint-border);border-bottom:none;
-  border-radius:7px 7px 0 0;background:linear-gradient(180deg,rgba(37,99,235,.05),transparent);
-}
-.dbracket .blabel{
-  position:absolute;left:110px;width:254px;top:5px;text-align:center;
-  font-family:var(--mono);font-size:11px;color:var(--accent-h);font-weight:500;
-}
-.dnote{display:flex;gap:22px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--text-2);}
-.dnote .k{display:flex;align-items:center;gap:8px;}
-.dnote .sw{width:15px;height:15px;border-radius:4px;flex:none;}
-.dnote .sw.ref{background:var(--accent);}
-.dnote .sw.track{background:var(--accent-tint-2);border:1px solid var(--accent-tint-border);}
-.dnote code{font-size:12px;}
-
-/* ---------- example cards ---------- */
-.ex{
-  border:1px solid var(--border);border-radius:12px;background:var(--surface);
-  margin:18px 0;overflow:hidden;box-shadow:var(--shadow-sm);
-}
-.ex-head{display:flex;align-items:center;gap:13px;padding:16px 18px;border-bottom:1px solid var(--border-2);}
-.ex-head .ci{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;
-             background:var(--accent-tint);color:var(--accent);flex:none;}
-.ex-head .ci .ic{width:19px;height:19px;}
-.ex-head .et{flex:1;}
-.ex-head h4{margin:0;font-size:15.5px;font-weight:600;}
-.ex-head .path{font-family:var(--mono);font-size:11.5px;color:var(--text-3);}
-.pill{
-  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
-  padding:3px 9px;border-radius:20px;background:var(--accent-tint);color:var(--accent-h);
-  border:1px solid var(--accent-tint-border);white-space:nowrap;
-}
-.ex-body{padding:6px 18px 4px;}
-.ex-body .code{margin:14px 0;}
-
-/* ---------- footer ---------- */
-.foot{border-top:1px solid var(--border);margin-top:70px;padding-top:26px;
-      color:var(--text-3);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
-.foot a{color:var(--text-2);}
-
-/* fade-up entrance */
-@keyframes fadeup{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
-.fu{animation:fadeup .6s cubic-bezier(.2,.7,.3,1) both;}
-@media (prefers-reduced-motion:reduce){.fu{animation:none;}html{scroll-behavior:auto;}}
-
-/* ---------- responsive ---------- */
-@media (max-width:1080px){
-  .shell{grid-template-columns:1fr;}
-  .sidebar{
-    position:fixed;top:var(--topbar-h);left:0;width:300px;
-    background:var(--surface);border-right:1px solid var(--border);
-    z-index:40;transform:translateX(-104%);transition:transform .22s ease;box-shadow:var(--shadow);
-  }
-  .sidebar.open{transform:none;}
-  main{padding:30px 26px 100px;}
-  .menu-btn{
-    display:inline-flex;align-items:center;justify-content:center;
-    width:36px;height:36px;border:1px solid var(--border);border-radius:8px;
-    background:var(--surface);color:var(--text-2);cursor:pointer;
-  }
-  .menu-btn .ic{width:18px;height:18px;}
-  .scrim{position:fixed;inset:var(--topbar-h) 0 0;background:rgba(20,24,30,.28);z-index:35;display:none;}
-  .scrim.show{display:block;}
-}
-@media (max-width:680px){
-  body{font-size:14.5px;}
-  h1{font-size:33px;}
-  h2{font-size:23px;}
-  .caps{grid-template-columns:1fr;}
-  .api-row{grid-template-columns:1fr;gap:6px;}
-  .topbar .tlink span{display:none;}
-  .brand .b-sep,.brand .b2{display:none;}
-}
-</style>
-</head>
-<body>
-
-<!-- ============ icon sprite ============ -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#1d4ed8"/>
-    </linearGradient>
-  </defs>
-  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></symbol>
-  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
-  <symbol id="i-frame" viewBox="0 0 24 24"><line x1="22" x2="2" y1="6" y2="6"/><line x1="22" x2="2" y1="18" y2="18"/><line x1="6" x2="6" y1="2" y2="22"/><line x1="18" x2="18" y1="2" y2="22"/></symbol>
-  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
-  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="1.6"/></symbol>
-  <symbol id="i-move" viewBox="0 0 24 24"><line x1="2" x2="22" y1="12" y2="12"/><polyline points="6 8 2 12 6 16"/><polyline points="18 8 22 12 18 16"/></symbol>
-  <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></symbol>
-  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
-  <symbol id="i-pointer" viewBox="0 0 24 24"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"/></symbol>
-  <symbol id="i-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
-  <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></symbol>
-  <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
-  <symbol id="i-warn" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></symbol>
-  <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></symbol>
-  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
-  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
-  <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></symbol>
-  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></symbol>
-  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
-  <symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></symbol>
-  <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
-  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
-  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></symbol>
-  <symbol id="i-menu" viewBox="0 0 24 24"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></symbol>
-  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></symbol>
-</svg>
-
-<!-- ============ top bar ============ -->
-<header class="topbar">
-  <button class="menu-btn" id="menuBtn" aria-label="Toggle navigation"><svg class="ic"><use href="#i-menu"/></svg></button>
-  <span class="brand">
-    <svg class="logo" viewBox="0 0 32 32">
-      <rect x="1.5" y="1.5" width="29" height="29" rx="7.5" fill="url(#lg)"/>
-      <circle cx="16" cy="16" r="8.5" fill="none" stroke="#67e8f9" stroke-width="1.4" opacity=".9"/>
-      <line x1="16" y1="4.5" x2="16" y2="9" stroke="#a5f3fc" stroke-width="1.3" stroke-linecap="round"/>
-      <line x1="16" y1="23" x2="16" y2="27.5" stroke="#a5f3fc" stroke-width="1.3" stroke-linecap="round"/>
-      <line x1="4.5" y1="16" x2="9" y2="16" stroke="#a5f3fc" stroke-width="1.3" stroke-linecap="round"/>
-      <line x1="23" y1="16" x2="27.5" y2="16" stroke="#a5f3fc" stroke-width="1.3" stroke-linecap="round"/>
-      <circle cx="16" cy="16" r="2.1" fill="#fff"/>
-      <circle cx="11.4" cy="11.4" r="1.1" fill="#fff" opacity=".85"/>
-      <circle cx="20.6" cy="11.4" r="1.1" fill="#fff" opacity=".85"/>
-      <circle cx="11.4" cy="20.6" r="1.1" fill="#fff" opacity=".85"/>
-      <circle cx="20.6" cy="20.6" r="1.1" fill="#fff" opacity=".85"/>
-    </svg>
-    <span class="b1">ECM Tracker</span>
-    <span class="b-sep">/</span>
-    <span class="b2">Plugin SDK</span>
-  </span>
-  <span class="ver">v1</span>
-  <span class="spacer"></span>
-  <a class="tlink" href="#quick-start"><svg class="ic"><use href="#i-zap"/></svg><span>Quick start</span></a>
-  <a class="tlink" href="#cheatsheet"><svg class="ic"><use href="#i-list"/></svg><span>Cheat sheet</span></a>
-</header>
-
-<div class="scrim" id="scrim"></div>
-
-<div class="shell">
-  <!-- ============ sidebar ============ -->
-  <nav class="sidebar" id="sidebar">
-    <div class="nav-group">
-      <h4>Getting started</h4>
-      <a href="#overview"><svg class="ic"><use href="#i-book"/></svg>Overview</a>
-      <a href="#quick-start"><svg class="ic"><use href="#i-zap"/></svg>Quick start</a>
-      <a href="#frames"><svg class="ic"><use href="#i-frame"/></svg>Frames: global vs cut</a>
-    </div>
-    <div class="nav-group">
-      <h4>Writing a plugin</h4>
-      <a href="#anatomy"><svg class="ic"><use href="#i-box"/></svg>Anatomy &amp; lifecycle</a>
-      <a href="#context"><svg class="ic"><use href="#i-scan"/></svg>The context &amp; data</a>
-      <a href="#navigation"><svg class="ic"><use href="#i-move"/></svg>Frames &amp; navigation</a>
-      <a href="#images-roi"><svg class="ic"><use href="#i-crop"/></svg>Images &amp; ROI</a>
-      <a href="#overlays"><svg class="ic"><use href="#i-eye"/></svg>Canvas overlays</a>
-      <a href="#mouse"><svg class="ic"><use href="#i-pointer"/></svg>Mouse capture</a>
-      <a href="#filtering"><svg class="ic"><use href="#i-filter"/></svg>Filtering points</a>
-      <a href="#settings"><svg class="ic"><use href="#i-radio"/></svg>Settings &amp; signals</a>
-    </div>
-    <div class="nav-group">
-      <h4>Reference</h4>
-      <a href="#examples"><svg class="ic"><use href="#i-code"/></svg>Worked examples</a>
-      <a href="#gotchas"><svg class="ic"><use href="#i-warn"/></svg>Conventions &amp; gotchas</a>
-      <a href="#cheatsheet"><svg class="ic"><use href="#i-list"/></svg>Cheat sheet</a>
-    </div>
-  </nav>
-
-  <!-- ============ content ============ -->
-  <main>
-  <div class="wrap">
-
-    <!-- HERO -->
-    <header class="hero fu">
-      <span class="eyebrow"><svg class="ic"><use href="#i-compass"/></svg>Plugin SDK reference</span>
-      <h1>Extend the&nbsp;Tracker.</h1>
-      <p class="lead">ECM Tracker is extensible through small Python plugins for <strong>post-processing, export, and visualization</strong>. Read the tracked points, draw on the canvas, capture the mouse — without ever touching the core tracking code.</p>
-
-      <div class="caps">
-        <div class="cap">
-          <div class="ci"><svg class="ic"><use href="#i-scan"/></svg></div>
-          <h4>Read &amp; analyze</h4>
-          <p>Tracked coordinates, per-point quality metrics, frames, the ROI and the active mask — all read-only.</p>
-        </div>
-        <div class="cap">
-          <div class="ci"><svg class="ic"><use href="#i-eye"/></svg></div>
-          <h4>Draw overlays</h4>
-          <p>Register a painter that runs every repaint, in screen space, on top of the live frame.</p>
-        </div>
-        <div class="cap">
-          <div class="ci"><svg class="ic"><use href="#i-pointer"/></svg></div>
-          <h4>Capture the mouse</h4>
-          <p>Take over canvas clicks to draw zones, pick points, or build interactive tools.</p>
-        </div>
-      </div>
-
-      <div class="oneobject">
-        <svg class="ic"><use href="#i-info"/></svg>
-        <p>The whole API is <b>one object</b>. Your plugin is handed a <code>PluginContext</code> as <code>self.ctx</code>; it wraps the main window and hides the tricky internals. Learn <code>ctx</code> and you know the SDK.</p>
-      </div>
-      <div class="hero-rule"></div>
-    </header>
-
-    <!-- OVERVIEW -->
-    <section id="overview">
-      <h2><svg class="ic"><use href="#i-book"/></svg>Overview</h2>
-      <p class="sec-sub">What a plugin is, where it lives, and the rules of the road.</p>
-
-      <p>A plugin is a <strong>self-contained folder under <code>plugins/</code></strong> that adds a launchable window to the app. ECM Tracker scans <code>plugins/*/</code> on startup, imports each as a Python package, and lists the ones that expose a plugin.</p>
-
-      <ul>
-        <li><strong>Scope.</strong> Plugins are for analysis, export and overlays. They get rich <em>read</em> access to the tracking session, can navigate and re-scope the frame range, and have one undoable point filter — but never touch the tracking algorithm or rewrite a result.</li>
-        <li><strong>One import.</strong> Everything you need comes from the <code>app.plugins</code> package: <code>TrackerPlugin</code>, <code>PluginContext</code>, <code>CanvasInteraction</code>, <code>PluginSignals</code>.</li>
-        <li><strong>Shared environment.</strong> Plugins run in the app's own Python. You may use the standard library and anything already bundled (NumPy, SciPy, matplotlib). Import heavy/optional deps lazily, at point of use.</li>
-        <li><strong>Crash-isolated.</strong> A broken plugin can't take the app down — a failed import shows up as a disabled <code>⚠</code> button, a failed overlay quietly removes itself, and a failed launch pops a dialog.</li>
-      </ul>
-
-      <div class="callout note">
-        <svg class="ic"><use href="#i-info"/></svg>
-        <p><span class="co-title">The canonical reference is the source.</span> Every method on <code>ctx</code> is fully docstring'd in <code>app/plugins/api.py</code>, and <code>plugins/README.md</code> is the author's quick guide. This page is the friendly map; those two files are the territory.</p>
-      </div>
-    </section>
-
-    <!-- QUICK START -->
-    <section id="quick-start">
-      <h2><svg class="ic"><use href="#i-zap"/></svg>Quick start</h2>
-      <p class="sec-sub">A complete, working plugin in one file.</p>
-
-      <p>Create a folder under <code>plugins/</code> with an <code>__init__.py</code>. Subclass <code>TrackerPlugin</code>, implement <code>launch()</code>, and expose your class as <code>PLUGIN</code>:</p>
-
-      <div class="tree"><span class="f">plugins/</span>
-└── <span class="f">my_plugin/</span>
-    └── __init__.py        <span class="cmt"># one file is enough to start</span></div>
-
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">plugins/my_plugin/__init__.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel
-
-from app.plugins import TrackerPlugin
-
-
-class MyPlugin(TrackerPlugin):
-    NAME = "My Plugin"                 # shown in the Plugins panel
-    DESCRIPTION = "Says how many points are tracked."
-
-    def launch(self):                  # called when the user clicks the entry
-        w = QLabel(f"{self.ctx.n_active} points tracked", parent=self.ctx.window)
-        w.setWindowFlags(Qt.WindowType.Window)
-        w.setWindowTitle(self.NAME)
-        w.show()
-        return w                       # return the window so it stays alive
-
-
-PLUGIN = MyPlugin                      # how the app finds your plugin
-</code></pre>
-      </div>
-
-      <p>Then, in the running app, click <strong>Plugins → Reload Plugins</strong> (no restart needed). Your plugin appears as a launch button; click it to run <code>launch()</code>.</p>
-
-      <div class="callout note">
-        <svg class="ic"><use href="#i-refresh"/></svg>
-        <p><span class="co-title">The edit loop.</span> Edit a plugin → <strong>Reload Plugins</strong> → click it again. Reload re-imports every plugin module from scratch, so your changes take effect immediately. <strong>Plugins → Open Plugins Folder…</strong> opens this directory in your file browser.</p>
-      </div>
-    </section>
-
-    <!-- FRAMES: GLOBAL VS CUT -->
-    <section id="frames">
-      <h2><svg class="ic"><use href="#i-frame"/></svg>Frames: global vs cut</h2>
-      <p class="sec-sub">The one concept that trips everyone up — internalize it first.</p>
-
-      <p>There are <strong>two</strong> ways to index a frame, and they don't agree:</p>
-      <ul>
-        <li><strong>Global index</strong> — position in the full loaded folder, <code>0 … ctx.n_total_images − 1</code>. <em>Every index argument and frame property on <code>ctx</code> is global.</em></li>
-        <li><strong>Cut index</strong> — position within the tracked range, where <strong>cut&nbsp;0 = the reference frame</strong>. <em>The tracked-data arrays from <code>coords()</code> / <code>track_status()</code> are cut-indexed on axis&nbsp;0.</em></li>
-      </ul>
-
-      <div class="diagram">
-        <div class="dwrap">
-          <div class="dbracket">
-            <div class="band"></div>
-            <div class="blabel">tracked range — reference → last</div>
-          </div>
-          <div class="drow">
-            <span class="dlabel">global</span>
-            <span class="cell">0</span><span class="cell">1</span>
-            <span class="cell ref">2</span><span class="cell track">3</span><span class="cell track">4</span><span class="cell track">5</span><span class="cell last">6</span>
-            <span class="cell">7</span>
-          </div>
-          <div class="drow">
-            <span class="dlabel">cut</span>
-            <span class="cell ghost"></span><span class="cell ghost"></span>
-            <span class="cell track">0</span><span class="cell track">1</span><span class="cell track">2</span><span class="cell track">3</span><span class="cell track">4</span>
-            <span class="cell ghost"></span>
-          </div>
-          <div class="dnote">
-            <span class="k"><span class="sw ref"></span><code>reference_index = 2</code> → cut 0</span>
-            <span class="k"><code>last_index = 6</code> → cut 4</span>
-            <span class="k"><code>coords()[0]</code> is the reference frame</span>
-          </div>
-        </div>
-      </div>
-
-      <p>Convert freely with the two helpers on <code>ctx</code>:</p>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">global ⇄ cut</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">cut = ctx.global_to_cut(ctx.current_index)   # global - reference_index
-glo = ctx.cut_to_global(0)                   # reference_index + cut
-
-coords = ctx.coords()        # (frames, points, 2), cut-indexed
-ref_points = coords[0]       # positions on the reference frame
-cur_cut = ctx.current_cut    # cut index of the shown frame, or None if outside range
-</code></pre>
-      </div>
-
-      <div class="callout warn">
-        <svg class="ic"><use href="#i-warn"/></svg>
-        <p><span class="co-title">Don't index <code>coords()</code> with a global index.</span> <code>coords[ctx.current_index]</code> is wrong unless the reference happens to be frame&nbsp;0. Use <code>coords[ctx.current_cut]</code>, and guard for <code>current_cut is None</code> (the displayed frame can sit outside the tracked range).</p>
-      </div>
-    </section>
-
-    <!-- ANATOMY -->
-    <section id="anatomy">
-      <h2><svg class="ic"><use href="#i-box"/></svg>Anatomy &amp; lifecycle</h2>
-      <p class="sec-sub">The <code>TrackerPlugin</code> base class, and how the app discovers and runs it.</p>
-
-      <h3>The base class</h3>
-      <p>Subclass <code>TrackerPlugin</code> (from <code>app.plugins</code>). Only <code>launch()</code> is required:</p>
-
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-box"/></svg>class TrackerPlugin</div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">NAME</span> <span class="ret">: str</span><span class="tag prop">attr</span></div>
-          <div class="api-desc">Display name in the Plugins panel. Defaults to <code>"Unnamed Plugin"</code>.</div>
-        </div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">DESCRIPTION</span> <span class="ret">: str</span><span class="tag prop">attr</span></div>
-          <div class="api-desc">One-line tooltip for the launch button. Optional.</div>
-        </div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">__init__</span>(<span class="a">self, ctx</span>)</div>
-          <div class="api-desc">The manager instantiates your class <b>once</b>, passing a fresh <code>PluginContext</code>. The base stores it as <code>self.ctx</code>. Override to set up state (call <code>super().__init__(ctx)</code>).</div>
-        </div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">launch</span>(<span class="a">self</span>) <span class="ret">→ QWidget | None</span></div>
-          <div class="api-desc"><b>Required.</b> Build and <code>show()</code> your window, then <b>return it</b> so the manager keeps it alive. Called each time the user clicks the entry. Returning <code>None</code> is allowed only if you hold your own references.</div>
-        </div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">on_unload</span>(<span class="a">self</span>) <span class="ret">→ None</span></div>
-          <div class="api-desc">Optional. Called on reload/unload — remove overlays and end interactions here. Default is a no-op.</div>
-        </div>
-      </div>
-
-      <p>And at module level, name your class so the loader can find it:</p>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">__init__.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">PLUGIN = MyPlugin    # required: the manager reads this to instantiate your plugin
-</code></pre>
-      </div>
-
-      <h3>Reusing one window</h3>
-      <p>The two-line <code>launch()</code> above builds a new window every click. For a tool you reopen often, cache it instead — the pattern the bundled examples use:</p>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">reuse a single window</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">class MyPlugin(TrackerPlugin):
-    NAME = "My Tool"
-
-    def __init__(self, ctx):
-        super().__init__(ctx)
-        self._window = None
-
-    def launch(self):
-        if self._window is None:
-            self._window = MyWindow(self.ctx)
-        self._window.show()
-        return self._window
-
-    def on_unload(self):
-        if self._window is not None:
-            self._window.close()
-            self._window = None
-</code></pre>
-      </div>
-
-      <h3>How discovery works</h3>
-      <p>On startup (and on every reload) the manager walks <code>plugins/</code> and treats a folder as a plugin when <strong>all</strong> of the following hold:</p>
-      <ul>
-        <li>it is a directory whose name does <strong>not</strong> start with <code>.</code> or <code>_</code>;</li>
-        <li>it contains an <code>__init__.py</code> (so it imports as the package <code>plugins.&lt;folder&gt;</code>);</li>
-        <li>that module exposes <code>PLUGIN = YourClass</code> (a <code>TrackerPlugin</code> subclass). As a fallback, a lone <code>TrackerPlugin</code> subclass defined in the package is auto-detected.</li>
-      </ul>
-      <p>The folder name is your plugin's <strong>id</strong> — it's also the key your settings are stored under. Import or discovery errors are caught and surfaced on a disabled button; they never crash the app.</p>
-    </section>
-
-    <!-- CONTEXT & DATA -->
-    <section id="context">
-      <h2><svg class="ic"><use href="#i-scan"/></svg>The context &amp; reading data</h2>
-      <p class="sec-sub">Session status, the tracked arrays, and per-point quality metrics. All read-only.</p>
-
-      <div class="legend">
-        <span><span class="tag prop">prop</span> property — access without <code>()</code></span>
-        <span><span class="tag ro">ro</span> returned arrays are read-only</span>
-        <span><span class="tag mut">mut</span> the one mutating call</span>
-      </div>
-
-      <h3>Plumbing &amp; session status</h3>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-scan"/></svg>ctx — status</div>
-        <div class="api-row"><div class="api-sig"><span class="m">window</span><span class="tag prop">prop</span></div><div class="api-desc">The <code>MainWindow</code>. Use it as the parent for your windows and dialogs.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">canvas</span><span class="tag prop">prop</span></div><div class="api-desc">The <code>CanvasView</code> (advanced; prefer the overlay/interaction helpers).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">signals</span><span class="tag prop">prop</span></div><div class="api-desc">The <code>PluginSignals</code> hub — see <a href="#settings">Settings &amp; signals</a>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">has_sequence</span> <span class="ret">: bool</span><span class="tag prop">prop</span></div><div class="api-desc">True once an image sequence is loaded.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">has_result</span> <span class="ret">: bool</span><span class="tag prop">prop</span></div><div class="api-desc">True once tracking has produced a result.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">n_total_images</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Number of frames in the full loaded folder.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">status</span>(<span class="a">message, timeout=4000</span>)</div><div class="api-desc">Show a transient message in the main status bar.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">request_redraw</span>()</div><div class="api-desc">Repaint the canvas — call after changing what your overlay draws.</div></div>
-      </div>
-
-      <h3>Tracked data</h3>
-      <p>The everyday call is <code>ctx.coords()</code>. It returns the forward-tracked positions of the points that survived cleanup, cut-indexed on axis&nbsp;0.</p>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-scan"/></svg>ctx — tracked data</div>
-        <div class="api-row"><div class="api-sig"><span class="m">coords</span>(<span class="a">active_only=True</span>) <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(frames, points, 2)</code> float32 <code>(x, y)</code>, <b>cut-indexed</b> (<code>coords[0]</code> = reference). <code>active_only=True</code> returns only kept points; <code>False</code> returns all <code>P</code>. <code>None</code> if no result.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">track_status</span>(<span class="a">active_only=True</span>) <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(frames, points)</code> uint8 aligned to <code>coords</code>: <code>1</code> = valid through that frame, <code>0</code> = LK failed and the last valid position was carried forward. Validity is cumulative: a failed point never revives.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">point_indices</span>() <span class="ret">→ ndarray | None</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(n_active,)</code> original column ids of the kept points, matching the point axis of <code>coords(active_only=True)</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">active_mask</span> <span class="ret">: ndarray | None</span><span class="tag prop">prop</span><span class="tag ro">ro</span></div><div class="api-desc"><code>(P,)</code> bool keep-mask: True where a point survived cleanup. Change it via <code>apply_keep_mask</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">n_active</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Number of currently-kept points.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">point_count</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Total points <code>P</code> before filtering.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">frame_count</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Number of frames in the tracked range (<code>coords</code> axis&nbsp;0).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">metrics</span>() <span class="ret">→ Metrics | None</span></div><div class="api-desc">Per-point quality metrics, computed once and cached. See the table below.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">result</span> <span class="ret">: TrackerResult | None</span><span class="tag prop">prop</span></div><div class="api-desc">The raw, immutable result — escape hatch for advanced arrays (backward pass, FB errors). Prefer <code>coords()</code> for the common case.</div></div>
-      </div>
-
-      <h3>The <code>Metrics</code> object</h3>
-      <p><code>ctx.metrics()</code> returns one value per point (length <code>P</code>, in original point order). Points that never tracked validly carry <code>+inf</code> error/step. These are exactly the signals the Cleanup dialog filters on.</p>
-      <table class="tbl">
-        <thead><tr><th>Field</th><th>Shape</th><th>Meaning</th></tr></thead>
-        <tbody>
-          <tr><td><code>fb_mean</code></td><td>(P,) float</td><td>Mean forward–backward round-trip error — the primary quality signal.</td></tr>
-          <tr><td><code>fb_max</code></td><td>(P,) float</td><td>Max forward–backward error across frames.</td></tr>
-          <tr><td><code>max_err_fw</code></td><td>(P,) float</td><td>Max OpenCV LK error over frames the point tracked.</td></tr>
-          <tr><td><code>mean_err_fw</code></td><td>(P,) float</td><td>Mean OpenCV LK error over tracked frames.</td></tr>
-          <tr><td><code>fail_count_fw</code></td><td>(P,) int</td><td>Frames the forward pass failed to track.</td></tr>
-          <tr><td><code>fail_count_bw</code></td><td>(P,) int</td><td>Frames the backward pass failed to track.</td></tr>
-          <tr><td><code>max_step</code></td><td>(P,) float</td><td>Largest single-frame displacement (jump detector).</td></tr>
-          <tr><td><code>left_image</code></td><td>(P,) bool</td><td>Point left the image bounds at some tracked frame.</td></tr>
-          <tr><td><code>left_roi</code></td><td>(P,) bool</td><td>Point left the ROI at some tracked frame.</td></tr>
-          <tr><td><code>n_frames</code> · <code>n_points</code></td><td>int</td><td>Dimensions the metrics were computed over.</td></tr>
-        </tbody>
-      </table>
-
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">reading the session</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">if not ctx.has_result:
-    return
-
-coords = ctx.coords()                 # (frames, points, 2) float32, kept points
-ids    = ctx.point_indices()          # original ids of those points
-m      = ctx.metrics()                # per-point quality
-worst  = ids[m.fb_mean[ids].argmax()] # id of the kept point with the largest FB error
-
-ctx.status(f"{ctx.n_active} of {ctx.point_count} points kept across {ctx.frame_count} frames")
-</code></pre>
-      </div>
-    </section>
-
-    <!-- NAVIGATION -->
-    <section id="navigation">
-      <h2><svg class="ic"><use href="#i-move"/></svg>Frames &amp; navigation</h2>
-      <p class="sec-sub">Where we are in the sequence — and the one call that moves the app.</p>
-
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-move"/></svg>ctx — frames (all indices are global)</div>
-        <div class="api-row"><div class="api-sig"><span class="m">reference_index</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Global index of the reference frame (= cut 0).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">last_index</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Global index of the last tracked frame.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">current_index</span> <span class="ret">: int</span><span class="tag prop">prop</span></div><div class="api-desc">Global index of the frame currently shown on the canvas.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">current_cut</span> <span class="ret">: int | None</span><span class="tag prop">prop</span></div><div class="api-desc">Cut index of the current frame, or <code>None</code> if it's outside the tracked range.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">global_to_cut</span>(<span class="a">global_index</span>) <span class="ret">→ int</span></div><div class="api-desc"><code>global − reference_index</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">cut_to_global</span>(<span class="a">cut_index</span>) <span class="ret">→ int</span></div><div class="api-desc"><code>reference_index + cut</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">set_current_frame</span>(<span class="a">global_index</span>)<span class="tag mut">mut</span></div><div class="api-desc">Move the app's <b>current</b> frame (clamped to the loaded range). Drives the same path as the Current slider — updates canvas, status bar and tools, and emits <code>frame_changed</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">set_reference_frame</span>(<span class="a">global_index</span>)<span class="tag mut">mut</span></div><div class="api-desc">Move the <b>reference</b> (start) frame, clamped to <code>0 … last_index</code>. Drives the Reference slider — re-scopes the tracked range and, since the ROI lives on the reference frame, clears any ROI &amp; seed features (emits <code>roi_changed</code>).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">set_last_frame</span>(<span class="a">global_index</span>)<span class="tag mut">mut</span></div><div class="api-desc">Move the <b>last</b> frame, clamped to <code>reference_index … last loaded frame</code>. Drives the Last slider — re-scopes the tracked range.</div></div>
-      </div>
-
-      <div class="callout warn">
-        <svg class="ic"><use href="#i-warn"/></svg>
-        <p><span class="co-title">Changing the range can stale a result.</span> Like the GUI sliders, these setters leave an existing tracking result <em>untouched</em> — they don't prompt or discard. After moving the reference or last frame, <code>coords()</code> no longer aligns with the new <code>reference_index</code> until you re-track. They also clamp to the invariant <code>0 ≤ reference ≤ last &lt; total</code>, so a value past a bound is pinned to it.</p>
-      </div>
-    </section>
-
-    <!-- IMAGES & ROI -->
-    <section id="images-roi">
-      <h2><svg class="ic"><use href="#i-image"/></svg>Images &amp; ROI</h2>
-      <p class="sec-sub">Pixel data for any frame, and the region of interest.</p>
-
-      <h3>Images</h3>
-      <p>All take a <strong>global</strong> index and return a NumPy array. <code>frame_bgr</code> / <code>frame_gray</code> raise if no sequence is loaded — guard with <code>ctx.has_sequence</code>.</p>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-image"/></svg>ctx — images</div>
-        <div class="api-row"><div class="api-sig"><span class="m">source_dir</span> <span class="ret">: str | None</span><span class="tag prop">prop</span></div><div class="api-desc">Directory the active sequence was loaded from; useful as a nearby file-dialog default.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">frame_paths</span> <span class="ret">: tuple[str, ...]</span><span class="tag prop">prop</span></div><div class="api-desc">Immutable ordered paths for all global frames; empty when no sequence is loaded.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">image_size</span>() <span class="ret">→ (H, W) | None</span></div><div class="api-desc">Frame dimensions, or <code>None</code> if no sequence.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">frame_bgr</span>(<span class="a">global_index</span>) <span class="ret">→ ndarray</span></div><div class="api-desc"><code>(H, W, 3)</code> uint8, OpenCV BGR order.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">frame_gray</span>(<span class="a">global_index</span>) <span class="ret">→ ndarray</span></div><div class="api-desc"><code>(H, W)</code> uint8 grayscale.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">frame_rgb</span>(<span class="a">global_index</span>) <span class="ret">→ ndarray</span></div><div class="api-desc"><code>(H, W, 3)</code> uint8 RGB — ready for Qt or matplotlib.</div></div>
-      </div>
-
-      <h3>ROI</h3>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-crop"/></svg>ctx — region of interest</div>
-        <div class="api-row"><div class="api-sig"><span class="m">roi</span> <span class="ret">: ROI | None</span><span class="tag prop">prop</span></div><div class="api-desc">The current ROI object, or <code>None</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">roi_corners</span> <span class="ret">: list[(x, y)]</span><span class="tag prop">prop</span></div><div class="api-desc">Corner points in image coords (empty list if no ROI).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">roi_contains</span>(<span class="a">x, y</span>) <span class="ret">→ bool</span></div><div class="api-desc">True if image point <code>(x, y)</code> is inside a complete ROI.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">roi_mask</span>() <span class="ret">→ ndarray | None</span></div><div class="api-desc"><code>(H, W)</code> uint8 (0/255) filled mask at image resolution; <code>None</code> if ROI missing/incomplete.</div></div>
-      </div>
-    </section>
-
-    <!-- OVERLAYS -->
-    <section id="overlays">
-      <h2><svg class="ic"><use href="#i-eye"/></svg>Canvas overlays</h2>
-      <p class="sec-sub">Draw your own graphics on top of the live frame.</p>
-
-      <p>Register a painter <code>fn(painter, ctx)</code>. It runs on <strong>every repaint, in screen space</strong>, after the built-in overlays. The canvas stores everything in image coordinates, so convert each point with <code>ctx.image_to_screen(...)</code> as you draw — marker sizes then stay constant under zoom and pan.</p>
-
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-eye"/></svg>ctx — overlays</div>
-        <div class="api-row"><div class="api-sig"><span class="m">add_overlay</span>(<span class="a">fn</span>)</div><div class="api-desc">Register an overlay painter <code>fn(painter, ctx)</code>. Idempotent. A painter that raises is auto-removed.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">remove_overlay</span>(<span class="a">fn</span>)</div><div class="api-desc">Unregister it — do this in <code>closeEvent</code> / <code>on_unload</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">image_to_screen</span>(<span class="a">x, y</span>) <span class="ret">→ QPointF</span></div><div class="api-desc">Map an image-space point to widget coordinates (for painting).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">screen_to_image</span>(<span class="a">point</span>) <span class="ret">→ QPointF</span></div><div class="api-desc">Map a widget point back to image coordinates.</div></div>
-      </div>
-
-      <div class="callout warn">
-        <svg class="ic"><use href="#i-warn"/></svg>
-        <p><span class="co-title">Keep painters cheap.</span> They run on the UI thread on every paint. Cache anything expensive (triangulations, color maps) and recompute only when the relevant signal fires — never inside the painter.</p>
-      </div>
-
-      <p>A typical overlay lifecycle — register on construction, redraw reactively, remove on close:</p>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">overlay lifecycle (pattern)</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">        ctx.signals.frame_changed.connect(self._redraw)
-        ctx.signals.result_changed.connect(self._invalidate)
-        ctx.signals.mask_changed.connect(self._invalidate)
-
-        ctx.add_overlay(self._paint)
-        self._redraw()
-
-    def closeEvent(self, event):
-        self.ctx.remove_overlay(self._paint)
-        super().closeEvent(event)
-
-    def _paint(self, painter, ctx):
-        coords = ctx.coords(active_only=True)
-        ref_pts = coords[0]
-        cur_pts = coords[ctx.current_cut]
-        painter.setPen(QPen(QColor(255, 255, 0), 1.2))
-        for j in range(cur_pts.shape[0]):
-            painter.drawLine(ctx.image_to_screen(*ref_pts[j]),
-                             ctx.image_to_screen(*cur_pts[j]))
-</code></pre>
-      </div>
-    </section>
-
-    <!-- MOUSE -->
-    <section id="mouse">
-      <h2><svg class="ic"><use href="#i-pointer"/></svg>Mouse capture</h2>
-      <p class="sec-sub">Take over canvas clicks to build interactive tools.</p>
-
-      <p>Subclass <code>CanvasInteraction</code> and implement only the handlers you need. Every point arrives in <strong>image coordinates</strong>. While your interaction is active, the ROI and Pan tools switch off so they don't conflict; middle/right-drag still pans.</p>
-
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-pointer"/></svg>class CanvasInteraction <span style="font-weight:400;color:var(--text-3);font-family:var(--mono);font-size:11px;margin-left:4px;">(all handlers optional)</span></div>
-        <div class="api-row"><div class="api-sig"><span class="m">on_press</span>(<span class="a">self, image_pt, event</span>)</div><div class="api-desc">Left-button press at <code>image_pt</code> (a <code>QPointF</code> in image coords).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">on_move</span>(<span class="a">self, image_pt, event</span>)</div><div class="api-desc">Mouse move (fires continuously — ignore if you only want clicks).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">on_release</span>(<span class="a">self, image_pt, event</span>)</div><div class="api-desc">Left-button release.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">on_cancel</span>(<span class="a">self</span>)</div><div class="api-desc">The interaction was replaced or ended — clean up here.</div></div>
-      </div>
-
-      <p>Activate and release through <code>ctx</code>:</p>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-scan"/></svg>ctx — interaction</div>
-        <div class="api-row"><div class="api-sig"><span class="m">begin_canvas_interaction</span>(<span class="a">handler</span>)</div><div class="api-desc">Cancel partial ROI/point tools, then capture canvas mouse input with your <code>CanvasInteraction</code>.</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">end_canvas_interaction</span>()</div><div class="api-desc">Release this context's capture. A newer interaction owner is left untouched.</div></div>
-      </div>
-
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">plugins/affine_zones/zones.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">from app.plugins import CanvasInteraction
-
-
-class ZoneDrawTool(CanvasInteraction):
-    """Collects polygon vertices from canvas clicks while the user draws a zone."""
-
-    def __init__(self, window):
-        self.window = window
-        self.vertices = []
-
-    def on_press(self, image_pt, event):
-        self.vertices.append((image_pt.x(), image_pt.y()))
-        self.window.on_draw_progress()
-
-
-# elsewhere, to start / stop drawing:
-def _start_zone(self):
-    self._tool = ZoneDrawTool(self)
-    self.ctx.begin_canvas_interaction(self._tool)
-    self.ctx.status("Click to add zone vertices, then press “Finish Zone”.")
-</code></pre>
-      </div>
-    </section>
-
-    <!-- FILTERING -->
-    <section id="filtering">
-      <h2><svg class="ic"><use href="#i-filter"/></svg>Filtering points</h2>
-      <p class="sec-sub">The single mutation to the tracked data — and it's undoable.</p>
-
-      <p>Aside from navigating and re-scoping frames, plugins read everything but change almost nothing about the tracked data. The one exception is <code>apply_keep_mask</code>: it filters tracked points by a boolean keep-mask, recorded on the Cleanup dialog's undo stack.</p>
-
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-filter"/></svg>ctx — mutation</div>
-        <div class="api-row">
-          <div class="api-sig"><span class="m">apply_keep_mask</span>(<span class="a">keep</span>)<span class="tag mut">mut</span></div>
-          <div class="api-desc"><code>keep</code> is a one-dimensional bool array of length <code>P</code> <b>or</b> <code>n_active</code> (other shapes/lengths raise <code>ValueError</code>). Points marked <code>False</code> leave the active set. <b>Monotonic</b> — it only ever shrinks the set, never resurrects filtered-out points. Emits <code>mask_changed</code>; the user can Undo it in the Cleanup dialog.</div>
-        </div>
-      </div>
-
-      <p>From <code>affine_zones</code> — drop the RANSAC outliers in a zone (an <code>n_active</code>-length mask):</p>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">plugins/affine_zones/zones.py</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">keep = np.ones(self.ctx.n_active, dtype=bool)
-keep[local_idx[~inliers]] = False
-dropped = int((~inliers).sum())
-if dropped == 0:
-    return
-self.ctx.apply_keep_mask(keep)
-self.ctx.status(f"Dropped {dropped} outlier(s). Undo in the Cleanup dialog.")
-</code></pre>
-      </div>
-    </section>
-
-    <!-- SETTINGS & SIGNALS -->
-    <section id="settings">
-      <h2><svg class="ic"><use href="#i-radio"/></svg>Settings &amp; signals</h2>
-      <p class="sec-sub">Persist your plugin's preferences, and react to state changes instead of polling.</p>
-
-      <h3>Persistent settings</h3>
-      <p>Each plugin gets its own slice of the app's shared <code>settings.json</code>, keyed by your folder name. Store anything JSON-serializable.</p>
-      <div class="api">
-        <div class="api-head"><svg class="ic"><use href="#i-save"/></svg>ctx — settings</div>
-        <div class="api-row"><div class="api-sig"><span class="m">get_settings</span>() <span class="ret">→ dict</span></div><div class="api-desc">This plugin's saved settings (<code>{}</code> if none).</div></div>
-        <div class="api-row"><div class="api-sig"><span class="m">save_settings</span>(<span class="a">data</span>)</div><div class="api-desc">Persist the dict (replaces the previous one).</div></div>
-      </div>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">remember the user's choices</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">saved = ctx.get_settings()
-fmt   = saved.get("format", "csv")          # restore on open
-# ... user picks options ...
-ctx.save_settings({"format": fmt, "active_only": True})
-</code></pre>
-      </div>
-
-      <h3>Signals</h3>
-      <p>Connect to <code>ctx.signals</code> so your window refreshes the moment the session changes. Never poll.</p>
-      <table class="tbl">
-        <thead><tr><th>Signal</th><th>Payload</th><th>Fires when</th></tr></thead>
-        <tbody>
-          <tr><td><code>sequence_changed</code></td><td>—</td><td>A new image sequence was loaded (downstream state reset).</td></tr>
-          <tr><td><code>frame_changed</code></td><td><code>int</code> (global)</td><td>The displayed frame changed.</td></tr>
-          <tr><td><code>result_changed</code></td><td>—</td><td>A tracking result was produced or discarded.</td></tr>
-          <tr><td><code>mask_changed</code></td><td>—</td><td>The active keep-mask changed (cleanup applied/undone).</td></tr>
-          <tr><td><code>roi_changed</code></td><td>—</td><td>The ROI was completed or cleared.</td></tr>
-        </tbody>
-      </table>
-      <div class="code" data-lang="python">
-        <div class="code-head"><svg class="ic file"><use href="#i-code"/></svg><span class="fname">react, don't poll</span><span class="spacer"></span><button class="copy-btn"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
-<pre><code class="py">ctx.signals.frame_changed.connect(self._redraw)     # int = new global frame index
-ctx.signals.result_changed.connect(self._reload)
-ctx.signals.mask_changed.connect(self._reload)
-ctx.signals.roi_changed.connect(self._reload)
-ctx.signals.sequence_changed.connect(self._reload)
-</code></pre>
-      </div>
-    </section>
-
-    <!-- EXAMPLES -->
-    <section id="examples">
-      <h2><svg class="ic"><use href="#i-code"/></svg>Worked examples</h2>
-      <p class="sec-sub">Three bundled plugins. Copy the closest and edit.</p>
-
-      <div class="ex">
-        <div class="ex-head">
-          <div class="ci"><svg class="ic"><use href="#i-pointer"/></svg></div>
-          <div class="et"><h4>Affine Zone Tool</h4><span class="path">plugins/affine_zones/</span></div>
-          <span class="pill">Mouse · overlay · filter</span>
-        </div>
-        <div class="ex-body">
-          <p>The all-features example. Draw polygon zones by clicking the canvas, fit a RANSAC affine per zone, plot principal stretches over frames (embedded matplotlib), and drop outliers with <code>apply_keep_mask</code>. It also drives the timeline through <code>set_current_frame</code>.</p>
-          <p><strong>Teaches:</strong> <code>CanvasInteraction</code> mouse capture, combining overlay + interaction, the undoable point filter, and frame navigation.</p>
-        </div>
-      </div>
-
-      <div class="ex">
-        <div class="ex-head">
-          <div class="ci"><svg class="ic"><use href="#i-folder"/></svg></div>
-          <div class="et"><h4>MTS Uniaxial</h4><span class="path">plugins/mts_uniaxial/</span></div>
-          <span class="pill">Load · sync · range · export</span>
-        </div>
-        <div class="ex-body">
-          <p>The foundational, full-application example. Loads an experiment (images in acquisition-log order plus an MTS <code>.dat</code> sensor stream), interpolates force/displacement onto the image timeline, crops the window, detects and zeroes a reference frame, and sets the core tracked range — then exports per-frame coords aligned with the zeroed sensor data.</p>
-          <p><strong>Teaches:</strong> driving image loading with <code>ctx.load_sequence</code>, frame-range control (<code>set_reference_frame</code> / <code>set_last_frame</code>), and a multi-step plugin that persists its own project folder.</p>
-        </div>
-      </div>
-
-      <div class="ex">
-        <div class="ex-head">
-          <div class="ci"><svg class="ic"><use href="#i-image"/></svg></div>
-          <div class="et"><h4>Pressure–Strain</h4><span class="path">plugins/pressure_strain/</span></div>
-          <span class="pill">File metadata · sync · plot</span>
-        </div>
-        <div class="ex-body">
-          <p>Loads a pressure CSV, uses ordered frame-file modification times to interpolate pressure over the full sequence, then plots a selected principal strain over the correctly sliced tracked range.</p>
-          <p><strong>Teaches:</strong> using <code>source_dir</code> and <code>frame_paths</code>, keeping global sensor alignment separate from cut-indexed coordinates, reactive matplotlib plots, and atomic CSV export.</p>
-        </div>
-      </div>
-
-      <div class="callout note">
-        <svg class="ic"><use href="#i-folder"/></svg>
-        <p><span class="co-title">Start here.</span> Read <code>plugins/README.md</code> and <code>app/plugins/api.py</code>, copy the example closest to what you want, then iterate with <strong>Plugins → Reload Plugins</strong>.</p>
-        <p><span class="co-title">Migrating?</span> ECM Tracker now uses <strong>PySide6</strong> (Qt6), not PyQt5. Plugins that <code>import PyQt5</code> fail against the PySide6-only app — switch imports to <code>PySide6</code> (the Qt API is identical) and fully qualify enums in Qt6 (e.g. <code>Qt.WindowType.Window</code>, not <code>Qt.Window</code>), then run <code>uv sync</code>.</p>
-      </div>
-    </section>
-
-    <!-- GOTCHAS -->
-    <section id="gotchas">
-      <h2><svg class="ic"><use href="#i-warn"/></svg>Conventions &amp; gotchas</h2>
-      <p class="sec-sub">The handful of things that bite, distilled.</p>
-      <ul>
-        <li><strong>Global vs cut.</strong> Every <code>ctx</code> index is global; <code>coords()</code> is cut-indexed (<code>coords[0]</code> = reference). Convert with <code>cut_to_global</code> / <code>global_to_cut</code>, and remember <code>current_cut</code> can be <code>None</code>.</li>
-        <li><strong>Parent your windows</strong> to <code>ctx.window</code> and set the <code>Qt.WindowType.Window</code> flag so they float independently and return them from <code>launch()</code> so they aren't garbage-collected.</li>
-        <li><strong>Always undo your canvas hooks</strong> in <code>closeEvent</code> / <code>on_unload</code>: <code>remove_overlay(...)</code> and <code>end_canvas_interaction()</code>.</li>
-        <li><strong>Treat returned arrays as read-only.</strong> Don't mutate <code>coords()</code>, <code>active_mask</code>, or <code>metrics</code> in place. The only legitimate change to the point set is <code>apply_keep_mask</code>.</li>
-        <li><strong>Overlays must be fast.</strong> Cache heavy work; recompute on the matching signal, not inside the painter.</li>
-        <li><strong>Import optional deps lazily</strong> (inside the function that needs them, in a <code>try/except</code>) so merely loading your plugin never pulls in SciPy/matplotlib at startup.</li>
-        <li><strong>Failures are contained, not silent.</strong> A bad import disables the button, a throwing overlay removes itself, a failing <code>launch()</code> shows a dialog — read the message and fix it.</li>
-      </ul>
-    </section>
-
-    <!-- CHEAT SHEET -->
-    <section id="cheatsheet">
-      <h2><svg class="ic"><use href="#i-list"/></svg>Cheat sheet</h2>
-      <p class="sec-sub">The whole <code>ctx</code> surface at a glance.</p>
-      <table class="tbl">
-        <thead><tr><th>Group</th><th>Members</th></tr></thead>
-        <tbody>
-          <tr><td>Status</td><td><code>has_sequence</code> · <code>has_result</code> · <code>n_total_images</code> · <code>status()</code> · <code>request_redraw()</code></td></tr>
-          <tr><td>Frames</td><td><code>reference_index</code> · <code>last_index</code> · <code>current_index</code> · <code>current_cut</code> · <code>global_to_cut()</code> · <code>cut_to_global()</code> · <code>set_current_frame()</code> · <code>set_reference_frame()</code> · <code>set_last_frame()</code></td></tr>
-          <tr><td>Images</td><td><code>source_dir</code> · <code>frame_paths</code> · <code>image_size()</code> · <code>frame_bgr()</code> · <code>frame_gray()</code> · <code>frame_rgb()</code></td></tr>
-          <tr><td>Tracked data</td><td><code>coords()</code> · <code>track_status()</code> · <code>point_indices()</code> · <code>active_mask</code> · <code>n_active</code> · <code>point_count</code> · <code>frame_count</code> · <code>metrics()</code> · <code>result</code></td></tr>
-          <tr><td>ROI</td><td><code>roi</code> · <code>roi_corners</code> · <code>roi_contains()</code> · <code>roi_mask()</code></td></tr>
-          <tr><td>Overlays</td><td><code>add_overlay()</code> · <code>remove_overlay()</code> · <code>image_to_screen()</code> · <code>screen_to_image()</code></td></tr>
-          <tr><td>Mouse</td><td><code>begin_canvas_interaction()</code> · <code>end_canvas_interaction()</code></td></tr>
-          <tr><td>Mutation</td><td><code>apply_keep_mask()</code></td></tr>
-          <tr><td>Settings</td><td><code>get_settings()</code> · <code>save_settings()</code></td></tr>
-          <tr><td>Plumbing</td><td><code>window</code> · <code>canvas</code> · <code>signals</code></td></tr>
-          <tr><td>Signals</td><td><code>sequence_changed</code> · <code>frame_changed(int)</code> · <code>result_changed</code> · <code>mask_changed</code> · <code>roi_changed</code></td></tr>
-        </tbody>
-      </table>
-
-      <div class="foot">
-        <span>ECM Tracker — Plugin SDK reference. Generated from <code>app/plugins/api.py</code>, <code>manager.py</code> &amp; the bundled examples.</span>
-        <span><a href="#overview">Back to top ↑</a></span>
-      </div>
-    </section>
-
-  </div>
-  </main>
-</div>
-
-<script>
-/* ---------- lightweight Python syntax highlighting (self-contained) ---------- */
-(function(){
-  const KW = new Set(['def','class','return','import','from','as','if','elif','else','for','while',
-    'in','is','not','and','or','with','try','except','finally','raise','pass','lambda','yield',
-    'global','nonlocal','assert','del','break','continue','True','False','None']);
-  const SOFT = new Set(['self','cls','super']);
-  const RE = /(#[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_][\w.]*)|([A-Za-z_]\w*)|(\d[\d_]*\.?\d*)/g;
-  function hl(raw){
-    const esc = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return esc.replace(RE,(m,com,str,dec,name,num)=>{
-      if(com!==undefined) return '<span class="t-com">'+com+'</span>';
-      if(str!==undefined) return '<span class="t-str">'+str+'</span>';
-      if(dec!==undefined) return '<span class="t-dec">'+dec+'</span>';
-      if(num!==undefined) return '<span class="t-num">'+num+'</span>';
-      if(name!==undefined){
-        if(KW.has(name))   return '<span class="t-kw">'+name+'</span>';
-        if(SOFT.has(name)) return '<span class="t-self">'+name+'</span>';
-        return name;
-      }
-      return m;
-    });
-  }
-  document.querySelectorAll('pre code.py').forEach(el=>{
-    const raw = el.textContent.replace(/^\n+/,'').replace(/\s+$/,'');
-    el.dataset.raw = raw;
-    el.innerHTML = hl(raw);
-  });
-
-  /* ---------- copy buttons ---------- */
-  document.querySelectorAll('.copy-btn').forEach(btn=>{
-    btn.addEventListener('click',async()=>{
-      const block = btn.closest('.code');
-      const code = block && block.querySelector('code');
-      const text = code ? (code.dataset.raw || code.textContent) : '';
-      try{ await navigator.clipboard.writeText(text); }
-      catch(e){
-        const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);
-        ta.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(ta);
-      }
-      btn.classList.add('done');
-      btn.innerHTML='<svg class="ic"><use href="#i-check"/></svg>Copied';
-      setTimeout(()=>{btn.classList.remove('done');btn.innerHTML='<svg class="ic"><use href="#i-copy"/></svg>Copy';},1600);
-    });
-  });
-
-  /* ---------- scroll-spy ---------- */
-  const links = Array.from(document.querySelectorAll('.nav-group a'));
-  const map = new Map();
-  links.forEach(a=>{const id=a.getAttribute('href').slice(1);const s=document.getElementById(id);if(s)map.set(s,a);});
-  let active=null;
-  function setActive(a){ if(a===active)return; if(active)active.classList.remove('active'); active=a; if(a)a.classList.add('active'); }
-  const obs=new IntersectionObserver((entries)=>{
-    // pick the visible section nearest the top
-    let best=null,bestTop=Infinity;
-    entries.forEach(e=>{ if(e.isIntersecting){const t=e.target.getBoundingClientRect().top; if(t<bestTop){bestTop=t;best=e.target;}} });
-    if(best&&map.get(best)) setActive(map.get(best));
-  },{rootMargin:'-15% 0px -70% 0px',threshold:0});
-  map.forEach((a,s)=>obs.observe(s));
-  // fallback for the last/first section on manual scroll extremes
-  window.addEventListener('scroll',()=>{
-    if(window.scrollY<60 && links[0]) setActive(links[0]);
-  },{passive:true});
-
-  /* ---------- mobile nav ---------- */
-  const sidebar=document.getElementById('sidebar');
-  const scrim=document.getElementById('scrim');
-  const menuBtn=document.getElementById('menuBtn');
-  function close(){sidebar.classList.remove('open');scrim.classList.remove('show');}
-  if(menuBtn){menuBtn.addEventListener('click',()=>{sidebar.classList.toggle('open');scrim.classList.toggle('show');});}
-  if(scrim){scrim.addEventListener('click',close);}
-  links.forEach(a=>a.addEventListener('click',close));
-})();
-</script>
-</body>
-</html>
+<!doctype html><html lang="en"><meta charset="utf-8"><title>ECM Tracker SDK 1</title><style>body{max-width:1050px;margin:40px auto;padding:0 24px;font:16px system-ui}pre{white-space:pre-wrap;line-height:1.6}h1{font-size:2em}a{color:#2563eb}</style><h1>ECM Tracker SDK 1</h1><p>Generated from the contract and public API. <a href="PLUGIN_CONTRACT.md">Author guide</a> · <a href="#reference">API reference</a></p><pre># ECM Tracker plugin contract — API 1
+
+This document, the example in [_sdk/example](_sdk/example/__init__.py), and the
+[API reference](plugin-api.html) are sufficient for a small plugin. Do not read or import
+host GUI/model/core internals. This is a trusted Python extension API, not a sandbox.
+
+## Start here
+
+1. Copy the example folder into **Plugins → Open Plugins Folder**, rename it using
+   letters/digits/underscores, and edit its `__init__.py`.
+2. Import `TrackerPlugin` from `app.plugins`; expose `PLUGIN = YourClass`.
+3. Declare `API_VERSION = 1`, a nonempty string `NAME`, string `DESCRIPTION`,
+   and integer `ORDER` (default 100). A malformed plugin is disabled independently.
+4. Implement `launch()`: create/show and return a PySide6 QWidget, or return None
+   for an action without a window. Handle an empty session. Keep launch/paint callbacks fast.
+5. Read `ctx.tracks()`; use its validity mask in EVERY displacement/strain calculation.
+6. Use `ctx.subscribe(signal, callback)` for lifecycle-managed callbacks. Return/close
+   child windows and release your own files, timers and workers in `on_unload()`.
+7. Test the pure calculation, then run the host smoke test and try reload/shutdown.
+
+User plugins are stored outside the app&#x27;s installation/signed bundle. User folders override
+bundled folders of the same name after Reload Plugins. Do not edit bundled examples in place.
+Legacy source-checkout `plugins/my_plugin` folders still load.
+
+## Data: one coherent snapshot
+
+`ctx.tracks(active_only=True) -&gt; TrackingSnapshot | None`. None means no result.
+The snapshot is detached, read-only by contract, and remains a description of the OLD
+state after an event. Request a new snapshot after scientific state changes.
+
+| Field | Meaning |
+|---|---|
+| revision | Monotonic host scientific-state version; use for stale-result checks |
+| frame_indices (N,) | Global image indices; first is reference_index |
+| point_ids (A,) | Original zero-based point columns, stable within this result |
+| coords (N,A,2) | Image pixels, (x,y), x right / y down; origin upper left |
+| valid (N,A) | True = measured/trusted; False = lost track with frozen coordinates |
+| quality (N,A) | Forward LK quality; ignore the seed row and invalid entries |
+| tracking_params | Read-only producing LK parameters (legacy results may have none) |
+| error_kind | photometric (lower better), min_eigenvalue (higher better), or unknown |
+| reference_index / last_index | Inclusive GLOBAL bounds |
+
+N is tracked frames, A is active points, P is all original points. Arrays are mutually
+aligned. An all-filtered result has A=0, not None. Inactive points are omitted, but failed
+tracks are retained with valid=False. Point IDs are NOT stable across a new tracking run.
+Never infer validity from finite coordinates or a zero displacement.
+
+`ctx.frame_tracks(global_index)` returns `(point_ids, xy, valid)` for one frame, or
+None outside the tracking result. Snapshots are cached; repeated paint calls do not copy
+the whole trajectory. Frame indices must be integers. Image helpers accept global indices:
+`frame_bgr` is read-only uint8 H×W×3 BGR; `frame_rgb` and `frame_gray` are owned copies.
+`image_size()` returns (height,width), or None. No sequence raises RuntimeError; an
+out-of-range image raises IndexError.
+
+Legacy adapters remain supported: `coords()`, `track_status()`, `point_indices()`,
+`active_mask`, `frame_count`, `point_count`, `n_active`, `current_cut`,
+`global_to_cut`, `cut_to_global`. Conversions are arithmetic, NOT bounds validation.
+`metrics()` contains ALL P points (not A), with read-only arrays; use point_ids to select.
+`roi` is a detached copy; changing it does not change the host.
+`roi_corners`, `roi_contains`, and `roi_mask` are the usual ROI read interface.
+
+## Mutation and events
+
+All GUI/context calls occur on the Qt main thread. A worker may compute from a detached
+snapshot; deliver its answer back to the main thread and reject a changed revision.
+
+`ctx.apply_keep_mask(keep, revision=snapshot.revision)` accepts a one-dimensional mask
+of length A or P. It can only remove currently active points, is undoable, and raises
+ValueError for wrong shape/length or a stale revision. There is no general state setter.
+
+Workflow methods are also public, but deliberately destructive to dependent state:
+
+| Operation | Effect / signals after coherent state commit |
+|---|---|
+| load_sequence(paths, source_dir) | Validates first; success replaces session and emits sequence_changed; false retains old session |
+| set_current_frame(global) | Clamped display navigation; frame_changed(int); no revision change |
+| set_frame_range(ref,last) | Atomic inclusive bounds; changed bounds discard tracks; range_changed, then result_changed if needed |
+| set_reference_frame / set_last_frame | Legacy one-bound adapters; same invalidation rules |
+| Reference changes | Also clear ROI/seeds and emit roi_changed, seeds_changed |
+| Tracking result installed/cleared | result_changed |
+| apply_keep_mask / user cleanup undo | mask_changed |
+| User seed edits / ROI edits | seeds_changed / roi_changed |
+| load_trackers(path) | Validates before install; range_changed, seeds_changed, roi_changed, result_changed, mask_changed, frame_changed |
+
+Events are invalidation notifications, not a transaction log. Re-read context inside the
+callback; tolerate repeated events. A sequence_changed callback must forget sequence-owned
+zones, imported time mappings and calculation caches. range_changed must invalidate anything
+tied to a reference or cut range. Do not mutate the session recursively inside those callbacks.
+Tracking initiated before a scientific-state change cannot install its stale result.
+
+`save_trackers(path)` writes a complete atomic NPZ. `load_trackers(path)` requires a loaded
+matching image sequence. Current files carry ordered image-content fingerprints and producing
+LK metadata. Legacy v1 files have count-only identity; legacy quality is explicitly unknown.
+Failures raise ValueError/OSError and do not partially install the candidate.
+
+## Drawing and ownership
+
+`add_overlay(fn)` calls `fn(painter, ctx)` in widget/screen pixels; map image positions with
+`image_to_screen(x,y)`. Do not hold a painter after the callback. A failing painter is removed.
+`remove_overlay(fn)` is idempotent. `request_redraw()` requests a repaint.
+
+Subclass `CanvasInteraction` for on_press/on_move/on_release/on_cancel, receiving image-space
+QPointF values. `begin_canvas_interaction(handler)` replaces the current capture and cancels
+conflicting tools. `end_canvas_interaction()` releases only YOUR capture. Cancellation must
+discard unfinished geometry. Sequence/range replacement cancels unfinished interactions.
+
+The manager owns the plugin context and returned window. Visible relaunch focuses it;
+closed/deleted-window relaunch releases the old instance and creates a fresh one.
+Reload/shutdown calls on_unload, disconnects managed subscriptions, removes overlays,
+releases owned capture, and schedules window deletion—even if plugin cleanup raises.
+Direct `ctx.signals.x.connect(...)` remains a legacy API but requires manual disconnection.
+on_unload must stop/join your own workers and timers; host disposal is not thread cancellation.
+
+`ctx.window` is supported ONLY as a Qt parent. `ctx.canvas` and `ctx.result` are legacy
+advanced escape hatches, not a stable implementation API. Names starting with _ are private.
+New plugins must not use them. These adapters remain in API 1; removing them requires a major
+API revision. Do not use them to change scientific state.
+
+## Math helpers and conventions
+
+Import helpers from `app.plugins.analysis`, never `app.core`.
+`fit_affine(ref,cur,valid)` returns (eligible_indices,F,b) for cur=ref@F.T+b, or None
+for insufficient/poor geometry. At least 3 finite non-collinear correspondences are required;
+centered SVD condition &gt;= 10,000 is rejected. This is a numerical guard, not an uncertainty bound.
+Coordinates assume square pixels (or calibration applied before fitting), a fixed camera,
+and homogeneous in-plane motion over the selected points. Perspective/out-of-plane motion
+requires a calibrated model; this SDK does not silently correct it. Generic affine fitting permits reflections; mechanical principal-stretch analysis rejects
+det(F)&lt;=0 and condition(F)&gt;1e8. Invalid mechanics is NaN, never plausible zero strain.
+
+`principal_stretches(F)` returns descending stretches and CURRENT-image axes of B=F F.T.
+Equal stretches have undefined (NaN) axes. `compute_series(coords,time_ms,status)` returns
+engineering principal strains lambda-1, not infinitesimal tensor strain or Green strain.
+Reference rows need the same valid geometry as all other rows. Optional loading_axis_deg
+defines reference-image axial stretch |F a0| (clockwise from +x). fit_reason and residual_rms diagnose each row; a rejected row is retained.
+Without it, axial stretch
+assumes the major principal stretch: a legacy tensile-only convention.
+
+Use all valid correspondences including reference validity. Do not relabel the major
+principal direction as the loading axis in compression/shear. Incompressible uniaxial
+Cauchy conversion uses sigma=lambda_axial*force/A0; predicting transverse stretch
+lambda_axial^(-1/2) additionally assumes equal transverse stretches.
+
+RANSAC is deterministic and returned inliers satisfy the RETURNED model&#x27;s pixel threshold.
+The final threshold classification need not equal the least-squares refit support.
+ROI is a plugin-owned polygon utility. atomic_open / atomic_save_npy replace ONE file only.
+
+## Testing, dependencies and release use
+
+In a source checkout (Python 3.12):
+
+    uv sync --locked
+    uv run python -m unittest discover -s plugins/_sdk/example -p test_*.py
+    uv run python run.py --check-plugin plugins/_sdk/example --report plugin-check.json
+
+In an installed build:
+
+    ECMTracker.exe --check-plugin PATH_TO_PLUGIN --report plugin-check.json
+
+On macOS use ECMTracker.app/Contents/MacOS/ECMTracker. The command executes trusted code,
+checks supported imports/metadata, and exercises empty-session launch/events/relaunch/unload.
+It does NOT prove scientific correctness or test modal workflows. Read the JSON report.
+`app.plugins.testing.sample_tracks()` and FakeContext support pure calculation tests with
+nonzero global indices and a failed track. Add analytic fixtures for your own quantities.
+
+The host bundles NumPy, OpenCV, PySide6, SciPy and matplotlib; exact release dependency
+versions are in the shipped _sdk/uv.lock. Import PySide6, never PyQt. An installed executable
+is not a uv project: uv sync/pip does not extend its embedded runtime. Request a rebuilt host
+for additional dependencies; do not install packages automatically from a plugin.
+
+## Scientific provenance outside this general SDK
+
+The MTS elastic-energy reference is an intentionally preserved, physically motivated
+approximation evaluated by the project authors using tests and finite-element simulations.
+It is not asserted to be an exact zero-force equilibrium. Its implementation, fitting,
+selection and existing fallback behavior are unchanged by this API cleanup. A returned index
+zero from that legacy method is not a solver-success certificate. Users must assess the fit.
+
+MTS resumes validate raw sensor/log hashes. Legacy projects without hashes resume only through
+crop, requiring reference selection/tracking again; no raw files are deleted. MTS manifest v2
+is authoritative; per-step JSON/CSV files are inspection snapshots. An export_generation
+points to a complete immutable export directory; unreferenced generations are recoverable,
+not current results. Core .bundle.npz exports atomically bind coordinates, point IDs and
+global frame indices; loose .npy/.txt companions exist for legacy consumers only.
+MTS clamp displacement is the sum of the two channels; force is A, B, or their average.
+This assumes the acquisition channels already use compatible extension/force signs.
+No sign is inferred from the data. Unknown declared units and clock resets are rejected;
+missing legacy units/positional column fallback and skipped row numbers are recorded.
+Pressure CSV exports retain the exact plotted values and a first-row provenance_json field
+with the assumed endpoint-mtime mapping, timestamp array, source hash, anchors and reference.
+</pre><h1 id="reference">Public API reference</h1><pre>app.plugins.api
+
+Public plugin SDK for the ECM Tracker.
+
+Start with ``plugins/PLUGIN_CONTRACT.md`` for the standalone authoring contract. A plugin is a small Python package
+under ``plugins/`` that subclasses :class:`TrackerPlugin` and, when launched from the
+``Plugins`` menu, builds a Qt window. Everything a plugin is allowed to touch — the tracked
+coordinates, the images, the ROI, the active mask, the canvas, mouse input, persistent
+settings — is reached through a single :class:`PluginContext` instance handed to the plugin
+as ``self.ctx``.
+
+Three capabilities, three entry points:
+
+* **Read data** — ``ctx.coords()``, ``ctx.frame_bgr(i)``, ``ctx.roi``, ``ctx.metrics()`` …
+* **Draw overlays** — ``ctx.add_overlay(fn)`` where ``fn(painter, ctx)`` paints in *screen*
+  space (use ``ctx.image_to_screen(x, y)`` to place things).
+* **Capture the mouse** — ``ctx.begin_canvas_interaction(handler)`` with a
+  :class:`CanvasInteraction`; you receive clicks/drags in *image* coordinates.
+
+Plugins react to state changes through ``ctx.signals`` (a Qt signal hub) instead of polling.
+The keep-mask is editable through undoable ``ctx.apply_keep_mask(...)``. Explicit
+workflow methods can also load a sequence/session and change the tracking range;
+changed bounds discard dependent tracking. See plugins/PLUGIN_CONTRACT.md.
+
+Index convention (important): every index in this API is a **global** frame index (position in
+the loaded folder, ``0 .. ctx.n_total_images-1``). The tracked-data arrays returned by
+``coords()`` are indexed by **cut** index (``0`` = the reference frame). Use
+``ctx.global_to_cut`` / ``ctx.cut_to_global`` to convert; you never need to know the internals.
+
+TrackingSnapshot
+Aligned, detached read-only arrays. Axis 0 is frame_indices; axis 1 is point_ids.
+
+A false valid entry is a frozen/failed track, NEVER a measured displacement.
+revision belongs to the session that produced this snapshot.
+
+  revision: int
+
+  frame_indices: np.ndarray
+
+  point_ids: np.ndarray
+
+  coords: np.ndarray
+
+  valid: np.ndarray
+
+  quality: np.ndarray
+
+  error_kind: str
+
+  reference_index: int
+
+  last_index: int
+
+  tracking_params: Mapping = field(default_factory=dict)
+
+PluginSignals
+A Qt signal hub broadcasting tracker state changes to plugins.
+
+Connect to these to refresh your view reactively, e.g.::
+
+    self.ctx.signals.frame_changed.connect(self._redraw)
+
+* ``sequence_changed`` — a new image sequence was loaded (all downstream state reset).
+* ``frame_changed(int)`` — the displayed frame changed; argument is the global index.
+* ``result_changed`` — a tracking result was produced or discarded.
+* ``mask_changed`` — the active (keep) mask changed (cleanup applied/undone).
+* ``roi_changed`` — the ROI was completed or cleared.
+
+CanvasInteraction
+Base class for a temporary canvas mouse-capture mode.
+
+Install one with ``ctx.begin_canvas_interaction(self)`` and remove it with
+``ctx.end_canvas_interaction()``. While installed, left-button press/move/release are
+delivered here (instead of the built-in ROI click); middle/right-drag still pans, and the
+ROI/Pan tools are switched off to avoid conflicts. All points are in **image** coordinates.
+
+Override only the methods you need; the defaults are no-ops. Exceptions raised here are
+swallowed by the canvas so a bug can&#x27;t crash the app — log inside your handler if needed.
+
+  on_press(self, image_pt: QPointF, event) -&gt; None
+Left-button press at ``image_pt`` (a QPointF in image coordinates).
+
+  on_move(self, image_pt: QPointF, event) -&gt; None
+Mouse move at ``image_pt`` (fires continuously; ignore if you only want clicks).
+
+  on_release(self, image_pt: QPointF, event) -&gt; None
+Left-button release at ``image_pt``.
+
+  on_cancel(self) -&gt; None
+Called when the interaction is force-removed (replaced or ended). Clean up here.
+
+PluginContext
+The façade a plugin uses to reach everything in the app.
+
+One instance is created per plugin and passed as ``self.ctx``. It is a thin, stable wrapper
+over the main window; it deliberately hides ``MainWindow`` / ``ProjectState`` internals so
+plugins keep working as the core evolves. Treat every array returned here as **read-only**
+unless a method name says otherwise.
+
+  revision(self) -&gt; int
+Monotonic scientific-state version; display-only frame changes do not increment it.
+
+  subscribe(self, signal, callback)
+Connect a callback until unsubscribe() or host disposal; returns unsubscribe().
+
+  dispose(self) -&gt; None
+Idempotently release host-managed callbacks, overlays and mouse capture.
+
+  tracks(self, active_only: bool=True) -&gt; Optional[TrackingSnapshot]
+Return a coherent snapshot, cached until scientific state changes.
+
+  frame_tracks(self, global_index: int, active_only: bool=True)
+Return (point_ids, xy, valid) for one global frame, or None outside the result.
+
+  set_frame_range(self, reference: int, last: int) -&gt; None
+Atomically set both global bounds; changed bounds discard the tracking result.
+
+  window(self)
+The ``MainWindow`` — use as the parent for your plugin&#x27;s Qt windows/dialogs.
+
+  canvas(self)
+The :class:`CanvasView`. Prefer the helpers below, but it&#x27;s here for advanced use.
+
+  signals(self) -&gt; PluginSignals
+The :class:`PluginSignals` hub — connect to react to state changes.
+
+  has_sequence(self) -&gt; bool
+True once an image sequence is loaded.
+
+  has_result(self) -&gt; bool
+True once tracking has produced a result.
+
+  n_total_images(self) -&gt; int
+Number of frames in the full loaded folder.
+
+  source_dir(self) -&gt; Optional[str]
+Directory the active image sequence was loaded from, or ``None``.
+
+This is the same directory the core application uses as the default location for
+sequence-related open/save dialogs.  It is exposed read-only so plugins can choose a
+nearby default without reaching through the façade into :class:`ProjectState`.
+
+  status(self, message: str, timeout: int=4000) -&gt; None
+Show a transient message in the main-window status bar.
+
+  request_redraw(self) -&gt; None
+Repaint the canvas (call after changing what your overlay draws).
+
+  reference_index(self) -&gt; int
+Global index of the reference frame (cut 0).
+
+  last_index(self) -&gt; int
+Global index of the last tracked frame.
+
+  current_index(self) -&gt; int
+Global index of the frame currently shown on the canvas.
+
+  current_cut(self) -&gt; Optional[int]
+Cut index of the current frame, or ``None`` if it is outside the tracked range.
+
+  global_to_cut(self, global_index: int) -&gt; int
+Convert a global frame index to a cut index (``global - reference``).
+
+  cut_to_global(self, cut_index: int) -&gt; int
+Convert a cut index to a global frame index (``reference + cut``).
+
+  set_current_frame(self, global_index: int) -&gt; None
+Move the app&#x27;s current frame to ``global_index`` (clamped to the loaded range).
+
+Drives the same path as the main Current slider: updates the canvas, status bar and tool
+states, and emits ``signals.frame_changed``. No-op if no sequence is loaded.
+
+  set_reference_frame(self, global_index: int) -&gt; None
+Move the reference (start) frame to ``global_index`` (clamped to ``0 .. last_index``).
+
+Drives the same path as the main Reference slider: re-scopes the tracked range and, because
+the ROI is defined on the reference frame, clears any existing ROI and seed features
+(emitting ``signals.roi_changed``). If a tracking result exists and the reference actually
+moves, the result is discarded (its cut-indexed arrays are tied to the old reference),
+emitting ``signals.result_changed``. No-op if no sequence is loaded.
+
+  set_last_frame(self, global_index: int) -&gt; None
+Move the last frame to ``global_index`` (clamped to ``reference_index .. last loaded
+frame``).
+
+Drives the same path as the main Last slider: re-scopes the tracked range. If a tracking
+result exists and the last frame actually moves, the result is discarded (re-scoping the
+range invalidates its cut-indexed arrays), emitting ``signals.result_changed``. No-op if
+no sequence is loaded.
+
+  frame_paths(self) -&gt; tuple[str, ...]
+Ordered image paths for all global frames as an immutable tuple.
+
+The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
+tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
+these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+
+  load_sequence(self, paths: List[str], source_dir: Optional[str]=None) -&gt; bool
+Load an explicit, pre-ordered list of image paths as the active sequence.
+
+Order is preserved verbatim (no filename sort) — pass the paths in the exact order you
+want them indexed (e.g. acquisition-log order). Resets all downstream state (ROI, seed
+features, result, mask) and emits ``signals.sequence_changed``, just like File -&gt; Open.
+``source_dir`` is remembered as the default save/open directory. Intended for loader
+plugins; most plugins never need this and should work with the already-loaded sequence.
+
+  save_trackers(self, path: str) -&gt; None
+Save the current reference points and (if tracked) the full result to ``path``.
+
+Writes a single self-contained ``.npz`` (see :mod:`app.core.tracker_io`) holding the
+seed points, the tracking arrays + active mask, the ROI, the frame range and the
+detection/LK parameters — the same format as ``File -&gt; Save Trackers``. Use it to
+persist the tracking state alongside your plugin&#x27;s own project files, then restore it
+with :meth:`load_trackers`. Raises ``ValueError`` if there are no reference points and
+``OSError`` if the write fails.
+
+  load_trackers(self, path: str, *, expected_range=None) -&gt; None
+Load a ``.npz`` written by :meth:`save_trackers` and overlay it onto the open sequence.
+
+Restores the seeds, tracking result, active mask, ROI and frame range, emitting
+``signals.result_changed`` / ``mask_changed`` / ``roi_changed`` so the UI and plugins
+refresh. Current files require the same ordered image-content fingerprint; legacy v1 files
+can only be checked by frame count. A mismatch or bad/foreign file raises ``ValueError``.
+This is the only way a plugin can install a full tracking result back into the core.
+
+  image_size(self) -&gt; Optional[Tuple[int, int]]
+``(height, width)`` of the frames, or ``None`` if no sequence is loaded.
+
+  frame_bgr(self, global_index: int) -&gt; np.ndarray
+Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order).
+
+  frame_gray(self, global_index: int) -&gt; np.ndarray
+Frame at ``global_index`` as an ``(H, W)`` uint8 grayscale array.
+
+  frame_rgb(self, global_index: int) -&gt; np.ndarray
+Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **RGB** array (for Qt/matplotlib).
+
+  result(self)
+The raw, immutable ``TrackerResult`` (escape hatch for advanced arrays such as the
+backward pass and FB errors), or ``None``. Prefer validity-aware ``tracks()``.
+
+  frame_count(self) -&gt; int
+Number of frames in the tracked range (``coords`` axis 0). 0 if no result.
+
+  point_count(self) -&gt; int
+Total number of tracked points P (before filtering). 0 if no result.
+
+  active_mask(self) -&gt; Optional[np.ndarray]
+The ``(P,)`` bool keep-mask: True where a point survived cleanup. ``None`` if no
+result. Read-only — change it with :meth:`apply_keep_mask`.
+
+  n_active(self) -&gt; int
+Number of currently-kept points.
+
+  point_indices(self) -&gt; Optional[np.ndarray]
+Original column indices (into the full P points) of the kept points, matching the
+order of ``coords(active_only=True)``&#x27;s second axis. ``None`` if no result.
+
+  coords(self, active_only: bool=True) -&gt; Optional[np.ndarray]
+Tracked forward coordinates as an ``(frames, points, 2)`` float32 array of ``(x, y)``.
+
+With ``active_only=True`` (default) only kept points are returned, so the point axis
+matches :meth:`point_indices`. With ``active_only=False`` all P points are returned.
+Returns ``None`` if there is no result. Indexed by **cut** index on axis 0
+(``coords[0]`` is the reference frame).
+
+  track_status(self, active_only: bool=True) -&gt; Optional[np.ndarray]
+Forward per-frame tracking status as an ``(frames, points)`` uint8 array, aligned to
+:meth:`coords` (``1`` = the point was tracked OK at that frame, ``0`` = LK failed and the
+position was carried forward). Use it to drop dead/frozen tracks before fitting. Same
+``active_only`` semantics as :meth:`coords`; ``None`` if there is no result.
+
+  metrics(self) -&gt; Optional[Metrics]
+Per-point quality metrics (FB error, failure counts, max step, out-of-bounds …),
+computed once and cached. ``None`` if no result. See ``app/core/cleanup.py:Metrics``.
+
+  roi(self)
+Detached ROI copy, or None; editing it cannot change the host.
+
+  roi_corners(self) -&gt; List[Tuple[float, float]]
+The ROI corner points ``[(x, y), …]`` in image coordinates (empty if no ROI).
+
+  roi_contains(self, x: float, y: float) -&gt; bool
+True if image point ``(x, y)`` lies inside a *complete* ROI.
+
+  roi_mask(self) -&gt; Optional[np.ndarray]
+A filled ``(H, W)`` uint8 (0/255) ROI mask at image resolution, or ``None``.
+
+  apply_keep_mask(self, keep: np.ndarray, *, revision: Optional[int]=None) -&gt; None
+Filter the tracked points by a boolean keep-mask, undoably.
+
+``keep`` may be length P (all points) or length ``n_active`` (current kept points only).
+Points marked False are removed from the active set; the operation is pushed onto the
+cleanup undo stack (the user can Undo it in the Cleanup dialog) and emits
+``signals.mask_changed``. No-op if there is no result. Points already filtered out stay
+filtered out — this only ever shrinks the active set, never resurrects points.
+
+  add_overlay(self, fn: OverlayFn) -&gt; None
+Register an overlay painter ``fn(painter, ctx)``.
+
+``fn`` is called on every repaint, in **screen** space, after the built-in overlays.
+Convert image coordinates with :meth:`image_to_screen`. Keep it fast (it runs on the UI
+thread each paint). A painter that raises is auto-removed. Remember to
+:meth:`remove_overlay` in your window&#x27;s ``closeEvent`` / plugin ``on_unload``.
+
+  remove_overlay(self, fn: OverlayFn) -&gt; None
+Unregister an overlay painter previously added with :meth:`add_overlay`.
+
+  image_to_screen(self, x: float, y: float) -&gt; QPointF
+Map an image-space point to widget/screen coordinates (for overlay painting).
+
+  screen_to_image(self, point: QPointF) -&gt; QPointF
+Map a widget/screen point back to image coordinates.
+
+  begin_canvas_interaction(self, handler: CanvasInteraction) -&gt; None
+Capture canvas mouse input with ``handler`` (a :class:`CanvasInteraction`).
+
+The ROI and Pan tools are switched off so they don&#x27;t conflict. Always pair with
+:meth:`end_canvas_interaction` (e.g. when your window closes).
+
+  end_canvas_interaction(self) -&gt; None
+Release this context&#x27;s mouse capture without disturbing a newer owner.
+
+  get_settings(self) -&gt; dict
+Return this plugin&#x27;s persisted settings dict (empty if none saved yet). Stored in the
+shared ``settings.json`` under a key unique to your plugin.
+
+  save_settings(self, data: dict) -&gt; None
+Persist this plugin&#x27;s settings dict (overwrites the previous one).
+
+TrackerPlugin
+Base class for a plugin. Subclass it and implement :meth:`launch`.
+
+Declare the package&#x27;s plugin by assigning ``PLUGIN = YourClass`` in the package
+``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
+
+Lifecycle: the manager owns your context and returned window. A visible-window relaunch
+re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+Action-only plugins returning None may receive repeated launch calls on the same instance.
+
+Minimal example::
+
+    from PySide6.QtWidgets import QLabel
+    from app.plugins import TrackerPlugin
+
+    class HelloPlugin(TrackerPlugin):
+        NAME = &quot;Hello&quot;
+        DESCRIPTION = &quot;Reports how many points are tracked.&quot;
+
+        def launch(self):
+            n = self.ctx.n_active
+            w = QLabel(f&quot;{n} points tracked&quot;, parent=self.ctx.window)
+            w.setWindowFlags(w.windowFlags() | 0x00000001)  # Qt.WindowType.Window
+            w.setWindowTitle(self.NAME)
+            w.show()
+            return w
+
+    PLUGIN = HelloPlugin
+
+  API_VERSION: int = API_VERSION
+
+  NAME: str = &#x27;Unnamed Plugin&#x27;
+
+  DESCRIPTION: str = &#x27;&#x27;
+
+  ORDER: int = 100
+
+  launch(self)
+Build and show the plugin&#x27;s window; return it (a ``QWidget``) so it stays alive.
+
+Called on the Qt main thread each time the menu entry is clicked. Returning ``None`` is
+allowed (e.g. for a plugin that just runs an action), but then the plugin is responsible
+for keeping any windows it creates referenced.
+
+  on_unload(self) -&gt; None
+Optional: called when plugins are reloaded. Remove overlays / interactions here.
+
+app.plugins.analysis
+
+Stable Qt-free SDK helpers. Import these instead of implementation modules.
+
+fit_affine: (N,2) reference/current arrays -&gt; (eligible indices, F, translation) or None.
+Rejects fewer than three finite points or geometry condition &gt;= 1e4.
+principal_stretches: B=F F.T, descending stretches, current-image unit axes; axes NaN
+for equal stretches. Rejects det(F)&lt;=0 or condition(F)&gt;1e8.
+compute_series: (frames,points,2), milliseconds, optional 0/1 status -&gt; aligned
+engineering strains lambda-1. Invalid rows/undefined axes are NaN, not zero.
+ransac_affine: deterministic; returned inliers satisfy the returned model&#x27;s threshold.
+ROI: plugin-owned polygon helper. Never mutates the host ROI.
+atomic_open/atomic_save_npy: atomic replacement of ONE file, not a multi-file transaction.
+
+app.plugins.testing
+
+Small SDK-only test fixture for plugin calculations (no MainWindow knowledge required).
+
+sample_tracks()
+Three frames/four points: identity, 20% x stretch, then one failed track.
+
+FakeContext
+Read-only fixture for calculation tests, NOT a replacement Qt lifecycle emulator.
+
+  tracks(self, active_only=True)
+
+
+  revision(self)
+</pre></html>

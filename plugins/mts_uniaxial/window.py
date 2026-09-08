@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from . import kinematics, parsers, project_io, sync
 from .crop_plot import CropPlotWidget, ReferencePlotWidget, matplotlib_available
-from .reference_algorithms import PREFORCE, REGISTRY
+from .reference_algorithms import PREFORCE, REGISTRY, ELASTIC_ENERGY
 from .state import STEP_ARTIFACTS, MtsProjectState, Step
 
 # Per-frame derived-measures columns offered in the export panel: (key, header, always_on).
@@ -60,7 +60,7 @@ _MEASURE_COLUMNS = [
     ("displacement_mm", "displacement_mm", False),
     ("angle_deg", "angle_deg", False),
     ("n_points", "n_points", False),
-    ("in_range", "in_range", False),
+    ("in_range", "in_range", True),
 ]
 _MEASURE_INT_KEYS = {"frame_global", "n_points", "in_range"}
 
@@ -172,6 +172,23 @@ class MtsUniaxialWindow(QWidget):
         self.thickness_edit.setValidator(self._mm_validator())
         self.thickness_edit.editingFinished.connect(self._on_material_param_changed)
         form.addRow("Thickness (mm):", self.thickness_edit)
+        self.force_basis_box = QComboBox()
+        self.force_basis_box.addItem("Change from reference (legacy)", "reference_change")
+        self.force_basis_box.addItem("Absolute measured force (includes preload)", "absolute")
+        self.force_basis_box.currentIndexChanged.connect(self._on_material_param_changed)
+        form.addRow("Stress force basis:", self.force_basis_box)
+        self.axis_enabled = QCheckBox("Use measured loading axis (reference image)")
+        self.axis_angle = QDoubleSpinBox()
+        self.axis_angle.setRange(-180, 180)
+        self.axis_angle.setSuffix("° clockwise from image +x")
+        self.axis_enabled.toggled.connect(self._on_material_param_changed)
+        self.axis_angle.valueChanged.connect(self._on_material_param_changed)
+        form.addRow(self.axis_enabled, self.axis_angle)
+        scope = QLabel("Without an axis: assumes major stretch is axial (tensile tests only).\n"
+                       "Cauchy conversion assumes incompressible uniaxial deformation;\n"
+                       "lateral prediction additionally assumes equal transverse stretches.")
+        scope.setWordWrap(True)
+        form.addRow(scope)
         v.addLayout(form)
 
         self.incompressible_chk = QCheckBox("Incompressible material")
@@ -550,6 +567,13 @@ class MtsUniaxialWindow(QWidget):
         return logs[0] if logs else None
 
     def _wipe_artifacts(self, root: str, filenames) -> None:
+        # Commit invalidation first: failed deletion must never revive stale progress.
+        if root == self.pstate.root:
+            try:
+                project_io.save_manifest(self.pstate)
+            except OSError as exc:
+                self.ctx.status(f"Could not persist project change; previous on-disk artifacts retained: {exc}", 8000)
+                return
         failures = project_io.wipe_files(project_io.project_dir(root), list(filenames))
         if failures:
             self.ctx.status("Could not remove stale artifact(s): " + "; ".join(failures), 8000)
@@ -565,6 +589,8 @@ class MtsUniaxialWindow(QWidget):
         st.material_width = self._read_float(self.width_edit, st.material_width)
         st.material_thickness = self._read_float(self.thickness_edit, st.material_thickness)
         st.incompressible = self.incompressible_chk.isChecked()
+        st.force_basis = self.force_basis_box.currentData()
+        st.loading_axis_deg = self.axis_angle.value() if self.axis_enabled.isChecked() else None
         st.completed_through = int(Step.CROP)  # channel + crop have valid defaults
         # Validate and install the sequence before touching an existing on-disk project. A corrupt
         # candidate therefore cannot wipe a resumable project. If persistence later fails, the
@@ -577,6 +603,8 @@ class MtsUniaxialWindow(QWidget):
         if not loaded:
             self.ctx.status("Image validation failed; the existing MTS project was left untouched.")
             return
+        self._close_child_windows()
+        self._kin_cache = None
         self.pstate = st
 
         try:
@@ -613,10 +641,11 @@ class MtsUniaxialWindow(QWidget):
             return
         self.pstate = st
         if st.done(Step.REFERENCE) and st.ref_image_global is not None:
-            total = self.ctx.n_total_images
-            self.ctx.set_last_frame(total - 1)
-            self.ctx.set_reference_frame(int(st.ref_image_global))
-            self.ctx.set_last_frame(int(st.last_image_global))
+            self._loading = True
+            try:
+                self.ctx.set_frame_range(int(st.ref_image_global), int(st.last_image_global))
+            finally:
+                self._loading = False
             self.ctx.set_current_frame(int(st.ref_image_global))
             if st.done(Step.TRACK):
                 self._restore_trackers(st)
@@ -637,7 +666,7 @@ class MtsUniaxialWindow(QWidget):
         path = os.path.join(project_io.project_dir(st.root), "trackers.npz")
         self._loading = True
         try:
-            self.ctx.load_trackers(path)
+            self.ctx.load_trackers(path, expected_range=(st.ref_image_global, st.last_image_global))
         except (OSError, ValueError) as exc:
             st.completed_through = int(Step.REFERENCE)
             self.ctx.status(f"Could not restore trackers: {exc}")
@@ -654,6 +683,8 @@ class MtsUniaxialWindow(QWidget):
             return
         st.force_channel = self.force_box.currentData()
         st.offset_ms = float(self.offset_spin.value())
+        self._close_child_windows()
+        self._kin_cache = None
         files = st.invalidate_from(Step.REFERENCE)  # offset/channel feed the reference, not the crop
         self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.CROP)
@@ -679,6 +710,8 @@ class MtsUniaxialWindow(QWidget):
                 lo = hi
                 self._set_slider(self.crop_lo, lo)
         st.crop_start, st.crop_end = lo, hi
+        self._close_child_windows()
+        self._kin_cache = None
         files = st.invalidate_from(Step.REFERENCE)
         self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.CROP)
@@ -721,6 +754,23 @@ class MtsUniaxialWindow(QWidget):
         if fn is None:
             QMessageBox.warning(self, "No algorithm", "Select a reference-finding algorithm.")
             return
+        # Keep the published-in-preparation energy method exactly as implemented.
+        # Other methods can distinguish failed detection from a genuine first-sample result.
+        if algo != ELASTIC_ENERGY:
+            if disp.size < 3 or not np.isfinite(disp).all() or not np.isfinite(force).all():
+                self.ctx.status("Reference search needs at least three finite samples.")
+                return
+            if algo == PREFORCE and not np.any(force > self.preforce_spin.value()):
+                self.ctx.status("No sample exceeds the preforce threshold.")
+                return
+            if algo.startswith("Force onset"):
+                base = force[:max(3, int(round(.05 * force.size)))]
+                if not np.any(force > base.mean() + 5 * max(base.std(), 1e-9)):
+                    self.ctx.status("No force onset found in this search window.")
+                    return
+            if algo.startswith("Force-displacement knee") and (np.ptp(disp) == 0 or np.ptp(force) == 0):
+                self.ctx.status("The reference window has no identifiable knee.")
+                return
         # local index within the sub-window -> absolute sensor index -> nearest global image frame.
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # some fits (spring-hinge) block for ~1-3 s
         try:
@@ -750,16 +800,22 @@ class MtsUniaxialWindow(QWidget):
 
         stms = sync.sensor_time_ms(sen)
         disp_img, _ = sync.interp_to_images(log.time_ms, stms, sync.composite_displacement(sen), st.offset_ms)
-        force_img, _ = sync.interp_to_images(log.time_ms, stms, sync.composite_force(sen, st.force_channel), st.offset_ms)
+        force_img, covered = sync.interp_to_images(log.time_ms, stms, sync.composite_force(sen, st.force_channel), st.offset_ms)
 
+        if not covered[ref_global]:
+            self.ctx.status("Reference is outside the synchronized sensor coverage.", 8000)
+            return
+        same_range = (self.ctx.reference_index == ref_global and self.ctx.last_index == last_global)
         st.ref_algorithm = algo
+        st.reference_parameters = {"search_start": self.ref_lo.value(), "search_end": self.ref_hi.value(),
+                                   "preforce": self.preforce_spin.value()}
         st.ref_sensor_index = int(sensor_idx) if sensor_idx is not None else None
         st.ref_image_global = ref_global
         st.last_image_global = last_global
         st.zero_disp = float(disp_img[ref_global])
         st.zero_force = float(force_img[ref_global])
 
-        files = st.invalidate_from(Step.TRACK)  # a new reference invalidates tracking/export
+        files = st.invalidate_from(Step.EXPORT if same_range and self.ctx.has_result else Step.TRACK)
         self._wipe_artifacts(st.root, files)
         st.completed_through = int(Step.REFERENCE)
         try:
@@ -772,10 +828,13 @@ class MtsUniaxialWindow(QWidget):
             return
 
         # Drive the core: open the range fully, then set reference (clears ROI), then last.
-        total = self.ctx.n_total_images
-        self.ctx.set_last_frame(total - 1)
-        self.ctx.set_reference_frame(ref_global)
-        self.ctx.set_last_frame(last_global)
+        self._loading = True
+        try:
+            self.ctx.set_frame_range(ref_global, last_global)
+        finally:
+            self._loading = False
+        if same_range and self.ctx.has_result:
+            self._persist_trackers()
         self.ctx.set_current_frame(ref_global)  # show the reference frame so the ROI can be drawn there
 
         self._sync_reference_widgets()
@@ -792,6 +851,22 @@ class MtsUniaxialWindow(QWidget):
         )
 
     # ----------------------------------------------------------------- result / export
+    def _on_range_changed(self) -> None:
+        if self._loading or not self.pstate.done(Step.REFERENCE):
+            return
+        st = self.pstate
+        if (st.ref_image_global, st.last_image_global) != (self.ctx.reference_index, self.ctx.last_index):
+            self._close_child_windows()
+            self._kin_cache = None
+            files = st.invalidate_from(Step.REFERENCE)
+            self._wipe_artifacts(st.root, files)
+            try:
+                project_io.save_manifest(st)
+            except OSError as exc:
+                self.ctx.status(f"Could not persist changed frame range: {exc}", 8000)
+            self._sync_reference_widgets()
+            self._update_gating()
+
     def _on_result_changed(self) -> None:
         if self._loading:  # we're reinstalling a saved result during resume; don't re-handle it
             return
@@ -902,9 +977,10 @@ class MtsUniaxialWindow(QWidget):
     def kinematics(self):
         """The cached per-frame :class:`KinematicsSeries`, computed lazily from the current active
         points. ``None`` if there is no result yet. Invalidated by mask/result/reference changes."""
+        if not self._plot_ready():
+            self._kin_cache = None
+            return None
         if self._kin_cache is None:
-            if not self.ctx.has_result:
-                return None
             coords = self.ctx.coords(active_only=True)
             log = self.pstate.image_log
             if coords is None or coords.shape[1] == 0 or log is None:
@@ -912,7 +988,7 @@ class MtsUniaxialWindow(QWidget):
             status = self.ctx.track_status(active_only=True)
             ref = self.ctx.reference_index
             img_t = np.array([log.time_ms[ref + t] for t in range(self.ctx.frame_count)])
-            self._kin_cache = kinematics.compute_series(coords, img_t, status)
+            self._kin_cache = kinematics.compute_series(coords, img_t, status, loading_axis_deg=self.pstate.loading_axis_deg)
         return self._kin_cache
 
     def _invalidate_kinematics(self) -> None:
@@ -955,8 +1031,10 @@ class MtsUniaxialWindow(QWidget):
             return None
         _disp, force_img, _ir = self._aligned_force_disp()
         ref = self.ctx.reference_index
-        zero = float(force_img[ref])
-        return np.array([force_img[ref + t] - zero for t in range(self.ctx.frame_count)])
+        zero = float(force_img[ref]) if self.pstate.force_basis == "reference_change" else 0.0
+        values = np.array([force_img[ref + t] - zero for t in range(self.ctx.frame_count)])
+        values[~_ir[ref:ref + self.ctx.frame_count]] = np.nan
+        return values
 
     # ---- material parameters -----------------------------------------
     def _on_material_param_changed(self, *_) -> None:
@@ -966,6 +1044,9 @@ class MtsUniaxialWindow(QWidget):
         st.material_width = self._read_float(self.width_edit, st.material_width)
         st.material_thickness = self._read_float(self.thickness_edit, st.material_thickness)
         st.incompressible = self.incompressible_chk.isChecked()
+        st.force_basis = self.force_basis_box.currentData()
+        st.loading_axis_deg = self.axis_angle.value() if self.axis_enabled.isChecked() else None
+        self._kin_cache = None
         self._update_a0_label()
         if st.done(Step.LOAD):
             # Material parameters feed measures.csv. Remove that derived file rather than leaving
@@ -1181,10 +1262,12 @@ class MtsUniaxialWindow(QWidget):
                 if always or (self.measure_checks[key].isChecked()
                               and self.measure_checks[key].isEnabled())]
         header = [h for key, h, _a in _MEASURE_COLUMNS if key in keys]
+        header += ["force_basis", "loading_axis_deg", "fit_reason", "fit_rms_px", "axial_lambda"]
         rows = []
+        stress_force = self.per_frame_force_N()
         for t in range(self.ctx.frame_count):
             g = ref + t
-            pk = (force_img[g] - zero_force) / a0 if a0 > 0 else float("nan")
+            pk = stress_force[t] / a0 if a0 > 0 else float("nan")
             values = {
                 "frame_global": g,
                 "time_s": series.time_s[t],
@@ -1194,14 +1277,16 @@ class MtsUniaxialWindow(QWidget):
                 "eps_2": series.eps_2[t],
                 "eps_2_ico": series.eps_2_ico[t],
                 "pk_stress_MPa": pk,
-                "cauchy_stress_MPa": series.lambda_1[t] * pk,
-                "force_N": force_img[g] - zero_force,
+                "cauchy_stress_MPa": series.axial_lambda[t] * pk,
+                "force_N": stress_force[t],
                 "displacement_mm": disp_img[g] - zero_disp,
                 "angle_deg": series.angle_deg[t],
                 "n_points": int(series.n_points[t]),
                 "in_range": int(bool(in_range[g])),
             }
-            rows.append([self._fmt_cell(k, values[k]) for k in keys])
+            rows.append([self._fmt_cell(k, values[k]) for k in keys] +
+                        [st.force_basis, st.loading_axis_deg if st.loading_axis_deg is not None else "major_tensile_assumption",
+                         series.fit_reason[t], series.residual_rms[t], series.axial_lambda[t]])
         try:
             path = project_io.save_measures(st, header, rows)
         except (OSError, ValueError) as exc:
@@ -1249,6 +1334,9 @@ class MtsUniaxialWindow(QWidget):
             self.width_edit.setText(f"{st.material_width:g}")
             self.thickness_edit.setText(f"{st.material_thickness:g}")
             self.incompressible_chk.setChecked(st.incompressible)
+            self.force_basis_box.setCurrentIndex(self.force_basis_box.findData(st.force_basis))
+            self.axis_enabled.setChecked(st.loading_axis_deg is not None)
+            self.axis_angle.setValue(st.loading_axis_deg or 0.0)
             self._update_a0_label()
             if st.root:
                 self.root_edit.setText(st.root)
@@ -1267,8 +1355,10 @@ class MtsUniaxialWindow(QWidget):
                 ce = st.crop_end if st.crop_end is not None else n - 1
                 for slider in (self.ref_lo, self.ref_hi):
                     slider.setRange(cs, ce)
-                self._set_slider(self.ref_lo, cs)
-                self._set_slider(self.ref_hi, ce)
+                rp = st.reference_parameters
+                self._set_slider(self.ref_lo, max(cs, min(ce, int(rp.get("search_start", cs)))))
+                self._set_slider(self.ref_hi, max(self.ref_lo.value(), min(ce, int(rp.get("search_end", ce)))))
+                self.preforce_spin.setValue(float(rp.get("preforce", self.preforce_spin.value())))
                 self._update_ref_labels()
                 self.ref_spin.setRange(0, st.image_log.n_images - 1)
                 self._load_summary_text()
@@ -1349,7 +1439,7 @@ class MtsUniaxialWindow(QWidget):
         force = sync.composite_force(sen, st.force_channel)
         img_force, _ = sync.interp_to_images(log.time_ms, stms, force, st.offset_ms)
         img_disp, _ = sync.interp_to_images(log.time_ms, stms, disp, st.offset_ms)
-        self.crop_plot.update_data(stms, disp, force, st.crop_start or 0,
+        self.crop_plot.update_data(stms + st.offset_ms, disp, force, st.crop_start or 0,
                                    st.crop_end if st.crop_end is not None else sen.n_samples - 1,
                                    log.time_ms, img_disp, img_force,
                                    show_images=self.show_images_chk.isChecked(),
@@ -1402,6 +1492,7 @@ class MtsUniaxialWindow(QWidget):
         """Observe project-integrity changes for the plugin instance's full lifetime."""
         if self._connected:
             return
+        self.ctx.signals.range_changed.connect(self._on_range_changed)
         self.ctx.signals.result_changed.connect(self._on_result_changed)
         self.ctx.signals.sequence_changed.connect(self._on_sequence_changed)
         self.ctx.signals.mask_changed.connect(self._on_mask_changed)
@@ -1411,6 +1502,7 @@ class MtsUniaxialWindow(QWidget):
         if not self._connected:
             return
         for sig, slot in (
+            (self.ctx.signals.range_changed, self._on_range_changed),
             (self.ctx.signals.result_changed, self._on_result_changed),
             (self.ctx.signals.sequence_changed, self._on_sequence_changed),
             (self.ctx.signals.mask_changed, self._on_mask_changed),

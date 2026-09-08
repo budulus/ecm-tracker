@@ -94,7 +94,9 @@ class PointManagerDialog(QDialog):
         map from the current state, preserves still-valid selection (by point index), and drops
         stale rows. Selection signals are suppressed (``_syncing``) so repopulation doesn't echo."""
         state = self._window.state
-        prev = set(self.selected_point_indices())
+        identity = state.result if state.result is not None else state.features
+        prev = set(self.selected_point_indices()) if getattr(self, "_point_identity", None) is identity else set()
+        self._point_identity = identity
 
         result = state.result
         post_track = result is not None and state.active_mask is not None
@@ -104,8 +106,12 @@ class PointManagerDialog(QDialog):
             if post_track:
                 self._row_to_index = [int(p) for p in np.where(state.active_mask)[0]]
                 h, w = state.image_size()
-                self._metrics = compute_metrics(result, state.roi, (h, w))
-                headers = ["Point", "FB mean", "OpenCV mean"]
+                key = (id(result), tuple(state.roi.corners) if state.roi is not None else None)
+                if getattr(self, "_metrics_key", None) != key or self._metrics is None:
+                    self._metrics = compute_metrics(result, state.roi, (h, w))
+                    self._metrics_key = key
+                quality_label = {"photometric": "Photometric mean (↓)", "min_eigenvalue": "Min eigenvalue (↑)", "unknown": "LK quality (unknown)"}[result.error_kind]
+                headers = ["Point", "FB mean", quality_label]
             else:
                 feats = state.features
                 self._row_to_index = list(range(len(feats))) if feats is not None else []
@@ -120,7 +126,7 @@ class PointManagerDialog(QDialog):
                 self.table.setItem(r, 0, QTableWidgetItem(f"{r + 1} / {n}"))
                 if post_track:
                     self.table.setItem(r, 1, self._metric_item(result.fb_mean_error[p]))
-                    self.table.setItem(r, 2, self._metric_item(self._metrics.mean_err_fw[p]))
+                    self.table.setItem(r, 2, self._metric_item(self._metrics.min_eigenvalue[p] if result.error_kind == "min_eigenvalue" else self._metrics.mean_err_fw[p]))
 
             if prev:
                 self._select_rows([r for r, p in enumerate(self._row_to_index) if p in prev])

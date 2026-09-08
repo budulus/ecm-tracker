@@ -34,9 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core.roi import ROI
-from app.core.affine import fit_affine, principal_stretches, ransac_affine
-from app.core.atomic_io import atomic_open
+from app.plugins.analysis import ROI
+from app.plugins.analysis import fit_affine, principal_stretches, ransac_affine
+from app.plugins.analysis import atomic_open
 from app.plugins import CanvasInteraction
 
 MIN_ZONE_POINTS = 3  # an affine fit needs at least 3 correspondences
@@ -90,7 +90,10 @@ def fit_zone_deformation(polygon, ref_pts, cur_pts, valid=None):
     inside = points_in_polygon(polygon, ref_pts)
     if valid is not None:
         inside &= np.asarray(valid, dtype=bool)
-    return fit_affine(ref_pts, cur_pts, inside)
+    fit = fit_affine(ref_pts, cur_pts, inside)
+    if fit is not None and (np.linalg.det(fit[1]) <= 0 or np.linalg.cond(fit[1]) > 1e8):
+        return None
+    return fit
 
 
 def _ransac_affine(src, dst, sample_size, reproj, max_iters, confidence):
@@ -210,6 +213,9 @@ class AffineZonesWindow(QWidget):
         layout.addWidget(self.hint)
         layout.addWidget(self.table)
 
+        self._reference_owner = ctx.reference_index
+        ctx.subscribe(ctx.signals.sequence_changed, self._on_sequence_changed)
+        ctx.subscribe(ctx.signals.range_changed, self._on_range_changed)
         ctx.signals.frame_changed.connect(self._refresh)
         ctx.signals.result_changed.connect(self._refresh)
         ctx.signals.mask_changed.connect(self._refresh)
@@ -253,8 +259,23 @@ class AffineZonesWindow(QWidget):
             except (TypeError, RuntimeError):
                 pass
 
+    def _on_sequence_changed(self):
+        self.ctx.end_canvas_interaction()
+        self._tool = None
+        self._reference_owner = self.ctx.reference_index
+        self._clear_zones()
+
+    def _on_range_changed(self):
+        if self._reference_owner != self.ctx.reference_index:
+            self._on_sequence_changed()
+        else:
+            self._refresh()
+
     # ---- drawing zones --------------------------------------------------
     def _start_zone(self):
+        if not self.ctx.has_sequence:
+            return
+        self.ctx.set_current_frame(self.ctx.reference_index)
         self._tool = ZoneDrawTool(self)
         self.ctx.begin_canvas_interaction(self._tool)
         self.ctx.status("Click to add zone vertices, then press “Finish Zone”.")
@@ -296,7 +317,7 @@ class AffineZonesWindow(QWidget):
 
     def _update_buttons(self):
         drawing = self._tool is not None
-        self.new_btn.setEnabled(not drawing)
+        self.new_btn.setEnabled(not drawing and self.ctx.has_sequence)
         self.finish_btn.setEnabled(drawing)
         self.all_points_btn.setEnabled(not drawing and self.ctx.has_result)
         has = bool(self.zones)
@@ -370,6 +391,7 @@ class AffineZonesWindow(QWidget):
         self._update_buttons()
         if self._gauge_window is not None and self._gauge_window.isVisible():
             self._gauge_window.refresh()  # propagate zone add/clear/recolor + RANSAC edits
+        self._refresh_plot()
         self.ctx.request_redraw()
 
     def _set_cell(self, row, col, text):

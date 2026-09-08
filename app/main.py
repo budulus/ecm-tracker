@@ -8,6 +8,9 @@ from app.gui.theme import apply_theme
 
 
 def main() -> int:
+    if "--check-plugin" in sys.argv:
+        from app.plugins.conformance import main as check_main
+        return check_main(sys.argv[sys.argv.index("--check-plugin") + 1:])
     if sys.platform == "win32":
         # Give the process an explicit app id so Windows groups it under "ECM
         # Tracker" and shows our icon on the taskbar instead of Python's.

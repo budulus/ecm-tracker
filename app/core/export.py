@@ -38,9 +38,15 @@ def export(
 
     coords = _clean_coords(coords_fw, active_mask)
     coords_path = os.path.join(out_dir, filename)
+    if reference_index < 0 or last_index - reference_index + 1 != coords.shape[0]:
+        raise ValueError("Export frame range does not match coordinates")
+    # One atomic file is authoritative; loose arrays/text below are legacy convenience views.
+    with atomic_open(os.path.splitext(coords_path)[0] + ".bundle.npz", "wb") as handle:
+        np.savez(handle, coords=coords, point_ids=np.flatnonzero(active_mask),
+                 frame_indices=np.arange(reference_index, last_index + 1))
     atomic_save_npy(coords_path, coords)
 
-    sequence_path = os.path.join(out_dir, "sequence.txt")
+    sequence_path = os.path.join(out_dir, "sequence.txt" if filename == "coords.npy" else os.path.splitext(filename)[0] + ".sequence.txt")
     with atomic_open(sequence_path) as f:
         f.write(f"{reference_index} {last_index}\n")
 

@@ -9,6 +9,8 @@ engineering strains lambda-1. Invalid rows/undefined axes are NaN, not zero.
 ransac_affine: deterministic; returned inliers satisfy the returned model's threshold.
 ROI: plugin-owned polygon helper. Never mutates the host ROI.
 atomic_open/atomic_save_npy: atomic replacement of ONE file, not a multi-file transaction.
+compose_alignment_affines(F,current,reference): current @ F @ inv(reference), using
+the 2x2 restoration maps from ctx.alignment_affine(global_index).
 """
 from app.core.affine import (
     fit_affine, principal_stretches, principal_directions_defined, ransac_affine,
@@ -19,3 +21,4 @@ from app.core.kinematics import (
 )
 from app.core.roi import ROI
 from app.core.atomic_io import atomic_open, atomic_save_npy
+from app.core.pair_transform import compose_alignment_affines

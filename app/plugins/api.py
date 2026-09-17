@@ -339,6 +339,8 @@ class PluginContext:
         The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
         tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
         these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+        For aligned pairs these remain the original source paths; their raw pixels/dimensions
+        may differ from the cropped frames returned by the image helpers.
         """
         sequence = self._state.sequence
         return tuple(sequence.paths) if sequence is not None else ()
@@ -380,12 +382,33 @@ class PluginContext:
         return self._state.image_size()
 
     def frame_bgr(self, global_index: int) -> np.ndarray:
-        """Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order)."""
+        """Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order).
+
+        Aligned pairs return the shared crop, in the same coordinates as tracking results.
+        """
         return self._require_sequence().load_bgr(global_index)
 
     def frame_gray(self, global_index: int) -> np.ndarray:
         """Frame at ``global_index`` as an ``(H, W)`` uint8 grayscale array."""
         return self._require_sequence().load_gray(global_index)
+
+    def alignment_affine(self, global_index: int) -> np.ndarray:
+        """Detached read-only 2x2 deformation-restoration matrix C for a global frame.
+
+        Identity for ordinary sequences, the original pair reference, or rigid-only alignment.
+        For a destination warped by L=R U (polar rotation/stretch), C=R inv(U) R.T.
+        Restore a residual fit with C_current @ F @ inv(C_reference). This restores scale/shear,
+        never alignment translation/rotation. Reported axes live in restored, rotation-aligned
+        coordinates; map them through inv(C_current) to overlay them on the aligned pixels.
+        All frame/track accessors continue to return aligned coordinates.
+        """
+        from app.core.image_pair import AlignedImagePairSequence
+
+        sequence = self._require_sequence()
+        if isinstance(global_index, bool) or not isinstance(global_index, (int, np.integer)) or not 0 <= global_index < len(sequence):
+            raise IndexError("Alignment frame index is outside the loaded sequence")
+        matrix = sequence.alignment.correction if isinstance(sequence, AlignedImagePairSequence) and global_index == 1 else np.eye(2)
+        return _readonly(matrix)
 
     def frame_rgb(self, global_index: int) -> np.ndarray:
         """Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **RGB** array (for Qt/matplotlib)."""

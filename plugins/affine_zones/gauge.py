@@ -20,7 +20,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
-from .zones import fit_zone_deformation, principal_stretches
+from .zones import principal_stretches
 
 # Fraction of the displayed frame's short side used as the (half) arrow length. Kept short so the
 # per-zone arrows don't overlap when several zones are close together.
@@ -172,21 +172,25 @@ class ZoneDirectionGaugeWindow(QWidget):
         valid = None if status is None else (status[cut] == 1)
         entries = []
         for zone in self.owner.zones:
-            fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
+            fit = self.owner.fit_zone(zone, ref_pts, cur_pts, cut, valid=valid)
             if fit is None:
                 continue
-            local_idx, F, _b = fit
+            local_idx, F = fit
             lam1, lam2, v1, v2 = principal_stretches(F)
             if not (np.all(np.isfinite(v1)) and np.all(np.isfinite(v2))
                     and np.isfinite(lam1) and np.isfinite(lam2)):
                 continue
             pts = cur_pts[local_idx]
             centroid = (float(pts[:, 0].mean()), float(pts[:, 1].mean()))
+            # Reported axes belong to restored coordinates, but the background is aligned.
+            # _draw_axis normalizes these mapped directions; lengths remain the reported λ.
+            inverse = np.linalg.inv(self.owner.correction_at(cut))
+            v1, v2 = inverse @ v1, inverse @ v2
             entries.append((centroid, v1, v2, lam1, lam2, zone.color))
         self.canvas.set_frame(qimg, entries)
         self.info.setText(
             f"frame {g} (cut {cut}/{self.ctx.frame_count - 1}) — "
-            f"{len(entries)}/{len(self.owner.zones)} zone(s) with a valid fit"
+            f"{len(entries)}/{len(self.owner.zones)} zone(s) with a valid fit. {self.owner.analysis_label()}"
         )
 
     def closeEvent(self, event):

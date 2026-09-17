@@ -52,6 +52,12 @@ the whole trajectory. Frame indices must be integers. Image helpers accept globa
 `image_size()` returns (height,width), or None. No sequence raises RuntimeError; an
 out-of-range image raises IndexError.
 
+For an aligned image pair, these image helpers return the shared overlap crops and tracking
+coordinates use that same cropped origin. Displacement excludes the manual alignment shift.
+`frame_paths` still identifies the original source files (which may have different dimensions);
+always use the image helpers for pixels that match tracking coordinates. The saved `.ecmpair.json`
+setup records the source references, shift, crop origin, and sequence identity.
+
 Legacy adapters remain supported: `coords()`, `track_status()`, `point_indices()`,
 `active_mask`, `frame_count`, `point_count`, `n_active`, `current_cut`,
 `global_to_cut`, `cut_to_global`. Conversions are arithmetic, NOT bounds validation.
@@ -117,6 +123,25 @@ New plugins must not use them. These adapters remain in API 1; removing them req
 API revision. Do not use them to change scientific state.
 
 ## Math helpers and conventions
+
+### Image-pair alignment
+
+`ctx.frame_bgr(i)` and tracked coordinates use the cropped, aligned image system. Original
+`ctx.frame_paths` remain source references, not interchangeable pixel arrays. Pair setups save
+all alignment parameters and editor presets; translation-only v1 setups remain supported.
+
+`ctx.alignment_affine(global_index)` returns a detached, read-only 2x2 **restoration** matrix C.
+It is identity for ordinary sequences, the original pair reference, and rigid-only alignment.
+If the destination-to-reference linear warp is L=R U (proper rotation R, symmetric positive
+stretch U), C=R inv(U) R.T. It restores scale/shear without reintroducing alignment's rigid
+translation or rotation. A missing sequence raises RuntimeError; an invalid index raises IndexError.
+
+`compose_alignment_affines(F, current, reference)` from `app.plugins.analysis` computes
+`current @ F @ inv(reference)`. Pass C for the actual global current and tracked reference
+frames, not cut indices. Corrected eigenvectors describe restored, rotation-aligned coordinates;
+map them with `inv(C_current)` and normalize to draw directions over the aligned image. Do not
+change point membership, validity, or pixel-space RANSAC thresholds when restoring deformation.
+The Affine Zone Tool applies this correction through its checkbox; other plugins opt in explicitly.
 
 Import helpers from `app.plugins.analysis`, never `app.core`.
 `fit_affine(ref,cur,valid)` returns (eligible_indices,F,b) for cur=ref@F.T+b, or None

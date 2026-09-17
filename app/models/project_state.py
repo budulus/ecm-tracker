@@ -105,6 +105,7 @@ class ProjectState:
         self.revision = 0
         self.sequence: Optional[ImageSequence] = None
         self.source_dir: Optional[str] = None
+        self.pair_setup_path: Optional[str] = None
         self.reference_index: int = 0
         self.last_index: int = 0
         self.current_index: int = 0
@@ -129,6 +130,7 @@ class ProjectState:
         self.touch()
         self.sequence = sequence
         self.source_dir = source_dir
+        self.pair_setup_path = None
         self.reference_index = 0
         self.last_index = len(sequence) - 1
         self.current_index = 0

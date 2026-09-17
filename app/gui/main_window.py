@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -28,10 +29,12 @@ from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
 from app.core.export import export, export_csv
 from app.core.feature_detection import regular_grid, shi_tomasi
 from app.core.image_sequence import ImageSequence, discover
+from app.core.image_pair import AlignedImagePairSequence, load_pair_setup, save_pair_setup
 from app.core.roi import ROI
 from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
 from app.gui.point_tools import AddPointsTool, DeletePointsTool
+from app.gui.pair_alignment import ImagePairDialog, PairAlignmentDialog
 from app.gui.point_manager import PointManagerDialog, PointSelectInteraction
 from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
@@ -212,6 +215,10 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self._open_directory)
         open_files = file_menu.addAction("Open &Files...")
         open_files.triggered.connect(self._open_files)
+        file_menu.addAction("Open Image &Pair...").triggered.connect(self._open_image_pair)
+        file_menu.addAction("Open Pair Setup...").triggered.connect(self._open_pair_setup)
+        self.save_pair_setup_action = file_menu.addAction("Save Pair Setup...")
+        self.save_pair_setup_action.triggered.connect(self._save_pair_setup)
         file_menu.addSeparator()
         self.save_trackers_action = file_menu.addAction("Save &Trackers...")
         self.save_trackers_action.setShortcut("Ctrl+S")
@@ -234,6 +241,9 @@ class MainWindow(QMainWindow):
         )
         params_menu.addAction("Grid...").triggered.connect(self._open_grid_dialog)
         params_menu.addAction("Tracker...").triggered.connect(self._open_tracker_dialog)
+        params_menu.addSeparator()
+        self.adjust_pair_action = params_menu.addAction("Adjust Pair Alignment...")
+        self.adjust_pair_action.triggered.connect(self._adjust_pair_alignment)
 
         # Populated by the PluginManager after construction.
         self._plugins_menu = self.menuBar().addMenu("&Plugins")
@@ -493,13 +503,15 @@ class MainWindow(QMainWindow):
         return self._load_paths(paths, source_dir)
 
     def _load_paths(self, paths, source_dir) -> bool:
-        if self._loading_sequence:
-            raise RuntimeError("An image sequence is already being validated.")
         if not paths:
             QMessageBox.warning(self, "No images", "No supported images were found.")
             return False
+        return self._load_sequence_candidate(ImageSequence(paths), source_dir)
+
+    def _validate_sequence(self, sequence) -> bool:
+        if self._loading_sequence:
+            raise RuntimeError("An image sequence is already being validated.")
         try:
-            sequence = ImageSequence(paths)
             dialog = QProgressDialog("Validating images...", "Cancel", 0, len(sequence), self)
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.setMinimumDuration(500)
@@ -515,16 +527,27 @@ class MainWindow(QMainWindow):
             finally:
                 self._loading_sequence = False
                 dialog.close()
+                dialog.deleteLater()
             if not valid:
                 self.statusBar().showMessage("Image loading cancelled.", 4000)
                 return False
         except (IOError, ValueError, cv2.error) as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return False
+        return True
+
+    def _load_sequence_candidate(self, sequence, source_dir, *, setup_path=None) -> bool:
+        if not self._validate_sequence(sequence):
+            return False
+        self._commit_sequence(sequence, source_dir, setup_path=setup_path)
+        return True
+
+    def _commit_sequence(self, sequence, source_dir, *, setup_path=None) -> None:
         # Commit only after every frame has decoded and passed the common-shape check. A failed
         # candidate therefore leaves the existing project completely untouched.
         self._teardown_session_ui()
         self.state.load_sequence(sequence, source_dir)
+        self.state.pair_setup_path = setup_path
         self._configure_sliders()
         self.canvas.reset_view()
         self.canvas.refresh()
@@ -532,11 +555,109 @@ class MainWindow(QMainWindow):
         self._update_tool_states()
         self._update_window_title()
         self.signals.sequence_changed.emit()
-        return True
+
+    def _open_image_pair(self) -> None:
+        chooser = ImagePairDialog(self.state.source_dir or "", self)
+        try:
+            if chooser.exec() != QDialog.DialogCode.Accepted:
+                return
+            sequence = AlignedImagePairSequence(chooser.paths)
+        finally:
+            chooser.deleteLater()
+        if self._validate_sequence(sequence):
+            self._align_pair(sequence, editing=False)
+
+    def _adjust_pair_alignment(self) -> None:
+        sequence = self.state.sequence
+        if isinstance(sequence, AlignedImagePairSequence):
+            self._align_pair(sequence, editing=True)
+
+    def _align_pair(self, sequence, *, editing) -> None:
+        revision = self.state.revision
+        try:
+            dialog = PairAlignmentDialog(sequence, self)
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                alignment = dialog.alignment
+            finally:
+                dialog.deleteLater()  # Release the full-resolution preview images after closing.
+            if self.state.revision != revision:
+                self.statusBar().showMessage("Session changed while aligning. Reopen alignment to try again.", 5000)
+                return
+            if editing and alignment.same_geometry(sequence.alignment):
+                if alignment != sequence.alignment:
+                    self.state.sequence = sequence.with_editor_settings(alignment)
+                    self._update_status()
+                return
+            candidate = sequence.with_alignment(alignment)
+            if not self._validate_sequence(candidate):
+                return
+        except (OSError, ValueError, cv2.error) as exc:
+            QMessageBox.critical(self, "Alignment failed", str(exc))
+            return
+        if self.state.revision != revision:
+            self.statusBar().showMessage("Session changed while aligning. Reopen alignment to try again.", 5000)
+            return
+        if editing and (self.state.roi is not None or self.state.features is not None
+                        or self.state.result is not None):
+            answer = QMessageBox.question(
+                self, "Apply changed alignment?",
+                "Changing alignment clears the ROI, reference points, tracking, and cleanup history. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        # Confirmation runs a nested Qt event loop. Check again before discarding current work.
+        if self.state.revision != revision:
+            self.statusBar().showMessage("Session changed while aligning. Reopen alignment to try again.", 5000)
+            return
+        try:
+            candidate.source_bgr(0)
+            candidate.source_bgr(1)
+        except (OSError, ValueError, cv2.error) as exc:
+            QMessageBox.critical(self, "Alignment failed", str(exc))
+            return
+        setup_path = self.state.pair_setup_path if editing else None
+        self._commit_sequence(candidate, os.path.dirname(sequence.paths[0]), setup_path=setup_path)
+        self.statusBar().showMessage("Aligned pair loaded. Use File → Save Pair Setup to save this alignment.", 6000)
+
+    def _open_pair_setup(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Pair Setup", self.state.source_dir or "",
+            "Image pair setup (*.ecmpair.json)",
+        )
+        if not path:
+            return
+        try:
+            sequence = load_pair_setup(path)
+            self._load_sequence_candidate(sequence, os.path.dirname(sequence.paths[0]),
+                                          setup_path=os.path.abspath(path))
+        except (OSError, ValueError, cv2.error) as exc:
+            QMessageBox.critical(self, "Open pair setup failed", str(exc))
+
+    def _save_pair_setup(self) -> None:
+        if not isinstance(self.state.sequence, AlignedImagePairSequence):
+            return
+        default = self.state.pair_setup_path or os.path.join(self.state.source_dir or "", "pair.ecmpair.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Pair Setup", default, "Image pair setup (*.ecmpair.json)",
+        )
+        if not path:
+            return
+        try:
+            self.state.pair_setup_path = save_pair_setup(path, self.state.sequence)
+        except (OSError, ValueError, cv2.error) as exc:
+            QMessageBox.critical(self, "Save pair setup failed", str(exc))
+            return
+        self.statusBar().showMessage(f"Saved pair setup to {self.state.pair_setup_path}", 6000)
 
     def _update_window_title(self) -> None:
         """Reflect the loaded folder in the title bar (e.g. 'ECM Tracker - experiment_1')."""
         name = os.path.basename(self.state.source_dir) if self.state.source_dir else None
+        if isinstance(self.state.sequence, AlignedImagePairSequence):
+            name = "Image Pair — " + " → ".join(os.path.basename(p) for p in self.state.sequence.paths)
         self.setWindowTitle(f"ECM Tracker - {name}" if name else "ECM Tracker")
 
     # ---- left pane ------------------------------------------------------
@@ -1396,6 +1517,9 @@ class MainWindow(QMainWindow):
     # ---- tool enablement ------------------------------------------------
     def _update_tool_states(self) -> None:
         has = self.state.has_sequence
+        is_pair = isinstance(self.state.sequence, AlignedImagePairSequence)
+        self.save_pair_setup_action.setEnabled(is_pair)
+        self.adjust_pair_action.setEnabled(is_pair)
         on_ref = self.state.on_reference_frame
         roi_ready = self._roi_ready()
         has_features = self.state.features is not None and len(self.state.features) > 0
@@ -1448,15 +1572,25 @@ class MainWindow(QMainWindow):
     # ---- status ---------------------------------------------------------
     def _update_status(self) -> None:
         if not self.state.has_sequence:
-            self._status_label.setText("No sequence loaded — File → Open Directory.")
+            self._status_label.setText("No sequence loaded — File → Open Directory or Open Image Pair.")
             return
         s = self.state
         if s.current_in_range:
             cut = f"cut {s.global_to_cut(s.current_index)}"
         else:
             cut = "out of range"
+        pair_status = ""
+        if isinstance(s.sequence, AlignedImagePairSequence):
+            dx, dy = s.sequence.translation
+            # Dimensions are already validated/cached; do not reread source files just for status.
+            h, w = s.sequence.frame_shape[:2]
+            alignment = s.sequence.alignment
+            mode = {"translation": "translation", "scale": "uniform scale", "affine": "affine"}[alignment.mode]
+            rotation = f" · {alignment.angle_degrees:+.2f}°" if alignment.rotation_enabled else ""
+            pair_status = (f"  |  Pair {mode} ({dx:+g}, {dy:+g}) px{rotation} · "
+                           f"{w} × {h} px · aligned coordinates")
         self._status_label.setText(
             f"Frame {s.current_index + 1}/{s.total_images} ({cut})  |  "
             f"reference {s.reference_index}  last {s.last_index}  "
-            f"({s.n_cut} frames in range)"
+            f"({s.n_cut} frames in range){pair_status}"
         )

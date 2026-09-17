@@ -115,19 +115,23 @@ class ImageSequence:
         except ValueError as exc:
             raise ValueError(f"Invalid image {self.paths[index]}: {exc}") from exc
 
-        if self._frame_shape is None:
-            self._frame_shape = img.shape
-        elif img.shape != self._frame_shape:
-            raise ValueError(
-                f"Frame dimensions changed at {self.paths[index]}: got {img.shape[:2]}, "
-                f"expected {self._frame_shape[:2]}"
-            )
+        self._check_frame_shape(img, self.paths[index])
         img.setflags(write=False)
 
         self._cache[index] = img
         if len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
         return img
+
+    def _check_frame_shape(self, img: np.ndarray, path: str) -> None:
+        """Ordinary sequences require one shape; pair sources may override this check."""
+        if self._frame_shape is None:
+            self._frame_shape = img.shape
+        elif img.shape != self._frame_shape:
+            raise ValueError(
+                f"Frame dimensions changed at {path}: got {img.shape[:2]}, "
+                f"expected {self._frame_shape[:2]}"
+            )
 
     def load_gray(self, index: int) -> np.ndarray:
         """Return the frame at `index` as a single-channel uint8 grayscale array."""

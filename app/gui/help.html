@@ -219,8 +219,50 @@
     <ul>
       <li><strong>Open Directory…</strong> (<kbd>Ctrl</kbd>+<kbd>O</kbd>) — load every image in a folder, in name order.</li>
       <li><strong>Open Files…</strong> — pick an explicit set of images.</li>
+      <li><strong>Open Image Pair…</strong> — choose a reference image and a destination image, then align them before tracking.</li>
     </ul>
     <p>Images of any common format are accepted and normalised internally, so colour and grayscale sources mix freely.</p>
+    <h3>Two-frame tracking</h3>
+    <p>In the alignment window, the reference stays fixed while you drag the destination over it.
+      Adjust <strong>Destination opacity</strong> to compare features. Use the X/Y offsets or arrow keys
+      for one-pixel adjustments; hold Shift with an arrow key for ten pixels. Positive X moves right,
+      and positive Y moves down. Scroll to zoom, and use Space+drag or right-drag to pan.</p>
+    <p>Choose <strong>Translation</strong>, <strong>Uniform Scale</strong>, or <strong>Affine</strong>.
+      Scale handles preserve aspect ratio; affine handles adjust stretch and shear while preserving
+      parallel edges. By default, corner handles keep the opposite corner fixed and the scale percentage
+      scales about the center, preserving existing affine proportions. Each mode remembers its settings.</p>
+    <p>To keep an aligned feature fixed while scaling, translate it into place first, click
+      <strong>Set Pivot</strong>, then click that feature on the destination image. A yellow marker shows
+      the pivot. Both the scale percentage and corner handles keep it fixed, including affine adjustments
+      and switching deformation modes. Zoom and pan remain available while picking; Escape cancels picking.
+      Translation and rotation carry the pivot with the feature. <strong>Clear Pivot</strong> restores
+      default scaling without moving the image. The pivot is remembered when reopening alignment and
+      saving or loading a pair setup; choosing or clearing it alone preserves tracking.</p>
+    <p>Enable <strong>Rotation</strong> in any mode, then use the angle field or orange round handle.
+      Rotation is clockwise about the destination center. Turning it off remembers the angle for later.
+      <strong>Reset Alignment</strong> clears all offsets, rotation, deformation presets, and the pivot.</p>
+    <p>The green boundary is the largest fully valid rectangular overlap. <strong>Apply Alignment</strong>
+      crops both images to this area. Integer translations use exact pixel crops; other transforms resample
+      the original destination once. Different dimensions, scales, and orientations are allowed.
+      Originals stay unchanged. Continue with the usual ROI, detection, tracking, and cleanup tools.</p>
+    <div class="tip"><strong>Coordinates:</strong> tracking measures the remaining motion after the manual
+      alignment is removed. Coordinates in tracking and coordinate exports start at the cropped image's
+      upper-left corner. Add the saved crop origin to recover original reference coordinates;
+      for original destination coordinates, apply the inverse saved alignment to those reference-space
+      coordinates (subtracting the shift alone works only for translation).</div>
+    <p>In the <strong>Affine Zone Tool</strong>, <strong>Include alignment affine maps if present</strong>
+      is enabled by default. It restores alignment scale/shear in the table, plots, CSV, and direction
+      gauge, while excluding alignment translation and rigid rotation. Disable it to inspect residual
+      deformation. Reported directions use restored, rotation-aligned axes; gauge arrows are mapped
+      back onto the aligned image. Other analysis plugins continue to analyze residual motion.</p>
+    <p>Use <strong>File → Save Pair Setup…</strong> to save the source-image references and alignment
+      in an <code>.ecmpair.json</code> file, even before defining points. Reopen it with
+      <strong>Open Pair Setup…</strong>; keep the original images available. Relative image paths allow
+      moving a setup and its images together. Save tracking separately with <strong>Save Trackers…</strong>,
+      then restore it with <strong>Load Trackers…</strong> after reopening the same pair setup.</p>
+    <p><strong>Parameters → Adjust Pair Alignment…</strong> reopens the original images for adjustment.
+      Cancelling or applying unchanged geometry preserves your work. Applying changed geometry asks before
+      clearing the ROI, points, tracking, and cleanup history. Save the updated pair setup afterwards.</p>
   </section>
 
   <section id="frames">

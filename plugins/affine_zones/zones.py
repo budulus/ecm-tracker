@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QColorDialog,
     QDialog,
     QDialogButtonBox,
@@ -36,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from app.plugins.analysis import ROI
 from app.plugins.analysis import fit_affine, principal_stretches, ransac_affine
-from app.plugins.analysis import atomic_open
+from app.plugins.analysis import atomic_open, compose_alignment_affines
 from app.plugins import CanvasInteraction
 
 MIN_ZONE_POINTS = 3  # an affine fit needs at least 3 correspondences
@@ -203,13 +204,24 @@ class AffineZonesWindow(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.hint = QLabel()
+        self.hint.setWordWrap(True)
+        self.include_alignment = QCheckBox("Include alignment affine maps if present")
+        self.include_alignment.setChecked(ctx.get_settings().get("include_alignment_affines", True) is not False)
+        self.include_alignment.setToolTip(
+            "Restore alignment scale/shear in all reported stretches and directions. "
+            "Alignment translation and rigid rotation remain excluded; tracking and RANSAC use aligned pixels.")
+        self.include_alignment.toggled.connect(self._alignment_toggled)
 
         top = QHBoxLayout()
-        for b in (self.new_btn, self.finish_btn, self.all_points_btn, self.clear_btn,
-                  self.ransac_btn, self.plot_btn, self.gauge_btn, self.export_btn):
+        for b in (self.new_btn, self.finish_btn, self.all_points_btn, self.clear_btn):
             top.addWidget(b)
+        analysis = QHBoxLayout()
+        for b in (self.ransac_btn, self.plot_btn, self.gauge_btn, self.export_btn):
+            analysis.addWidget(b)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
+        layout.addLayout(analysis)
+        layout.addWidget(self.include_alignment)
         layout.addWidget(self.hint)
         layout.addWidget(self.table)
 
@@ -330,6 +342,37 @@ class AffineZonesWindow(QWidget):
         )
 
     # ---- compute --------------------------------------------------------
+    def _alignment_toggled(self):
+        settings = self.ctx.get_settings()
+        settings["include_alignment_affines"] = self.include_alignment.isChecked()
+        self.ctx.save_settings(settings)
+        self._refresh()
+
+    def correction_at(self, cut):
+        if not self.include_alignment.isChecked():
+            return np.eye(2)
+        return self.ctx.alignment_affine(self.ctx.cut_to_global(cut))
+
+    def fit_zone(self, zone, ref_pts, cur_pts, cut, valid=None):
+        """Shared reported (indices, F) for tables, plots, export and gauge.
+
+        Membership/validity are determined before restoring deformation. Translation is
+        deliberately omitted; RANSAC continues to use the uncorrected pixel-space fit.
+        """
+        fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
+        if fit is None:
+            return None
+        indices, F, _b = fit
+        if self.include_alignment.isChecked():
+            F = compose_alignment_affines(F, self.correction_at(cut), self.correction_at(0))
+        if not np.isfinite(F).all() or np.linalg.det(F) <= 0 or np.linalg.cond(F) > 1e8:
+            return None
+        return indices, F
+
+    def analysis_label(self):
+        return ("Alignment scale/shear included; axes in restored, rotation-aligned coordinates."
+                if self.include_alignment.isChecked() else "Residual deformation in aligned image coordinates.")
+
     def _valid_at(self, cut):
         """Per-active-point bool mask: True where the track is valid at frame ``cut`` (LK didn't
         lose it). ``None`` if no result, which the fit functions treat as 'all points valid'."""
@@ -357,8 +400,7 @@ class AffineZonesWindow(QWidget):
         valid = self._valid_at(cut)
         out = []
         for zone in self.zones:
-            fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
-            out.append((fit[0], fit[1]) if fit is not None else None)
+            out.append(self.fit_zone(zone, ref_pts, cur_pts, cut, valid=valid))
         return out
 
     def _refresh(self):
@@ -386,7 +428,7 @@ class AffineZonesWindow(QWidget):
             self.hint.setText("On the reference frame F = I (λ1 = λ2 = 1); move the slider.")
         else:
             self.hint.setText(
-                f"{len(self.zones)} zone(s). Stretches map reference → current frame."
+                f"{len(self.zones)} zone(s). Stretches map reference → current frame. {self.analysis_label()}"
             )
         self._update_buttons()
         if self._gauge_window is not None and self._gauge_window.isVisible():
@@ -486,8 +528,11 @@ class AffineZonesWindow(QWidget):
 
     # ---- export ---------------------------------------------------------
     def _export(self):
+        corrected = self.ctx.has_sequence and self.include_alignment.isChecked() and any(
+            not np.array_equal(self.correction_at(cut), np.eye(2)) for cut in range(self.ctx.frame_count))
+        filename = "zone_stretches_with_alignment.csv" if corrected else "zone_stretches.csv"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export per-frame stretches", "zone_stretches.csv", "CSV (*.csv)"
+            self, "Export per-frame stretches — " + self.analysis_label(), filename, "CSV (*.csv)"
         )
         if not path:
             return
@@ -508,10 +553,10 @@ class AffineZonesWindow(QWidget):
                     cur_pts = coords[cut]
                     valid = None if status is None else (status[cut] == 1)
                     for z, zone in enumerate(self.zones):
-                        fit = fit_zone_deformation(zone.polygon, ref_pts, cur_pts, valid=valid)
+                        fit = self.fit_zone(zone, ref_pts, cur_pts, cut, valid=valid)
                         if fit is None:
                             continue
-                        local_idx, F, _b = fit
+                        local_idx, F = fit
                         lam1, lam2, v1, v2 = principal_stretches(F)
                         w.writerow([z + 1, ref_global + cut, local_idx.size,
                                     f"{lam1:.6f}", f"{lam2:.6f}",
@@ -745,7 +790,7 @@ class StretchPlotWindow(QWidget):
                 lam2 = np.full(self.ctx.frame_count, np.nan)
                 for t in range(self.ctx.frame_count):
                     valid = None if status is None else (status[t] == 1)
-                    fit = fit_zone_deformation(zone.polygon, ref_pts, coords[t], valid=valid)
+                    fit = self.owner.fit_zone(zone, ref_pts, coords[t], t, valid=valid)
                     if fit is None:
                         continue
                     lam1[t], lam2[t], _v1, _v2 = principal_stretches(fit[1])
@@ -754,6 +799,8 @@ class StretchPlotWindow(QWidget):
                 self.ax.plot(frames, lam2, "--", color=rgb, label=f"Zone {z + 1} λ2")
         self.ax.set_xlabel("frame (global index)")
         self.ax.set_ylabel("principal stretch λ")
+        self.ax.set_title("Including alignment scale/shear" if self.owner.include_alignment.isChecked()
+                          else "Residual deformation", fontsize="small")
         self.ax.grid(True, alpha=0.3)
         if self.owner.zones:
             self.ax.legend(fontsize="small", ncol=2)

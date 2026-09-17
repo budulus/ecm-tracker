@@ -18,7 +18,7 @@ single source of truth for deps.
 ```powershell
 uv sync                                   # create .venv (managed Python 3.12) + install deps
 
-uv run python -m app.main                 # launch the GUI (run from project root)
+uv run tracker                           # launch the GUI (run from project root)
 uv run python scripts/check.py            # full headless regression + syntax quality gate
 
 # Headless regression tests — runs every test_* function as a script:
@@ -26,7 +26,7 @@ $env:QT_QPA_PLATFORM = "offscreen"; uv run python -m tests.test_pipeline
 $env:QT_QPA_PLATFORM = "offscreen"; uv run python -m tests.test_plugins
 ```
 
-- **Always run from the project root.** Imports are absolute and rooted at the `app` package (`from app.core...`, `from app.gui...`); there is no installed package (`tool.uv.package = false`), so the root must be on `sys.path`.
+- **Run commands from the project root.** `uv sync` installs `app` in editable mode and creates the `tracker` command. Imports are absolute and rooted at the `app` package (`from app.core...`, `from app.gui...`). The original `uv run python -m app.main` command also works.
 - Tests live in `tests/test_pipeline.py` (core + GUI pipeline) and `tests/test_plugins.py` (plugin SDK/manager/context/canvas hooks) and run as plain scripts (the `__main__` block calls each `test_*` in turn). They are also pytest-compatible. `tests/synthetic.py` generates a synthetic sequence with known per-frame translation, giving ground-truth motion to validate tracking against.
 - `QT_QPA_PLATFORM=offscreen` is needed for the GUI test (`test_gui_pipeline`) and for all of `test_plugins` (it builds a real `MainWindow`); the core pipeline tests are Qt-free. Note: a headless `QApplication` must be kept referenced (an unreferenced one is GC'd, after which constructing any `QWidget` aborts) — see `_app()` in `test_plugins.py`.
 
@@ -59,7 +59,7 @@ It compiles the app into a standalone Windows binary and writes **two** artifact
 `ECMTracker-<version>-setup.exe` (a per-user Inno Setup installer — only produced if `ISCC.exe` is
 on the machine; otherwise the zip is still made and the `.iss` plus instructions are printed). The
 first run downloads Nuitka's MinGW64 toolchain (minutes); later rebuilds reuse its cache. This is a
-release-only step and never touches the normal `uv run python -m app.main` dev loop.
+release-only step and never touches the normal `uv run tracker` dev loop.
 
 **The core design: the app is compiled, the plugins are not.** Nuitka embeds CPython, so the frozen
 exe still interprets the loose `plugins/` folder shipped *next to* it — clients can read the SDK and

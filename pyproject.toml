@@ -11,8 +11,21 @@ dependencies = [
     "matplotlib>=3.7,<4",  # used by bundled analysis plugins for embedded plots
 ]
 
+[project.scripts]
+tracker = "app.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"app.gui" = ["icons/*.svg", "help.html"]
+
 [tool.uv]
-package = false                     # app, not an installable library — deps only
 python-preference = "only-managed"  # always use uv's own CPython, never system
 
 [dependency-groups]

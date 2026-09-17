@@ -32,3 +32,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.tmp.*
+
+# Local assistant instructions
+/CLAUDE.md
+/.claude/

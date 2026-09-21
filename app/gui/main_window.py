@@ -654,8 +654,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Saved pair setup to {self.state.pair_setup_path}", 6000)
 
     def _update_window_title(self) -> None:
-        """Reflect the loaded folder in the title bar (e.g. 'ECM Tracker - experiment_1')."""
-        name = os.path.basename(self.state.source_dir) if self.state.source_dir else None
+        """Reflect the loaded folder's full absolute path in the title bar."""
+        name = os.path.abspath(self.state.source_dir) if self.state.source_dir else None
         if isinstance(self.state.sequence, AlignedImagePairSequence):
             name = "Image Pair — " + " → ".join(os.path.basename(p) for p in self.state.sequence.paths)
         self.setWindowTitle(f"ECM Tracker - {name}" if name else "ECM Tracker")

@@ -3,367 +3,449 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ECM Tracker — Help</title>
+<meta name="description" content="The complete offline guide to ECM Tracker: image tracking, alignment, cleanup, exports, and analysis plugins.">
+<title>ECM Tracker — User manual</title>
 <style>
-  :root {
-    --accent: #2563eb;
-    --accent-soft: #eff4ff;
-    --ink: #1e293b;
-    --muted: #64748b;
-    --line: #e2e8f0;
-    --bg: #f8fafc;
-    --card: #ffffff;
-  }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.65;
-    font-size: 16px;
-  }
-  .wrap {
-    max-width: 820px;
-    margin: 0 auto;
-    padding: 0 24px 96px;
-  }
-
-  header.hero {
-    background: linear-gradient(135deg, var(--accent), #1d4ed8);
-    color: #fff;
-    padding: 48px 24px 40px;
-    text-align: center;
-    margin-bottom: 40px;
-  }
-  header.hero h1 {
-    margin: 0;
-    font-size: 2.4rem;
-    letter-spacing: -0.02em;
-  }
-  header.hero p {
-    margin: 10px 0 0;
-    font-size: 1.05rem;
-    opacity: 0.92;
-  }
-
-  nav.toc {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 18px 24px;
-    margin-bottom: 40px;
-  }
-  nav.toc strong {
-    display: block;
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 10px;
-  }
-  nav.toc ol {
-    margin: 0;
-    padding-left: 20px;
-    columns: 2;
-    column-gap: 32px;
-  }
-  nav.toc a { color: var(--accent); text-decoration: none; }
-  nav.toc a:hover { text-decoration: underline; }
-
-  section { margin-bottom: 40px; }
-  h2 {
-    font-size: 1.4rem;
-    margin: 0 0 6px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid var(--accent-soft);
-    letter-spacing: -0.01em;
-  }
-  h2 .num {
-    display: inline-block;
-    min-width: 1.7em;
-    color: var(--accent);
-    font-weight: 700;
-  }
-  h3 { font-size: 1.05rem; margin: 22px 0 4px; }
-  p { margin: 8px 0; }
-  ul { margin: 8px 0; padding-left: 22px; }
-  li { margin: 4px 0; }
-
-  .lead { color: var(--muted); }
-
-  .steps {
-    list-style: none;
-    counter-reset: step;
-    padding: 0;
-    margin: 16px 0 0;
-  }
-  .steps li {
-    counter-increment: step;
-    position: relative;
-    padding: 12px 16px 12px 56px;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    margin-bottom: 10px;
-  }
-  .steps li::before {
-    content: counter(step);
-    position: absolute;
-    left: 14px; top: 50%;
-    transform: translateY(-50%);
-    width: 28px; height: 28px;
-    background: var(--accent);
-    color: #fff;
-    border-radius: 50%;
-    display: grid; place-items: center;
-    font-weight: 700;
-    font-size: 0.9rem;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 14px 0;
-    font-size: 0.95rem;
-  }
-  th, td {
-    text-align: left;
-    padding: 9px 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  th {
-    background: var(--accent-soft);
-    color: var(--ink);
-    font-weight: 600;
-  }
-  tr:last-child td { border-bottom: none; }
-
-  kbd {
-    font-family: "SF Mono", ui-monospace, Consolas, "Liberation Mono", monospace;
-    font-size: 0.85em;
-    background: #f1f5f9;
-    border: 1px solid #cbd5e1;
-    border-bottom-width: 2px;
-    border-radius: 5px;
-    padding: 1px 7px;
-    white-space: nowrap;
-    color: var(--ink);
-  }
-
-  .tip {
-    background: var(--accent-soft);
-    border-left: 4px solid var(--accent);
-    border-radius: 0 8px 8px 0;
-    padding: 12px 16px;
-    margin: 16px 0;
-    color: #1e3a8a;
-  }
-  .tip strong { color: var(--accent); }
-
-  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: middle; margin-right: 2px; }
-  .kept { background: #22c55e; }
-  .dropped { background: #ef4444; }
-
-  footer {
-    text-align: center;
-    color: var(--muted);
-    font-size: 0.85rem;
-    border-top: 1px solid var(--line);
-    padding-top: 24px;
-  }
+:root{--ink:#17283d;--muted:#526277;--accent:#2058be;--soft:#edf3fc;--line:#dbe3ee;--paper:#fff;--ground:#f4f6fa;--green:#126645;--amber:#815312;--radius:12px}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:30px}body{margin:0;background:var(--ground);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}a{color:var(--accent);text-underline-offset:3px}a:hover{color:#153b83}button,summary,a{-webkit-tap-highlight-color:transparent}a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid #3072d7;outline-offset:4px}button{font:inherit;cursor:pointer}.skip{position:absolute;left:16px;top:-100px;background:white;padding:12px;z-index:10}.skip:focus{top:10px}
+.masthead{border-bottom:1px solid var(--line);background:var(--paper)}.masthead-inner{max-width:1320px;margin:auto;padding:20px 36px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{text-decoration:none;color:var(--ink);font-weight:750;letter-spacing:-.035em;font-size:20px;display:flex;align-items:center;gap:12px}.brand-mark{display:grid;grid-template-columns:repeat(2,5px);gap:5px;padding:9px;border:1px solid #a6bcdf;border-radius:7px}.brand-mark i{width:5px;height:5px;border-radius:50%;background:var(--accent)}.masthead-note{font-size:12px;color:var(--muted);letter-spacing:.04em}.shell{max-width:1320px;margin:auto;display:grid;grid-template-columns:220px minmax(0,1fr);gap:52px;padding:0 36px}
+.sidebar{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding:32px 0}.toc-label,.eyebrow{font-size:11px;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}.toc-label{color:var(--muted);margin:0 0 10px 11px}.toc-group{font-size:10px;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:24px 11px 7px}.sidebar nav a{display:flex;gap:10px;padding:6px 10px;margin:2px 0;text-decoration:none;color:var(--muted);font-size:13px;border-radius:7px;border-left:2px solid transparent;line-height:1.45}.sidebar nav a span{font-variant-numeric:tabular-nums;font-size:11px;opacity:.8;min-width:18px;margin-top:2px}.sidebar nav a:hover,.sidebar nav a[aria-current="location"]{color:var(--accent);background:#e7eef9;border-left-color:var(--accent)}.sidebar-note{font-size:12px;color:var(--muted);border-top:1px solid var(--line);margin:24px 10px 0;padding-top:15px}.mobile-toc{display:none}
+main{min-width:0;background:var(--paper);padding:48px 44px 32px;border-inline:1px solid var(--line)}.intro{padding:0 0 32px;border-bottom:1px solid var(--line)}h1{font-size:clamp(36px,4vw,54px);line-height:1.07;letter-spacing:-.045em;margin:16px 0 20px;font-weight:740}.intro .lead{font-size:19px;line-height:1.6;max-width:36em;color:var(--muted)}.intro-meta{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--muted);margin:22px 0}.intro-meta span:before{content:"";display:inline-block;width:5px;height:5px;background:var(--accent);border-radius:50%;margin:0 7px 2px 0}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:20px}.button{border:1px solid #c5d3e7;border-radius:7px;padding:7px 12px;background:white;color:var(--accent);font-size:12px;font-weight:650}.button:hover{background:var(--soft)}.button.primary{background:var(--accent);color:white;border-color:var(--accent);text-decoration:none}.js-only{display:none}.js .js-only{display:inline-block}
+section{padding-top:40px;margin-top:8px;scroll-margin-top:24px}section+section{border-top:1px solid var(--line);margin-top:38px}h2{display:flex;gap:14px;align-items:baseline;font-size:27px;line-height:1.25;letter-spacing:-.025em;margin:0 0 15px}h2 .num{font:600 12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--accent);flex:none}h3{font-size:18px;line-height:1.35;letter-spacing:-.015em;margin:27px 0 9px}h4{font-size:15px;margin:22px 0 8px}p{margin:10px 0}ul,ol{margin:10px 0;padding-left:22px}li{margin:7px 0;padding-left:3px}strong{font-weight:680}.section-lead{font-size:17px;color:var(--muted);margin-bottom:22px}.small{font-size:13px;color:var(--muted)}.steps{list-style:none;padding:0;counter-reset:steps;margin:22px 0}.steps>li{position:relative;padding:1px 0 16px 42px;margin:0;border-left:1px solid var(--line);margin-left:13px}.steps>li:last-child{border-left-color:transparent;padding-bottom:0}.steps>li:before{counter-increment:steps;content:counter(steps);position:absolute;left:-14px;top:0;width:27px;height:27px;display:grid;place-items:center;border-radius:50%;background:var(--soft);border:1px solid #cbdaf1;color:var(--accent);font-size:12px;font-weight:750}.steps p{margin:3px 0}.route-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.route{border:1px solid var(--line);border-radius:9px;padding:15px;text-decoration:none;color:var(--ink);background:#fbfcfe;font-size:13px}.route strong{display:block;font-size:14px;margin-bottom:4px}.route:hover{border-color:#91aeda;background:var(--soft)}
+.callout{padding:15px 18px;background:var(--soft);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;margin:20px 0;font-size:14px}.callout p:first-child{margin-top:0}.callout p:last-child{margin-bottom:0}.callout.warning{background:#fff8ec;border-color:#c38927;color:#60451b}.callout-label{display:block;margin-bottom:4px;font-size:11px;letter-spacing:.075em;text-transform:uppercase;font-weight:750}.table-wrap{overflow:auto;margin:16px 0;border:1px solid var(--line);border-radius:9px}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px;line-height:1.55}th{font-size:12px;color:#354d6b;background:#f1f5fb;font-weight:700}th,td{padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}td:first-child{font-weight:600}td p{margin:0}caption{text-align:left;font-size:13px;padding:10px 13px;font-weight:650;background:#f8fafd}code{font: .87em/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#f0f3f8;padding:2px 4px;border-radius:4px;overflow-wrap:anywhere}pre{background:#f4f6fa;padding:15px;border:1px solid var(--line);border-radius:8px;overflow:auto;font-size:13px;line-height:1.65}pre code{background:none;padding:0}kbd{display:inline-block;font: .82em/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#f7f9fc;border:1px solid #cbd5e2;border-bottom-width:2px;border-radius:4px;padding:1px 5px;white-space:nowrap}
+details.reference{margin:18px 0;border:1px solid var(--line);border-radius:9px;background:#fff;overflow:hidden}details.reference>summary{padding:13px 16px;color:var(--accent);font-size:14px;font-weight:650;cursor:pointer;background:#f8fafd}details.reference[open]>summary{border-bottom:1px solid var(--line)}.detail-body{padding:7px 17px 16px;font-size:14px}.detail-body .table-wrap{margin-inline:0}.detail-body h3{font-size:16px}.detail-body>p:first-child{margin-top:8px}
+figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#f4f5f7}figure a:hover{border-color:#779bcf}figure img{width:100%;height:auto;display:block}figcaption{font-size:12px;line-height:1.6;color:var(--muted);margin-top:10px}figcaption strong{color:#354d6b}.figure-stack{display:grid;gap:10px}.figure-pair{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px;align-items:start}.figure-pair a{height:100%;display:flex;align-items:center}.figure-pair img{object-fit:contain}.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;margin:14px 0}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.dot.green{background:#1a8b43}.dot.red{background:#d74343}.glossary{display:grid;grid-template-columns:145px minmax(0,1fr);gap:10px 20px;font-size:14px}.glossary dt{font-weight:650}.glossary dd{margin:0}.back-top{font-size:12px;text-decoration:none}.footer{border-top:1px solid var(--line);margin-top:45px;padding-top:20px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}
+@media(min-width:1500px){.shell{gap:64px}main{padding-inline:54px}}@media(max-width:1050px){.shell{grid-template-columns:190px minmax(0,1fr);gap:22px;padding-inline:20px}main{padding:36px 28px}.masthead-inner{padding-inline:22px}.sidebar nav a{font-size:12px}}@media(max-width:780px){.shell{display:block;padding:0 18px}.sidebar{display:none}.masthead-inner{padding:16px 20px}.masthead-note{font-size:10px}main{padding:30px 24px}.mobile-toc{display:block;margin:22px 0}.mobile-toc>summary{cursor:pointer;color:var(--accent);font-weight:650;padding:12px 0}.mobile-toc nav{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;padding:6px 0 12px;font-size:13px}.mobile-toc a{text-decoration:none}h2{font-size:24px}.figure-pair{grid-template-columns:1fr}.figure-pair a:last-child{max-width:240px;justify-self:center}}@media(max-width:480px){body{font-size:15px}.shell{padding:0}main{border:0;padding:25px 20px}.masthead-note{display:none}.intro .lead{font-size:17px}.route-grid{grid-template-columns:1fr}.route{padding:12px 14px}.route strong{margin-bottom:0}h2{gap:10px;font-size:23px}th,td{padding:9px 10px;font-size:13px}.glossary{grid-template-columns:1fr;gap:3px}.glossary dd{margin-bottom:12px}.steps>li{padding-left:30px}.detail-body{padding-inline:12px}section{padding-top:30px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{@page{margin:16mm}body{font-size:10pt;line-height:1.5;background:white;color:#111}.masthead,.sidebar,.mobile-toc,.actions,.route-grid,.back-top,.skip{display:none!important}.shell{display:block;max-width:none;padding:0}main{border:0;padding:0}h1{font-size:30pt}h2{font-size:19pt}h3{font-size:13pt}h2,h3,h4,summary{break-after:avoid}section{padding-top:22px}section+section{margin-top:24px}a{color:inherit;text-decoration:none}.intro{padding-bottom:18px}.intro .lead{font-size:12pt}.table-wrap{overflow:visible}table{font-size:9pt}th,td{padding:7px 9px}tr,figure,.callout{break-inside:avoid}details.reference{overflow:visible;break-inside:auto}details.reference>summary{font-size:10pt}details.reference::details-content{content-visibility:visible!important;display:block!important}.detail-body{font-size:10pt}.figure-stack{display:block}.figure-stack>a{margin-bottom:10px;break-inside:avoid}.figure-stack img{max-height:100mm}.figure-pair{display:block}.figure-pair>a{margin:10px auto;max-width:75%}figure img{max-height:145mm;object-fit:contain}figcaption{font-size:9pt}.footer{font-size:9pt}.callout,.callout.warning{background:#f5f5f5;color:#111}.small{font-size:9pt}}
 </style>
 </head>
-<body>
-
-<header class="hero">
-  <h1>ECM Tracker</h1>
-  <p>Track image features through a sequence of frames — seed, track, refine, export.</p>
+<body id="top">
+<a class="skip" href="#manual">Skip to manual</a>
+<header class="masthead"><div class="masthead-inner"><a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>ECM Tracker</a><span class="masthead-note">USER MANUAL &nbsp; / &nbsp; OFFLINE REFERENCE</span></div></header>
+<div class="shell">
+<aside class="sidebar" aria-label="Manual navigation">
+<p class="toc-label">In this guide</p>
+<nav aria-label="Contents">
+<a href="#workflow"><span>01</span>Quick start &amp; workspace</a>
+<a href="#loading"><span>02</span>Images &amp; frames</a>
+<a href="#pairs"><span>03</span>Image-pair alignment</a>
+<a href="#roi"><span>04</span>Regions &amp; points</a>
+<a href="#track"><span>05</span>Tracking &amp; parameters</a>
+<a href="#cleanup"><span>06</span>Cleanup &amp; undo</a>
+<a href="#display"><span>07</span>Viewing &amp; display</a>
+<a href="#export"><span>08</span>Save, reopen &amp; export</a>
+<p class="toc-group">Analysis tools</p>
+<a href="#affine"><span>09</span>Affine Zone Tool</a>
+<a href="#mts"><span>10</span>MTS Uniaxial</a>
+<a href="#pressure"><span>11</span>Pressure–Strain</a>
+<p class="toc-group">Keep at hand</p>
+<a href="#plugins"><span>12</span>Plugin management</a>
+<a href="#shortcuts"><span>13</span>Shortcuts &amp; gestures</a>
+<a href="#troubleshooting"><span>14</span>Troubleshooting &amp; terms</a>
+</nav>
+<p class="sidebar-note">New to the app? Start with the five steps.<br><br>Looking up a setting? Expand the reference panels, then use your browser’s Find command.</p>
+</aside>
+<main id="manual">
+<header class="intro">
+<div class="eyebrow">Images → tracks → measurements</div>
+<h1>ECM Tracker<br>User manual</h1>
+<p class="lead">Track features through an image sequence, refine the results, and turn their motion into useful measurements.</p>
+<div class="intro-meta"><span>Core workflow</span><span>Image pairs</span><span>All three analysis plugins</span></div>
+<p class="small">Read the short workflows in order, or jump to a tool. Expand the reference panels for settings and data formats. Screenshots use demonstration data; click any image to inspect it at full resolution.</p>
+<div class="actions"><a class="button primary" href="#workflow">Start tracking ↓</a><button class="button js-only" id="expand-all" type="button" aria-expanded="false">Expand all references</button><button class="button js-only" id="print-manual" type="button">Print / save PDF</button></div>
+<noscript><p class="small">Reference panels work without JavaScript. Open the panels you need before finding text or printing.</p></noscript>
 </header>
+<details class="mobile-toc"><summary>Jump to a section</summary><nav aria-label="Compact contents">
+<a href="#workflow">01 · Quick start</a><a href="#loading">02 · Images &amp; frames</a><a href="#pairs">03 · Image pairs</a><a href="#roi">04 · Regions &amp; points</a><a href="#track">05 · Tracking</a><a href="#cleanup">06 · Cleanup</a><a href="#display">07 · Display</a><a href="#export">08 · Save &amp; export</a><a href="#affine">09 · Affine zones</a><a href="#mts">10 · MTS Uniaxial</a><a href="#pressure">11 · Pressure–Strain</a><a href="#plugins">12 · Plugins</a><a href="#shortcuts">13 · Shortcuts</a><a href="#troubleshooting">14 · Troubleshooting</a>
+</nav></details>
 
-<div class="wrap">
+<section id="workflow">
+<h2><span class="num">01</span>Quick start &amp; workspace</h2>
+<p class="section-lead">A complete tracking run in five steps.</p>
+<ol class="steps">
+<li><strong>Open your images.</strong><p>Choose <strong>File → Open Directory…</strong> for a sequence, or <strong>Open Files…</strong> for selected images.</p></li>
+<li><strong>Choose the range.</strong><p>In the left <strong>Frame Range</strong> pane, set <strong>Reference</strong> and <strong>Last</strong>. Click the toolbar’s <strong>Reference</strong> button to show the starting image.</p></li>
+<li><strong>Choose what to track.</strong><p>Use <strong>ROI → Define → Rectangle</strong> and drag around the specimen. Click <strong>Corners</strong> to find features, or <strong>Grid</strong> to seed regular points.</p></li>
+<li><strong>Run and inspect.</strong><p>Click the blue <strong>Run</strong> button. Move <strong>Current</strong> through the sequence and use <strong>Cleanup</strong> to preview and remove poor tracks.</p></li>
+<li><strong>Save your work, then export.</strong><p><strong>File → Save Trackers…</strong> preserves an editable tracking snapshot. The toolbar’s <strong>Export</strong> dropdown writes coordinates for analysis.</p></li>
+</ol>
+<div class="route-grid"><a class="route" href="#pairs"><strong>Two images?</strong>Align the pair before tracking.</a><a class="route" href="#mts"><strong>MTS experiment?</strong>Start in MTS Uniaxial.</a><a class="route" href="#pressure"><strong>Pressure logger?</strong>Add pressure after loading images.</a></div>
+<figure><a href="help-assets/workspace.png"><img src="help-assets/workspace.png" width="3200" height="1700" alt="ECM Tracker showing the toolbar, left Frame Range and Plugins pane, and a speckle image with an ROI and tracked points."></a><figcaption><strong>Your workspace.</strong> Tools are grouped across the top; frame controls and plugin launch buttons sit on the left. The status bar identifies the current image and tracked range.</figcaption></figure>
+<p>Drag the divider beside the image to resize or collapse the left pane; drag it back to reveal the controls. Its width is remembered. Launch analysis tools from the pane’s <strong>Plugins</strong> buttons. The top <strong>Plugins</strong> menu manages installation and reloading.</p>
+</section>
 
-  <nav class="toc">
-    <strong>Contents</strong>
-    <ol>
-      <li><a href="#workflow">The workflow</a></li>
-      <li><a href="#loading">Loading images</a></li>
-      <li><a href="#frames">Choosing frames</a></li>
-      <li><a href="#roi">Defining a region (ROI)</a></li>
-      <li><a href="#detect">Detecting features</a></li>
-      <li><a href="#track">Tracking</a></li>
-      <li><a href="#cleanup">Cleaning up tracks</a></li>
-      <li><a href="#display">Display options</a></li>
-      <li><a href="#export">Exporting</a></li>
-      <li><a href="#plugins">Plugins</a></li>
-      <li><a href="#shortcuts">Keyboard shortcuts</a></li>
-    </ol>
-  </nav>
+<section id="loading">
+<h2><span class="num">02</span>Images &amp; frames</h2>
+<p><strong>Open Directory…</strong> reads supported images directly inside a folder; <strong>Open Files…</strong> uses your selection. Both sort names numerically, so <code>image_2</code> precedes <code>image_10</code>. Supported extensions are <strong>PNG, JPG/JPEG, BMP, and TIF/TIFF</strong>.</p>
+<p>Ordinary sequences must have matching image dimensions. Color and grayscale images are normalized internally; tracking uses grayscale. For two differently sized images, use <a href="#pairs">Open Image Pair…</a>. MTS uses acquisition-log order instead of filename sorting.</p>
+<h3 id="frames">Choose the tracking range</h3>
+<div class="table-wrap"><table><thead><tr><th scope="col">Control</th><th scope="col">Purpose</th></tr></thead><tbody>
+<tr><td>Current</td><td>The displayed image. Browse freely, including outside the tracking range; tracked markers appear only inside that range.</td></tr>
+<tr><td>Reference</td><td>The first tracked image. Define the ROI and seed points here.</td></tr>
+<tr><td>Last</td><td>The final tracked image, included in the range.</td></tr>
+<tr><td>Reference / Prev / Next / Last</td><td>Toolbar buttons jump to a range endpoint or step one image. The left/right arrow keys step while the image canvas has focus.</td></tr>
+</tbody></table></div>
+<p>Use either a slider or its number field. Frame controls use <strong>zero-based indices</strong>: <code>0</code> is the first loaded image. In the status bar, <strong>Frame 1/N</strong> is a human-readable count; <strong>cut 0</strong> means the reference image within the tracked range.</p>
+<div class="callout warning"><span class="callout-label">Before changing the range</span>Reference and Last are locked while a tracking result exists. Use <strong>Track → Clear</strong> first. Changing Reference then clears the ROI and seed points; changing only Last keeps them.</div>
+<details class="reference"><summary>Image validation and intensity conversion</summary><div class="detail-body"><p>Loading validates every image before replacing the sequence; you can cancel the progress dialog. Unreadable files or inconsistent dimensions prevent the new sequence from loading. Keep source images unchanged while working.</p><p>16-bit pixels are mapped to 8-bit by division by 257. Floating-point images in [0, 1] are scaled to [0, 255]; other floating values are clipped to that range. Alpha is discarded. This conversion is for display and tracking; originals are untouched.</p></div></details>
+</section>
 
-  <section id="workflow">
-    <h2><span class="num">1</span>The workflow</h2>
-    <p class="lead">ECM Tracker follows a simple five-step pipeline. Work through it top to bottom — the toolbar is grouped in the same order.</p>
-    <ol class="steps">
-      <li><strong>Load</strong> an image sequence (a folder or a set of files).</li>
-      <li><strong>Define a region of interest (ROI)</strong> on your reference frame.</li>
-      <li><strong>Seed feature points</strong> inside the ROI — automatic corners or a regular grid.</li>
-      <li><strong>Track</strong> the points across the frame range, forward and backward.</li>
-      <li><strong>Clean up</strong> low-quality tracks, then <strong>export</strong> the survivors.</li>
-    </ol>
-  </section>
+<section id="pairs">
+<h2><span class="num">03</span>Image-pair alignment</h2>
+<p class="section-lead">Bring two images into a shared coordinate system before tracking their remaining motion.</p>
+<ol>
+<li>Choose <strong>File → Open Image Pair…</strong> and select the <strong>reference</strong> and <strong>destination</strong> images in that order.</li>
+<li>Drag the destination over the fixed reference. Adjust <strong>Destination opacity</strong> to compare matching features; 50% shows both.</li>
+<li>Choose a deformation mode, adjust alignment, then select <strong>Apply Alignment</strong>. Both images are cropped to the green valid-overlap rectangle.</li>
+<li>Continue with the normal ROI, detection, tracking, and cleanup workflow.</li>
+</ol>
+<figure><a href="help-assets/alignment.png"><img src="help-assets/alignment.png" width="2240" height="1520" loading="lazy" alt="Align Image Pair dialog showing overlaid images, the green valid crop, a yellow pivot, deformation mode, rotation, offsets, and opacity controls."></a><figcaption><strong>Align, then crop.</strong> The green rectangle defines the usable image area. The yellow pivot anchors scale and affine adjustments; the orange handle controls enabled rotation.</figcaption></figure>
+<div class="table-wrap"><table><thead><tr><th scope="col">Control</th><th scope="col">How it works</th></tr></thead><tbody>
+<tr><td>Translation</td><td>Move the destination without changing its shape. Positive X moves right; positive Y moves down.</td></tr>
+<tr><td>Uniform Scale</td><td>Use the scale percentage or square corner handles. Aspect ratio is preserved.</td></tr>
+<tr><td>Affine</td><td>Drag square corner handles to adjust stretch and shear while keeping opposite edges parallel. The scale percentage preserves the current affine proportions.</td></tr>
+<tr><td>Rotation</td><td>Enable the checkbox, then use the angle field or orange round handle. Positive angles rotate clockwise about the destination’s center. Disabling rotation remembers the angle.</td></tr>
+<tr><td>Set Pivot / Clear Pivot</td><td>Translate a feature into place, choose Set Pivot, then click it on the destination. Scaling and affine adjustments hold that point fixed. Clear Pivot restores default anchoring without moving the image.</td></tr>
+<tr><td>X / Y offset</td><td>Enter offsets in pixels, or use arrow keys on the alignment canvas for 1-pixel steps; Shift+arrow gives 10-pixel steps.</td></tr>
+<tr><td>− / + / Fit View</td><td>Zoom out, zoom in, or fit both images. Wheel zoom and Space+drag or right-drag pan also work.</td></tr>
+<tr><td>Reset Alignment</td><td>Clear offsets, deformation presets, rotation, and pivot.</td></tr>
+</tbody></table></div>
+<p>Without a pivot, corner dragging anchors the opposite corner; the scale percentage anchors the center. Each deformation mode remembers its settings. A selected pivot survives mode switches and follows its feature during translation and rotation. Escape cancels pivot picking; zoom and pan remain available.</p>
+<p><strong>Apply Alignment</strong> needs a nonempty valid overlap. Integer-only translation uses exact pixel crops; other transforms resample the original destination once. Source files are never changed.</p>
+<h3>Save or revise an alignment</h3>
+<p><strong>File → Save Pair Setup…</strong> writes an <code>.ecmpair.json</code> file with source references and alignment, even before you seed points. Use <strong>Open Pair Setup…</strong> to restore it. Keep both originals; relative source paths let you move the setup and images together.</p>
+<p><strong>Parameters → Adjust Pair Alignment…</strong> reopens the original images. Cancel or unchanged geometry preserves your work. Applying changed geometry asks before clearing the ROI, points, tracking, and cleanup history. Pivot-only changes preserve tracking. Save the revised setup afterwards; save trackers separately.</p>
+<div class="callout"><span class="callout-label">What the motion means</span>Tracking and coordinate exports measure <strong>residual motion after alignment</strong>. The Affine Zone Tool can restore alignment scale/shear in its analysis; the other plugins analyze residual motion.</div>
+<details class="reference" id="pair-coordinates"><summary>Coordinate recovery and alignment correction</summary><div class="detail-body">
+<p>The cropped image’s upper-left pixel is <code>(0, 0)</code>. To recover an original reference coordinate, add the saved crop origin. To recover an original destination coordinate, add the crop origin to its tracked coordinate and apply the inverse saved destination-to-reference alignment. Subtracting the offset alone is correct only for translation.</p>
+<p>The Affine Zone Tool’s <strong>Include alignment affine maps if present</strong> is on by default. It restores alignment scale/shear in tables, curves, CSV, and the gauge, while excluding alignment translation and rigid rotation. Directions use restored, rotation-aligned axes; gauge arrows are mapped back to the aligned image. Turn it off to inspect residual deformation.</p>
+</div></details>
+</section>
 
-  <section id="loading">
-    <h2><span class="num">2</span>Loading images</h2>
-    <p>From the <strong>File</strong> menu (or the toolbar):</p>
-    <ul>
-      <li><strong>Open Directory…</strong> (<kbd>Ctrl</kbd>+<kbd>O</kbd>) — load every image in a folder, in name order.</li>
-      <li><strong>Open Files…</strong> — pick an explicit set of images.</li>
-      <li><strong>Open Image Pair…</strong> — choose a reference image and a destination image, then align them before tracking.</li>
-    </ul>
-    <p>Images of any common format are accepted and normalised internally, so colour and grayscale sources mix freely.</p>
-    <h3>Two-frame tracking</h3>
-    <p>In the alignment window, the reference stays fixed while you drag the destination over it.
-      Adjust <strong>Destination opacity</strong> to compare features. Use the X/Y offsets or arrow keys
-      for one-pixel adjustments; hold Shift with an arrow key for ten pixels. Positive X moves right,
-      and positive Y moves down. Scroll to zoom, and use Space+drag or right-drag to pan.</p>
-    <p>Choose <strong>Translation</strong>, <strong>Uniform Scale</strong>, or <strong>Affine</strong>.
-      Scale handles preserve aspect ratio; affine handles adjust stretch and shear while preserving
-      parallel edges. By default, corner handles keep the opposite corner fixed and the scale percentage
-      scales about the center, preserving existing affine proportions. Each mode remembers its settings.</p>
-    <p>To keep an aligned feature fixed while scaling, translate it into place first, click
-      <strong>Set Pivot</strong>, then click that feature on the destination image. A yellow marker shows
-      the pivot. Both the scale percentage and corner handles keep it fixed, including affine adjustments
-      and switching deformation modes. Zoom and pan remain available while picking; Escape cancels picking.
-      Translation and rotation carry the pivot with the feature. <strong>Clear Pivot</strong> restores
-      default scaling without moving the image. The pivot is remembered when reopening alignment and
-      saving or loading a pair setup; choosing or clearing it alone preserves tracking.</p>
-    <p>Enable <strong>Rotation</strong> in any mode, then use the angle field or orange round handle.
-      Rotation is clockwise about the destination center. Turning it off remembers the angle for later.
-      <strong>Reset Alignment</strong> clears all offsets, rotation, deformation presets, and the pivot.</p>
-    <p>The green boundary is the largest fully valid rectangular overlap. <strong>Apply Alignment</strong>
-      crops both images to this area. Integer translations use exact pixel crops; other transforms resample
-      the original destination once. Different dimensions, scales, and orientations are allowed.
-      Originals stay unchanged. Continue with the usual ROI, detection, tracking, and cleanup tools.</p>
-    <div class="tip"><strong>Coordinates:</strong> tracking measures the remaining motion after the manual
-      alignment is removed. Coordinates in tracking and coordinate exports start at the cropped image's
-      upper-left corner. Add the saved crop origin to recover original reference coordinates;
-      for original destination coordinates, apply the inverse saved alignment to those reference-space
-      coordinates (subtracting the shift alone works only for translation).</div>
-    <p>In the <strong>Affine Zone Tool</strong>, <strong>Include alignment affine maps if present</strong>
-      is enabled by default. It restores alignment scale/shear in the table, plots, CSV, and direction
-      gauge, while excluding alignment translation and rigid rotation. Disable it to inspect residual
-      deformation. Reported directions use restored, rotation-aligned axes; gauge arrows are mapped
-      back onto the aligned image. Other analysis plugins continue to analyze residual motion.</p>
-    <p>Use <strong>File → Save Pair Setup…</strong> to save the source-image references and alignment
-      in an <code>.ecmpair.json</code> file, even before defining points. Reopen it with
-      <strong>Open Pair Setup…</strong>; keep the original images available. Relative image paths allow
-      moving a setup and its images together. Save tracking separately with <strong>Save Trackers…</strong>,
-      then restore it with <strong>Load Trackers…</strong> after reopening the same pair setup.</p>
-    <p><strong>Parameters → Adjust Pair Alignment…</strong> reopens the original images for adjustment.
-      Cancelling or applying unchanged geometry preserves your work. Applying changed geometry asks before
-      clearing the ROI, points, tracking, and cleanup history. Save the updated pair setup afterwards.</p>
-  </section>
+<section id="roi">
+<h2><span class="num">04</span>Regions &amp; feature points</h2>
+<p>A <strong>region of interest (ROI)</strong> limits automatic seeding. It is defined on the reference image and stays fixed in image coordinates; it does not follow the material.</p>
+<h3>Draw a region</h3>
+<p>On the reference image, open <strong>ROI → Define</strong>: <strong>Rectangle</strong> draws corner-to-corner; <strong>Circle</strong> draws from center to radius; <strong>N-Gon</strong> accepts left-clicked vertices and a right-click to close, with at least three vertices. Press <kbd>Esc</kbd> to cancel an unfinished region. The shortcuts <kbd>R</kbd>, <kbd>C</kbd>, and <kbd>N</kbd> also jump to Reference before drawing.</p>
+<p><strong>ROI → Clear</strong> removes the region and seed points, confirming before discarding a tracking result. Starting a replacement ROI also asks to discard existing tracking. Leaving the reference image cancels an unfinished ROI.</p>
+<h3>Seed and edit points</h3>
+<div class="table-wrap"><table><thead><tr><th scope="col">Tool</th><th scope="col">Use</th></tr></thead><tbody>
+<tr><td>Corners</td><td>Detect strong image features within the ROI using Shi–Tomasi, or Harris if enabled in Parameters. Usually the best starting point for textured images.</td></tr>
+<tr><td>Grid</td><td>Place regularly spaced points within the ROI, regardless of texture. Flat areas may not track reliably.</td></tr>
+<tr><td>Add</td><td>Click to add individual seeds anywhere inside the image, even without an ROI. Available on Reference before tracking.</td></tr>
+<tr><td>Delete</td><td>Click near a point to remove it. Before tracking this deletes a seed; after tracking it excludes a whole track from the active set.</td></tr>
+<tr><td>Manage</td><td>Open Point Manager, select rows or click points on the image, then choose Delete selected. Selected points have red rings.</td></tr>
+</tbody></table></div>
+<p>Click Add or Delete again to leave that mode, or choose another tool. Running Corners or Grid <strong>replaces</strong> the seed set; it does not append points. Existing tracking must be discarded before detection replaces it. After redrawing the ROI, run detection again to replace old seeds with points in the new region.</p>
+<p>In Point Manager, <kbd>Ctrl</kbd>-click (<kbd>⌘</kbd>-click on macOS) toggles individual selections; <kbd>Shift</kbd>-click selects a range. Before tracking it lists seeds; afterwards it lists active tracks with FB mean and the result’s LK quality measure. Lower photometric error is better; higher minimum eigenvalue is better.</p>
+<div class="callout warning"><span class="callout-label">Deletion and undo</span>Seed deletion is not undoable. Track deletion, bulk deletion, cleanup, and plugin RANSAC exclusions share the <strong>Cleanup → Undo last cleanup</strong> history.</div>
+<details class="reference" id="detect"><summary>Corner and grid parameters — all settings</summary><div class="detail-body">
+<p>Open <strong>Parameters → Corner Detection…</strong> or <strong>Grid…</strong>. Defaults below are the built-in values; saved defaults can override them.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead><tbody>
+<tr><td><code>maxCorners</code></td><td>500</td><td>Maximum detected points. Increase to allow more features.</td></tr>
+<tr><td><code>qualityLevel</code></td><td>0.01</td><td>Minimum corner quality relative to the strongest corner. Lower admits weaker features.</td></tr>
+<tr><td><code>minDistance</code></td><td>7 px</td><td>Minimum separation between detected corners.</td></tr>
+<tr><td><code>blockSize</code></td><td>7 px</td><td>Neighborhood used to evaluate corner quality.</td></tr>
+<tr><td><code>useHarrisDetector</code></td><td>Off</td><td>Switch from Shi–Tomasi to Harris detection.</td></tr>
+<tr><td><code>k (Harris)</code></td><td>0.04</td><td>Harris sensitivity coefficient; used only when Harris is enabled.</td></tr>
+<tr><td><code>spacing_x</code> / <code>spacing_y</code></td><td>20 / 20 px</td><td>Horizontal and vertical grid spacing. Smaller spacing creates more points.</td></tr>
+</tbody></table></div>
+<p><strong>OK</strong> uses changes in this session; <strong>Cancel</strong> leaves the session settings unchanged. <strong>Save as defaults</strong> separately writes the displayed values for future sessions, even if you subsequently cancel. Changing parameters does not regenerate points; run the detection tool again.</p>
+</div></details>
+</section>
 
-  <section id="frames">
-    <h2><span class="num">3</span>Choosing frames</h2>
-    <p>Three sliders at the bottom of the window control which frames you see and track:</p>
-    <ul>
-      <li><strong>Reference</strong> — the start of the tracked range. Your ROI and feature points are defined here.</li>
-      <li><strong>Last</strong> — the end of the tracked range.</li>
-      <li><strong>Current</strong> — the frame currently shown on the canvas (move it freely to inspect any frame).</li>
-    </ul>
-    <div class="tip"><strong>Note:</strong> changing the Reference frame or the ROI invalidates an existing tracking result, so you'll be asked to confirm before it is discarded.</div>
-  </section>
+<section id="track">
+<h2><span class="num">05</span>Tracking &amp; parameters</h2>
+<p>With at least one seed, click <strong>Track → Run</strong>. Pyramidal Lucas–Kanade (LK) follows points from Reference to Last, then tracks backward from Last to Reference. The backward pass checks consistency. <strong>Cancel</strong> stops the run without installing partial results.</p>
+<p>Scrub Current to check that markers follow actual features. A failed point remains invalid for the rest of that pass; a visible marker does not guarantee a fully valid track. <strong>Track → Clear</strong> discards results and cleanup history after confirmation, but keeps the ROI and seeds.</p>
+<div class="callout warning"><span class="callout-label">Running again</span>A successful rerun replaces the result, resets the active set, and clears cleanup history. Save trackers first if you want to retain the previous result.</div>
+<details class="reference"><summary>Tracker parameters — all settings and tuning</summary><div class="detail-body">
+<p>Open <strong>Parameters → Tracker…</strong>. Changes affect the next run; they do not recalculate an existing result. OK, Cancel, and Save as defaults work as described in the <a href="#detect">parameter reference</a>.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead><tbody>
+<tr><td><code>winSize (square)</code></td><td>21 px</td><td>Width and height of the local tracking window. Larger windows include more texture but blend more local deformation.</td></tr>
+<tr><td><code>maxLevel</code></td><td>3</td><td>Highest image-pyramid level; 0 uses only the original resolution. More levels can accommodate larger inter-frame motion.</td></tr>
+<tr><td><code>criteria max iter</code></td><td>30</td><td>Maximum refinement iterations per pyramid level.</td></tr>
+<tr><td><code>criteria epsilon</code></td><td>0.01</td><td>Convergence threshold for a refinement step; smaller values demand tighter convergence.</td></tr>
+<tr><td>Error measure</td><td>Standard LK error</td><td>Photometric mismatch (lower is better), or Minimum eigenvalue (higher is better). This determines which quality filters are available.</td></tr>
+<tr><td><code>minEigThreshold</code></td><td>0.0001</td><td>Reject insufficiently textured tracking windows using their minimum eigenvalue.</td></tr>
+</tbody></table></div>
+<p>Start with defaults. If points lose fast motion, try a larger window or more pyramid levels. If too few features exist, improve texture or adjust detection. Check the image and errors after every change; no threshold guarantees a correct track.</p>
+</div></details>
+<details class="reference"><summary>What the error measures mean</summary><div class="detail-body">
+<p><strong>FB mean / FB max</strong> are the mean and maximum distances, in pixels, between forward and backward positions at matching valid frames. The final frame is excluded because it seeds the backward pass and its discrepancy is necessarily zero. These are consistency measures, not calibrated measurement uncertainty.</p>
+<p><strong>Photometric error</strong> describes image mismatch, not displacement in pixels. Its maximum and mean exclude the reference seed frame. In minimum-eigenvalue mode the quality value instead measures local trackability; the cleanup threshold uses the minimum over valid forward transitions. Unavailable or insufficiently supported measures may be infinite or invalid.</p>
+</div></details>
+</section>
 
-  <section id="roi">
-    <h2><span class="num">4</span>Defining a region (ROI)</h2>
-    <p>The ROI bounds where features are seeded. Use the <strong>Define</strong> button's dropdown to pick a shape:</p>
-    <ul>
-      <li><strong>Rectangle</strong> — click and drag a box.</li>
-      <li><strong>Circle</strong> — click the centre and drag out the radius.</li>
-      <li><strong>N-Gon</strong> — free-form polygon: <em>left-click</em> to drop each vertex, then <em>right-click</em> to close the shape (needs at least three points).</li>
-    </ul>
-    <div class="tip">Press <kbd>Esc</kbd> at any time to cancel a region you're in the middle of drawing.</div>
-  </section>
+<section id="cleanup">
+<h2><span class="num">06</span>Cleanup &amp; undo</h2>
+<p>Open <strong>Track → Cleanup</strong>. Check a filter to enable it, then adjust its threshold while inspecting the live preview. A point must pass <strong>every enabled filter</strong> to survive.</p>
+<div class="legend"><span><i class="dot green" aria-hidden="true"></i><strong>Green:</strong> would keep</span><span><i class="dot red" aria-hidden="true"></i><strong>Red:</strong> would drop</span></div>
+<figure><div class="figure-pair"><a href="help-assets/cleanup-controls.png"><img src="help-assets/cleanup-controls.png" width="1260" height="1044" loading="lazy" alt="Cleanup dialog with the maximum single-step distance filter enabled at 2.5 pixels and a count of 158 out of 160 points kept."></a><a href="help-assets/cleanup-preview.png"><img src="help-assets/cleanup-preview.png" width="600" height="996" loading="lazy" alt="Close-up of the image canvas with green retained tracks and red tracks rejected by the cleanup preview."></a></div><figcaption><strong>Preview before applying.</strong> The distance threshold keeps 158 of 160 points; the canvas crop shows the rejected tracks. Thresholds depend on the experiment; this is not a recommended universal value.</figcaption></figure>
+<p><strong>Apply cleanup</strong> removes previewed outliers from the active set. Closing the dialog only dismisses the preview; it does not apply it or reverse changes already applied. Excluded points stay in the underlying result.</p>
+<p><strong>Undo last cleanup</strong> restores the preceding active set, including exclusions made by Delete, Point Manager, or RANSAC. Loosening a threshold does not bring points back; undo the exclusion instead. Undo history ends when results are cleared, replaced, or reloaded.</p>
+<details class="reference"><summary>Every cleanup filter and control</summary><div class="detail-body">
+<div class="table-wrap"><table><thead><tr><th scope="col">Filter</th><th scope="col">Keeps points with…</th></tr></thead><tbody>
+<tr><td>Forward / Backward status failures</td><td>No more than the allowed number of invalid frames in the respective pass. Zero requires validity throughout that pass.</td></tr>
+<tr><td>Max / Mean OpenCV error</td><td>Forward photometric mismatch at or below the threshold. Available for standard LK error only.</td></tr>
+<tr><td>FB mean / FB max error</td><td>Forward–backward discrepancy at or below the threshold, in pixels.</td></tr>
+<tr><td>Distance (max single step)</td><td>Largest valid consecutive-frame displacement at or below the threshold, in pixels. This is not total displacement.</td></tr>
+<tr><td>Minimum LK eigenvalue (keep ≥)</td><td>Minimum valid forward quality at or above the threshold. Available in minimum-eigenvalue mode only.</td></tr>
+<tr><td>Drop points that leave image bounds</td><td>No valid forward position outside the image.</td></tr>
+<tr><td>Drop points that leave ROI bounds</td><td>No valid forward position outside the fixed reference ROI. Without a completed ROI, this excludes nothing.</td></tr>
+</tbody></table></div>
+<p><strong>Threshold</strong> is the cutoff. The <strong>max</strong> number box sets the slider’s scale, not a second filter; reducing it can clamp the threshold. Unchecked filters are ignored. Error-kind-incompatible filters are disabled.</p>
+<p><strong>Save parameters</strong> remembers the filters, thresholds, and scales for future cleanup dialogs. <strong>Reset thresholds</strong> returns to the dialog’s loaded defaults, or its most recently saved settings; without saved settings, filters start disabled. Reset does not undo applied exclusions.</p>
+</div></details>
+</section>
 
-  <section id="detect">
-    <h2><span class="num">5</span>Detecting features</h2>
-    <p>With an ROI in place, seed the points to track. Two strategies are available from the <strong>Detect</strong> toolbar group:</p>
-    <ul>
-      <li><strong>Corners (Shi-Tomasi)</strong> — finds strong, trackable corner features automatically.</li>
-      <li><strong>Grid</strong> — lays down a regular grid of points, regardless of image content.</li>
-    </ul>
-    <p>Fine-tune either method under <strong>Parameters → Corner Detection…</strong> and <strong>Grid…</strong>. Your settings are remembered between sessions.</p>
-  </section>
+<section id="display">
+<h2><span class="num">07</span>Viewing &amp; display</h2>
+<p>The toolbar’s <strong>View</strong> group provides <strong>Zoom In</strong>, <strong>Zoom Out</strong>, <strong>Fit</strong>, <strong>Pan</strong>, and <strong>Display</strong>. A mouse wheel zooms around the pointer. Middle/right-drag pans; Pan mode or holding Space enables left-drag panning. Double-click fits the image.</p>
+<p>On a trackpad, two-finger scrolling pans; <kbd>Ctrl</kbd>+scroll (<kbd>⌘</kbd> on macOS) zooms. Native macOS pinch gestures also zoom. Right-click finishes a polygon or zone when its drawing tool is active, instead of panning.</p>
+<p>Open <strong>Display</strong> for <strong>Show trackers</strong>, marker size (radius, 1–15 screen pixels), opacity (0–100%), <strong>Show window-size box</strong>, and <strong>Show ROI</strong>. The green boxes around tracked points show the LK window used by the result. Built-in defaults show markers and ROI, with size 3 and opacity 100%; window boxes are off.</p>
+<p>Seeds are cyan; active, valid tracks are green, with short trails from their previous-frame positions. The ROI has a yellow outline. Red points indicate a cleanup/RANSAC preview; red rings indicate Point Manager selection.</p>
+<p>Changes preview live; Cancel restores the prior display. Save as defaults persists the displayed settings separately. These controls change appearance, not tracking data.</p>
+</section>
 
-  <section id="track">
-    <h2><span class="num">6</span>Tracking</h2>
-    <p>Press <strong>Run Tracking</strong> (the primary blue button). ECM Tracker uses pyramidal Lucas-Kanade optical flow to follow every seeded point:</p>
-    <ul>
-      <li><strong>Forward</strong> from the reference frame to the last frame, then</li>
-      <li><strong>Backward</strong> from the last frame back to the reference.</li>
-    </ul>
-    <p>The round trip yields a <strong>forward–backward error</strong> for each point — the distance between where it started and where the return trip lands it. A small error means a reliable track; a large error flags a point worth dropping. Tune the optical-flow settings under <strong>Parameters → Tracker…</strong></p>
-  </section>
+<section id="export">
+<h2><span class="num">08</span>Save, reopen &amp; export</h2>
+<p class="section-lead">Save trackers to continue working. Export coordinates to use elsewhere.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Action</th><th scope="col">What it preserves</th></tr></thead><tbody>
+<tr><td>Save Trackers…<br><code>.npz</code></td><td>Seeds, ROI, frame range/current frame, detection and tracker parameters, and—when available—the full tracking result and active mask. Can save seeds before tracking. Does not embed source images or undo history.</td></tr>
+<tr><td>Save Pair Setup…<br><code>.ecmpair.json</code></td><td>The pair’s original source references and alignment, including pivot. Does not save points or tracking.</td></tr>
+<tr><td>Export → NumPy<br><code>.npy</code> + companions</td><td>Active, fully forward-valid coordinates, with accompanying frame-range and identity data.</td></tr>
+<tr><td>Export → CSV<br><code>.csv</code></td><td>One row per tracked frame, with its filename and interleaved x/y columns for retained points.</td></tr>
+</tbody></table></div>
+<p>To resume, open the same image sequence—or <strong>Open Pair Setup…</strong>—then choose <strong>File → Load Trackers…</strong>. Loading replaces current points/results after confirmation. The app checks frame count and, for current-format files, ordered image-content identity. A legacy file without identity information is explicitly reported.</p>
+<div class="callout warning"><span class="callout-label">Save before leaving</span>The core app does not automatically save your tracking session. Save before opening another sequence or quitting. Tracker snapshots do not save plugin-specific state such as affine zones. MTS has its own <a href="#mts-project">automatic project persistence</a>.</div>
+<p>The toolbar <strong>Export</strong> dropdown offers NumPy and CSV. <strong>File → Export…</strong> and its shortcut export NumPy. Only active points valid in <em>every forward frame</em> are exported; the exported count can be lower than the active count. No fully valid points means Export is disabled.</p>
+<details class="reference"><summary>Coordinate formats, identities, and companion files</summary><div class="detail-body">
+<p>Coordinates are <strong>pixels</strong>, with origin at the upper-left pixel, x rightwards and y downwards. They are positions, not displacements or calibrated physical lengths. Frames run from Reference through Last inclusive; in pair mode they use the aligned crop’s coordinates.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">File</th><th scope="col">Layout</th></tr></thead><tbody>
+<tr><td><code>coords.npy</code></td><td><code>float32</code> array shaped <code>(frames, kept_points, 2)</code>; the last axis is x, y.</td></tr>
+<tr><td><code>coords.bundle.npz</code></td><td>Authoritative combined export: <code>coords</code>, original zero-based <code>point_ids</code>, and global <code>frame_indices</code>. This is an analysis export, not a reloadable tracker snapshot.</td></tr>
+<tr><td><code>sequence.txt</code></td><td>Global zero-based reference and last indices, separated by a space. A custom NumPy filename uses <code>&lt;stem&gt;.sequence.txt</code>; its bundle is <code>&lt;stem&gt;.bundle.npz</code>.</td></tr>
+<tr><td><code>coords.csv</code></td><td><code>filename,p1x,p1y,p2x,p2y,…</code>; one row per frame, coordinates to six decimal places. Point labels are sequential export columns, not original point IDs.</td></tr>
+</tbody></table></div>
+<p>Retained points keep their original ordering. Save the NumPy bundle when you need original point identities. For recovering original pair-image coordinates, see <a href="#pair-coordinates">coordinate recovery</a>.</p>
+</div></details>
+</section>
 
-  <section id="cleanup">
-    <h2><span class="num">7</span>Cleaning up tracks</h2>
-    <p>Open <strong>Cleanup</strong> (in the Track toolbar group) to filter out unreliable tracks. As you adjust the sliders the canvas previews the result live:</p>
-    <ul>
-      <li><span class="swatch kept"></span><strong>Green</strong> — points that will be kept.</li>
-      <li><span class="swatch dropped"></span><strong>Red</strong> — points that will be dropped.</li>
-    </ul>
-    <p>Cleanup is <strong>non-destructive</strong>: the original tracking result is never altered, points only ever leave the active set, and every filter step can be undone.</p>
-  </section>
+<section id="affine">
+<h2><span class="num">09</span>Affine Zone Tool</h2>
+<p class="section-lead">Measure deformation in one or more areas of the tracked specimen.</p>
+<ol>
+<li>Launch <strong>Affine Zone Tool</strong> from the left pane. Choose <strong>New Zone</strong>; the main image jumps to Reference. Left-click at least three vertices.</li>
+<li>Right-click to finish a zone and immediately start another, or choose <strong>Finish Zone</strong> to finish and stop drawing. <strong>All Points Zone</strong> encloses all active tracked reference points; it needs at least three non-collinear points.</li>
+<li>Browse frames to read each zone’s <strong>Pts</strong>, principal stretches <strong>λ1 / λ2</strong>, and directions <strong>v1 / v2</strong>. Click its color cell to change the overlay/curve color.</li>
+<li>Use <strong>RANSAC…</strong> on a selected row to preview outliers, then <strong>Apply Cleaning</strong> if appropriate. Undo exclusions in the main Cleanup dialog.</li>
+<li>Open <strong>Plot Curves</strong> or <strong>Direction Gauge</strong>, or write per-frame results with <strong>Export CSV…</strong>.</li>
+</ol>
+<figure><div class="figure-stack"><a href="help-assets/zones-controls.png"><img src="help-assets/zones-controls.png" width="1640" height="520" loading="lazy" alt="Affine Zone Tool with two colored zones, point counts, principal stretches, directions, analysis buttons, and alignment correction checkbox."></a><a href="help-assets/zones-gauge.png"><img src="help-assets/zones-gauge.png" width="1640" height="1040" loading="lazy" alt="Direction gauge showing solid major and dashed minor axes for two zones, with a local frame slider."></a></div><figcaption><strong>One fit per zone.</strong> Table and gauge use the same deformation analysis. The gauge’s own frame slider does not move the main window’s Current frame.</figcaption></figure>
+<p><strong>λ = 1</strong> means unchanged length; above 1 means extension, below 1 contraction. The larger stretch is λ1. A homogeneous affine fit describes each zone; at least three well-spread valid points are needed. A failed fit is not a zero-strain measurement.</p>
+<p>Curves use the zone color: solid for λ1, dashed for λ2. The gauge places the major/minor axes at each zone’s point centroid; axis lengths vary with stretch. <strong>Clear Zones</strong> removes all zones, not tracks. Zones remain when the tool is closed and reopened, but are cleared by a new sequence/reference, plugin reload, or app restart.</p>
+<p>For image pairs, <strong>Include alignment affine maps if present</strong> restores scale/shear by default; see <a href="#pair-coordinates">alignment correction</a>. The setting affects all reported results, not tracking or RANSAC.</p>
+<details class="reference" id="ransac"><summary>RANSAC settings, fit interpretation, and zone CSV</summary><div class="detail-body">
+<p>RANSAC identifies points inconsistent with one affine motion. Zone RANSAC uses the selected zone and <strong>Frame</strong>, synchronized with the main Current control. Selecting another table row updates the preview. Applying removes that zone’s outlier tracks from the app-wide active set; other zones sharing those points are affected.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead><tbody>
+<tr><td>Points per fit</td><td>6</td><td>Points sampled for each candidate affine fit; allowed range starts at 3.</td></tr>
+<tr><td>Reproj threshold (px)</td><td>3</td><td>Largest accepted distance between predicted and observed position. Lower is stricter.</td></tr>
+<tr><td>Max iterations</td><td>2000</td><td>Upper limit on candidate fits.</td></tr>
+<tr><td>Confidence</td><td>0.99</td><td>Target probability used to determine how many RANSAC trials to attempt.</td></tr>
+</tbody></table></div>
+<p>Reported deformation is a least-squares fit over the surviving valid points, not a continuously applied RANSAC fit. Zone membership is determined by reference positions. From the fitted linear map <code>F</code>, principal stretches and current-configuration directions come from <code>B = F Fᵀ</code>. Directions are axes: reversing an eigenvector’s sign does not change its physical direction; equal stretches have no unique principal orientation.</p>
+<p>CSV columns are <code>zone, frame_global, n_points, lambda1, lambda2, v1x, v1y, v2x, v2y</code>. Zones start at 1, frames at 0. Rows without a valid fit are omitted. Default filenames distinguish residual analysis (<code>zone_stretches.csv</code>) from nontrivial restored alignment (<code>zone_stretches_with_alignment.csv</code>).</p>
+</div></details>
+</section>
 
-  <section id="display">
-    <h2><span class="num">8</span>Display options</h2>
-    <p>Under the <strong>Display</strong> menu you can tailor the overlays:</p>
-    <ul>
-      <li>Adjust feature-marker <strong>size</strong> and <strong>opacity</strong>.</li>
-      <li>Toggle <strong>Show ROI</strong> to hide or reveal the region outline.</li>
-    </ul>
-    <p>Use the <strong>View</strong> toolbar group to zoom in, zoom out, or fit the image to the window. Drag with the middle or right mouse button to pan.</p>
-  </section>
+<section id="mts">
+<h2><span class="num">10</span>MTS Uniaxial</h2>
+<p class="section-lead">Synchronize images with a tensile test, select a reference, then measure strain and stress.</p>
+<p>Launch <strong>MTS Uniaxial</strong> from the left pane and work down its numbered sections. Start here when preparing an MTS experiment; the plugin loads the sequence and sets the main tracking range.</p>
+<ol class="steps">
+<li><strong>Load experiment.</strong><p>Choose the experiment root with <strong>Open…</strong>, check <strong>Images folder</strong> and <strong>Sensor file</strong>, then click <strong>Load</strong>. Defaults are <code>veddac/</code> (images and <code>VDCCam.log</code>) and <code>mts/specimen.dat</code>. Browse buttons accept other locations. Images follow acquisition-log order.</p></li>
+<li><strong>Channels &amp; temporal offset.</strong><p>Choose force from clamp A, clamp B, or their average (default). Displacement always sums both clamps. The offset starts at 0 ms; positive values shift the sensor timeline later relative to images.</p></li>
+<li><strong>Crop experiment window.</strong><p>Set First sample and Last sample on the sensor timeline. The force–time and force–displacement plots update; Show image frames toggles image-time markers.</p></li>
+<li><strong>Find reference.</strong><p>Use Search from / Search to to limit the reference search within the crop, choose an algorithm, and click Detect reference. The nearest image becomes Reference; the crop end sets Last. Inspect the plotted marker and use Reference frame (override) if needed.</p></li>
+<li><strong>Track in the main window.</strong><p>Define an ROI, seed, run, and clean up normally. Reference force and displacement are recorded for zeroing; changing reference does not shift timestamps.</p></li>
+<li><strong>Homogeneous RANSAC filtering.</strong><p>Show outliers previews points inconsistent with a single reference-to-last affine map. Apply RANSAC excludes them; undo in Cleanup. Only points valid at both endpoints are judged. The four tuning controls use the <a href="#ransac">same RANSAC definitions</a> as the zone tool.</p></li>
+<li><strong>Plotting.</strong><p>Open Kinematics, Piola–Kirchhoff stress, Cauchy stress, or Direction gauge. Plots refresh with tracking/active-set changes; the gauge has an independent frame slider.</p></li>
+<li><strong>Export aligned data &amp; measures.</strong><p>Export aligned data writes coordinates and synchronized sensor data. Select desired derived columns and click Export measures (CSV). Files are written into the experiment’s project folder.</p></li>
+</ol>
+<figure><div class="figure-stack"><a href="help-assets/mts-crop.png"><img src="help-assets/mts-crop.png" width="1664" height="1052" loading="lazy" alt="MTS experiment crop with force versus time and displacement plots, image-frame markers, and first/last sample sliders."></a><a href="help-assets/mts-reference.png"><img src="help-assets/mts-reference.png" width="1664" height="944" loading="lazy" alt="MTS reference search window with force-displacement plot, detected reference star, algorithm selector, preforce threshold, and frame override."></a></div><figcaption><strong>Two different windows.</strong> The crop selects the experiment interval; the search window selects where to find Reference. Last still comes from the crop end. These plots show synthetic demonstration data.</figcaption></figure>
+<h3>Specimen and stress settings</h3>
+<p>Enter <strong>Width</strong> and <strong>Thickness</strong> in mm (defaults 10 and 0.5). The reference area is their product. <strong>Stress force basis</strong> selects either change from reference (default, removes preload) or absolute measured force (includes preload).</p>
+<p>Enable <strong>Use measured loading axis (reference image)</strong> and enter its clockwise angle from image +x when that axis is known. Otherwise, the app assumes the largest principal stretch is axial—a tensile-test assumption. Stress plots use axial engineering strain on the horizontal axis.</p>
+<div class="callout"><span class="callout-label">Material assumptions</span><strong>Incompressible material</strong> is on by default and enables Cauchy stress conversion. That conversion assumes incompressible uniaxial deformation. The predicted lateral strain additionally assumes equal transverse stretches. Turning incompressibility off disables Cauchy results.</div>
+<details class="reference"><summary>Reference algorithms and synchronization details</summary><div class="detail-body">
+<div class="table-wrap"><table><thead><tr><th scope="col">Algorithm</th><th scope="col">Reference selection</th></tr></thead><tbody>
+<tr><td>Force onset (5x baseline noise)</td><td>Detects the first force rise above a baseline-noise threshold in the selected search window.</td></tr>
+<tr><td>Force-displacement knee (max curvature)</td><td>Finds the strongest curvature in the force–displacement curve.</td></tr>
+<tr><td>Set preforce</td><td>First sample strictly above Pre-force threshold (default 0.100 N). Other algorithms ignore this field.</td></tr>
+<tr><td>Elastic-energy minimum (spring-hinge fit)</td><td>Fits a spring-hinge model and finds its minimum stored elastic energy. Needs at least 20 samples; too few samples or a failed/degenerate fit returns the search window’s first sample. Inspect the result.</td></tr>
+</tbody></table></div>
+<p>Onset, knee, and preforce require at least three finite samples; searches with no identifiable onset, knee, or threshold crossing are reported in the status bar. Adjusting search sliders changes the next detection window; it does not apply a new reference until detection or override.</p>
+<p>Sensor force/displacement are linearly interpolated at logged image times after adding the offset to sensor times. Frames outside sensor coverage use the nearest endpoint and are flagged <code>in_range = 0</code>. A reference outside coverage is rejected. Verify synchronization before interpreting stress.</p>
+</div></details>
+<details class="reference"><summary>Measures, units, and export columns</summary><div class="detail-body">
+<p>One affine fit per frame uses all active, valid points. Principal engineering strains are <code>ε₁ = λ₁ − 1</code> and <code>ε₂ = λ₂ − 1</code>; they are dimensionless (0.05 = 5%). Nominal first Piola–Kirchhoff stress is <code>P = force / A₀</code>, in MPa (N/mm²). With incompressibility, Cauchy stress is <code>σ = axial stretch × P</code>. The equal-transverse prediction is <code>ε₂ = axial stretch^(−1/2) − 1</code>.</p>
+<p><strong>Kinematics</strong> plots principal strains over time and ε₂ versus ε₁. Stress plots use the chosen force basis and axial stretch; when a loading axis is supplied it determines axial stretch rather than assuming λ₁. Plot toolbars offer view reset/history, pan, zoom, plot configuration, and image saving; <strong>Refresh</strong> redraws current data.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Export</th><th scope="col">Contents</th></tr></thead><tbody>
+<tr><td>Aligned data</td><td>In the project’s <code>export-&lt;id&gt;/</code> subfolder: <code>tracked_coords.npy</code>, active, fully forward-valid coordinates shaped (frames, points, 2); <code>point_indices.npy</code>, original point IDs; and <code>aligned_data.csv</code>, with <code>frame_global, image_time_ms, displacement, force, in_range</code>. Force and displacement here are always reference-zeroed.</td></tr>
+<tr><td>Measures CSV</td><td>Always includes <code>frame_global, time_s, in_range</code>. Select <code>lambda_1, lambda_2, eps_1, eps_2, eps_2_ico, pk_stress_MPa, cauchy_stress_MPa, force_N, displacement_mm, angle_deg, n_points</code>. Force follows the selected stress force basis; displacement is reference-zeroed.</td></tr>
+<tr><td>Measures diagnostics</td><td>Always appended: <code>force_basis, loading_axis_deg, fit_reason, fit_rms_px, axial_lambda</code>. The loading-axis field records its angle or <code>major_tensile_assumption</code>. Undefined numeric measures are <code>nan</code>.</td></tr>
+</tbody></table></div>
+<p>Plots and measures use <code>time_s</code> relative to Reference; aligned data retains the logged <code>image_time_ms</code>. Forces are in N, displacement in mm, stress in MPa. Direction angles use image axes. The gauge shows principal axes, even when a separate measured loading axis is used for stress. A small or degenerate point set can prevent a fit; inspect fit diagnostics rather than treating missing values as zero.</p>
+</div></details>
+<details class="reference" id="mts-project"><summary>Automatic saving, reopening, and invalidation</summary><div class="detail-body">
+<p>The plugin creates <code>&lt;experiment root&gt;/mts_uniaxial_project/</code>. Reopen the same root and click Load; choose Yes to resume or No to start fresh and overwrite the prior project.</p>
+<p>The folder contains <code>manifest.json</code>, <code>image_log.csv</code>, <code>sensor_raw.csv</code>, <code>sync_params.json</code>, <code>crop.json</code>, <code>reference.json</code>, and, after tracking, <code>trackers.npz</code>. Each aligned export gets an <code>export-&lt;id&gt;/</code> subfolder; the manifest’s <code>export_generation</code> identifies the current completed export. <code>measures.csv</code> is written directly in the project folder.</p>
+<p>Keep the original source data available and unchanged. Saved tracking and the active mask are restored when available; cleanup history is not. Legacy projects without source provenance require reference selection and tracking again.</p>
+<p>Editing an upstream step invalidates dependent results and removes stale step files. Changing channels/offset or crop requires a new reference; a changed tracking range invalidates tracking. Cleanup and RANSAC changes persist the active mask and invalidate exports, including while the plugin window is hidden. Old export subfolders can remain; use only the generation identified by the current manifest. Applying a reference with the same tracked range can preserve tracking but invalidates exports.</p>
+<p>Width, thickness, force basis, loading axis, and incompressibility preserve tracking but invalidate prior derived-measures exports. Re-export after changing them. Errors saving project files are reported; resolve them before relying on automatic persistence.</p>
+</div></details>
+</section>
 
-  <section id="export">
-    <h2><span class="num">9</span>Exporting</h2>
-    <p>When you're happy with the surviving tracks, use the <strong>Export</strong> dropdown (toolbar or <strong>File → Export…</strong>, <kbd>Ctrl</kbd>+<kbd>E</kbd>):</p>
-    <ul>
-      <li><strong>NumPy array (.npy)</strong> — the tracked coordinates as an array, for downstream analysis.</li>
-      <li><strong>CSV (.csv)</strong> — a spreadsheet-friendly table with interleaved x/y columns per frame.</li>
-    </ul>
-  </section>
+<section id="pressure">
+<h2><span class="num">11</span>Pressure–Strain</h2>
+<p>Load images in the main window, launch <strong>Pressure–Strain</strong>, then click <strong>Load CSV…</strong>. The pressure file must contain numeric <code>Elapsed_s</code> and <code>Raw_mbar</code> columns. Run tracking and cleanup in the main window.</p>
+<p>Choose <strong>ε₁</strong>, <strong>ε₂</strong>, or their <strong>mean</strong> in Strain. Enable <strong>Shift pressure at first plotted frame to zero</strong> to subtract the pressure at Reference. Click <strong>Plot</strong> or <strong>Export CSV…</strong>; both use the current selection and zeroing. At least three suitable active points are needed for homogeneous strain fitting.</p>
+<div class="callout warning"><span class="callout-label">Check image timestamps</span>Alignment assumes the first/final pressure readings match the first/final loaded images. Intermediate timing follows image-file <strong>modification timestamps</strong>, not camera metadata. Copying or editing files can change this timing. Choosing a later Reference slices this existing alignment; it does not re-anchor the pressure record.</div>
+<details class="reference"><summary>Input requirements, interpretation, and CSV output</summary><div class="detail-body">
+<p>Provide at least two finite CSV rows with nondecreasing elapsed times and a positive total duration. Repeated timestamps are consolidated: interior pressures are averaged, while the first and final readings anchor the endpoints. Image timestamps must also be nondecreasing in loaded order, with at least two images and a positive total time span.</p>
+<p>Strains use the same homogeneous affine/principal-stretch analysis: <code>ε = λ − 1</code>. The mean is <code>(ε₁ + ε₂) / 2</code>, not area strain. Strain is dimensionless; pressure is mbar. Invalid fits produce gaps, not zero strain. In image-pair mode these are residual strains.</p>
+<p>Export includes one row per tracked frame: <code>frame_global, image_filename, image_elapsed_s, pressure_mbar, strain, strain_mode, pressure_zeroed, n_valid_points, provenance_json</code>. Invalid strain cells are blank. The first row’s provenance records synchronization/source information. Image elapsed time is measured from the first loaded image. Changing cleanup or controls refreshes an open plot; changing the sequence clears loaded pressure data.</p>
+</div></details>
+</section>
 
-  <section id="plugins">
-    <h2><span class="num">10</span>Plugins</h2>
-    <p>ECM Tracker is extensible. The <strong>Plugins</strong> menu lists any installed add-ons for post-processing, custom export, or extra on-canvas visualisations. Several examples ship with the app — see the developer guide in the <code>plugins/</code> folder to write your own.</p>
-  </section>
+<section id="plugins">
+<h2><span class="num">12</span>Plugin management</h2>
+<p>Use the left pane’s buttons to launch installed plugins. <strong>Plugins → Open Plugins Folder…</strong> opens the writable user-plugin directory. Place a plugin folder there, then select <strong>Reload Plugins</strong>. User folders with the same name override bundled plugins.</p>
+<p>Reload closes plugin windows and discards their in-memory state before rediscovery. A disabled plugin button with a warning has failed to load; hover for the error. The separately shipped <code>plugins/</code> or <code>bundled_plugins/</code> folder contains the developer guide, <code>plugin-api.html</code>, and SDK example for authors.</p>
+<p><strong>Help → View Help</strong> (<kbd>F1</kbd>) opens this offline manual in your browser. <strong>Help → About…</strong> shows application information. Use <strong>File → Quit</strong> to exit; macOS may place About/Quit in the application menu.</p>
+</section>
 
-  <section id="shortcuts">
-    <h2><span class="num">11</span>Keyboard shortcuts</h2>
-    <table>
-      <thead>
-        <tr><th>Shortcut</th><th>Action</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open directory</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>Export</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>Q</kbd></td><td>Quit</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>+</kbd></td><td>Zoom in</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>-</kbd></td><td>Zoom out</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>0</kbd></td><td>Fit image to window</td></tr>
-        <tr><td><kbd>Esc</kbd></td><td>Cancel an in-progress ROI</td></tr>
-        <tr><td><kbd>F1</kbd></td><td>Open this help</td></tr>
-      </tbody>
-    </table>
-  </section>
+<section id="shortcuts">
+<h2><span class="num">13</span>Shortcuts &amp; gestures</h2>
+<p>Use <kbd>⌘</kbd> on macOS wherever <kbd>Ctrl</kbd> appears below. Navigation keys act on the focused control; click the image first for canvas shortcuts.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Shortcut</th><th scope="col">Action / context</th></tr></thead><tbody>
+<tr><td><kbd>Ctrl</kbd> + <kbd>O</kbd></td><td>Open directory.</td></tr>
+<tr><td><kbd>Ctrl</kbd> + <kbd>S</kbd> / <kbd>L</kbd></td><td>Save / load trackers.</td></tr>
+<tr><td><kbd>Ctrl</kbd> + <kbd>E</kbd></td><td>Export NumPy coordinates.</td></tr>
+<tr><td><kbd>Ctrl</kbd> + <kbd>Q</kbd></td><td>Quit.</td></tr>
+<tr><td><kbd>Ctrl</kbd> + <kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd></td><td>Zoom in / out / fit the main image. Double-click also fits.</td></tr>
+<tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Previous / next image when the main canvas has focus.</td></tr>
+<tr><td><kbd>N</kbd> / <kbd>R</kbd> / <kbd>C</kbd></td><td>Jump to Reference and begin polygon / rectangle / circle ROI.</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Cancel an unfinished ROI; in alignment, cancel pivot picking (otherwise cancel the dialog). Does not universally cancel plugin drawing.</td></tr>
+<tr><td><kbd>Space</kbd> + drag</td><td>Temporary pan on the main or alignment canvas.</td></tr>
+<tr><td><kbd>Ctrl</kbd>-click / <kbd>Shift</kbd>-click</td><td>Toggle selection / extend a row range in Point Manager, including selection through the image.</td></tr>
+<tr><td>Arrow / <kbd>Shift</kbd> + arrow</td><td>Move destination 1 / 10 px on the alignment canvas.</td></tr>
+<tr><td><kbd>F1</kbd></td><td>Open help.</td></tr>
+</tbody></table></div>
+<p><strong>Mouse reminders:</strong> wheel to zoom; middle/right-drag to pan in the main view; right-drag or Space+drag in alignment. Right-click closes an ROI polygon; in Affine Zone Tool it closes the zone and continues drawing. Use Finish Zone to stop.</p>
+<p class="small">In this manual, Expand all references exposes technical details for your browser’s Find command (<kbd>Ctrl</kbd>+<kbd>F</kbd> / <kbd>⌘</kbd>+<kbd>F</kbd>). Printing automatically includes reference panels.</p>
+</section>
 
-  <footer>
-    ECM Tracker &nbsp;·&nbsp; &copy; 2026 Senecell AG
-  </footer>
-
-</div>
+<section id="troubleshooting">
+<h2><span class="num">14</span>Troubleshooting &amp; terms</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Symptom</th><th scope="col">What to check</th></tr></thead><tbody>
+<tr><td>Define, Corners, or Grid is unavailable</td><td>Load images. Define requires the reference image; Corners and Grid require a completed ROI and always detect on Reference. Add can seed manually without an ROI.</td></tr>
+<tr><td>Run or Export is unavailable</td><td>Run needs seeds. Export needs at least one active point valid throughout the forward pass. Undo excessive filtering or improve and rerun tracking.</td></tr>
+<tr><td>Reference / Last is locked</td><td>A tracking result exists. Save it, then use Track → Clear.</td></tr>
+<tr><td>Markers disappeared</td><td>Check Show trackers and opacity; display a frame within the tracked range. Seeds appear only at Reference. Failed/excluded points may be hidden.</td></tr>
+<tr><td>Image load fails</td><td>Check supported formats, readable files, and matching dimensions. Use pair mode for two differently sized images. If files changed on disk, reopen and retrack.</td></tr>
+<tr><td>Trackers or pair setup will not reopen</td><td>Open matching original images in the same order. Restore missing sources; ensure pair geometry matches. An identity mismatch prevents loading unrelated data.</td></tr>
+<tr><td>Cleanup changed nothing</td><td>Enable a filter, tighten its threshold, and apply. Changing max only adjusts scale. To restore excluded tracks, undo; resetting thresholds is different.</td></tr>
+<tr><td>Zone / strain result is missing</td><td>Use at least three non-collinear valid points, and enough points for the chosen RANSAC sample size. Check the selected zone and frame. Missing/NaN results are not zero deformation.</td></tr>
+<tr><td>MTS cannot find a reference</td><td>Check channel, offset, crop, search window, and sensor coverage. For preforce, a sample must exceed the threshold. Inspect detection and use override when appropriate.</td></tr>
+<tr><td>Pressure alignment fails</td><td>Check required CSV columns, finite ordered times, and increasing image modification times. A copied set with identical timestamps has no usable timing span.</td></tr>
+<tr><td>A plugin button is disabled</td><td>Read its error tooltip; check installation and reload. A plugin’s internal controls may instead be waiting for images, a reference, tracking, or enough valid points.</td></tr>
+</tbody></table></div>
+<details class="reference"><summary>Small glossary</summary><div class="detail-body"><dl class="glossary">
+<dt>Seed / track</dt><dd>A seed is a reference-image point. A track is its sequence of measured positions.</dd>
+<dt>Active / valid</dt><dd>Active means not excluded by cleanup. Valid means successfully tracked at a particular frame. Exports require both active and forward-valid at every frame.</dd>
+<dt>Global / cut frame</dt><dd>Global counts from the first loaded image. Cut counts from Reference. Both begin at zero.</dd>
+<dt>ROI / zone</dt><dd>The ROI limits automatic seeding. A zone groups tracked points for local deformation analysis; it does not create tracks.</dd>
+<dt>Affine / homogeneous</dt><dd>A single linear deformation plus translation describing a group of points. It approximates uniform deformation over that group.</dd>
+<dt>Stretch / strain</dt><dd>Stretch is a length ratio λ. Engineering strain is λ − 1; a stretch of 1.05 corresponds to strain 0.05 (5%).</dd>
+<dt>RANSAC</dt><dd>Repeated candidate fits identify points inconsistent with the chosen motion model. A real local deformation may also be an outlier to that model.</dd>
+<dt>Residual motion</dt><dd>Motion remaining after manual pair alignment. Restoring alignment deformation is a separate analysis choice.</dd>
+</dl></div></details>
+<a class="back-top" href="#top">Back to top ↑</a>
+</section>
+<footer class="footer"><span>ECM Tracker · User manual</span><span>© 2026 Senecell AG</span></footer>
+</main></div>
+<script>
+(() => {
+  'use strict';
+  document.documentElement.classList.add('js');
+  const panels = [...document.querySelectorAll('details.reference')];
+  const expand = document.getElementById('expand-all');
+  const syncButton = () => {
+    const allOpen = panels.every(panel => panel.open);
+    expand.textContent = allOpen ? 'Collapse all references' : 'Expand all references';
+    expand.setAttribute('aria-expanded', String(allOpen));
+  };
+  expand.addEventListener('click', () => {
+    const open = !panels.every(panel => panel.open);
+    panels.forEach(panel => { panel.open = open; });
+    syncButton();
+  });
+  panels.forEach(panel => panel.addEventListener('toggle', syncButton));
+  function revealAnchor() {
+    let id;
+    try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
+    const target = document.getElementById(id);
+    if (!target) return;
+    let node = target;
+    while (node) {
+      if (node.tagName === 'DETAILS') node.open = true;
+      node = node.parentElement;
+    }
+    requestAnimationFrame(() => target.scrollIntoView({block: 'start'}));
+  }
+  window.addEventListener('hashchange', revealAnchor);
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#"]');
+    if (link && link.hash === location.hash) requestAnimationFrame(revealAnchor);
+  });
+  revealAnchor();
+  let printState = null;
+  const beforePrint = () => {
+    if (printState) return;
+    printState = panels.map(panel => panel.open);
+    panels.forEach(panel => { panel.open = true; });
+  };
+  const afterPrint = () => {
+    if (!printState) return;
+    panels.forEach((panel, index) => { panel.open = printState[index]; });
+    printState = null;
+    syncButton();
+  };
+  window.addEventListener('beforeprint', beforePrint);
+  window.addEventListener('afterprint', afterPrint);
+  document.getElementById('print-manual').addEventListener('click', () => {
+    beforePrint();
+    window.print();
+  });
+  const links = [...document.querySelectorAll('.sidebar nav a')];
+  const sections = [...document.querySelectorAll('main > section')];
+  let pending = false;
+  function updateCurrent() {
+    const current = sections.filter(section => section.getBoundingClientRect().top <= 160).pop() || sections[0];
+    links.forEach(link => {
+      if (link.hash === '#' + current.id) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    });
+    pending = false;
+  }
+  window.addEventListener('scroll', () => {
+    if (!pending) { pending = true; requestAnimationFrame(updateCurrent); }
+  }, {passive: true});
+  updateCurrent();
+})();
+</script>
 </body>
 </html>

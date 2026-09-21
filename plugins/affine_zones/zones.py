@@ -9,6 +9,7 @@ irrelevant for motion analysis and is discarded. A separate RANSAC tool cleans a
 plot window shows the stretches over frames.
 """
 import csv
+import os
 
 import cv2
 import numpy as np
@@ -158,6 +159,9 @@ class ZoneDrawTool(CanvasInteraction):
         self.vertices.append((image_pt.x(), image_pt.y()))
         self.window.on_draw_progress()
 
+    def on_right_press(self, image_pt, event):
+        self.window._finish_zone(continue_drawing=True)
+
 
 # Table columns
 COL_ZONE, COL_COLOR, COL_PTS, COL_L1, COL_L2, COL_V1, COL_V2 = range(7)
@@ -180,6 +184,10 @@ class AffineZonesWindow(QWidget):
 
         self.new_btn = QPushButton("New Zone")
         self.finish_btn = QPushButton("Finish Zone")
+        self.finish_btn.setToolTip(
+            "Finish the current zone and stop drawing. Right-click on the image to finish "
+            "a zone and keep drawing more zones."
+        )
         self.all_points_btn = QPushButton("All Points Zone")
         self.clear_btn = QPushButton("Clear Zones")
         self.ransac_btn = QPushButton("RANSAC…")
@@ -290,18 +298,34 @@ class AffineZonesWindow(QWidget):
         self.ctx.set_current_frame(self.ctx.reference_index)
         self._tool = ZoneDrawTool(self)
         self.ctx.begin_canvas_interaction(self._tool)
-        self.ctx.status("Click to add zone vertices, then press “Finish Zone”.")
+        self.ctx.status(
+            "Left-click to add vertices; right-click to finish a zone and start another. "
+            "Press “Finish Zone” to finish and stop drawing."
+        )
         self._update_buttons()
 
     def on_draw_progress(self):
         self.ctx.request_redraw()
 
-    def _finish_zone(self):
+    def _finish_zone(self, *, continue_drawing=False):
+        if continue_drawing:
+            if self._tool is None:
+                return
+            if len(self._tool.vertices) < MIN_ZONE_POINTS:
+                self.ctx.status("Add at least 3 vertices before right-clicking to finish the zone.")
+                return
         if self._tool is not None and len(self._tool.vertices) >= MIN_ZONE_POINTS:
             self.zones.append(Zone(self._tool.vertices, default_zone_color(len(self.zones))))
-        self.ctx.end_canvas_interaction()
-        self._tool = None
+        if continue_drawing:
+            self._tool.vertices.clear()
+        else:
+            self.ctx.end_canvas_interaction()
+            self._tool = None
         self._refresh()  # rebuilds the table and refreshes button-enable state
+        if continue_drawing:
+            self.ctx.status(
+                "Zone finished. Left-click to start another; press “Finish Zone” to stop drawing."
+            )
 
     def _add_all_points_zone(self):
         """Create one zone — the convex hull of all active reference-frame points — enclosing
@@ -531,8 +555,9 @@ class AffineZonesWindow(QWidget):
         corrected = self.ctx.has_sequence and self.include_alignment.isChecked() and any(
             not np.array_equal(self.correction_at(cut), np.eye(2)) for cut in range(self.ctx.frame_count))
         filename = "zone_stretches_with_alignment.csv" if corrected else "zone_stretches.csv"
+        default_path = os.path.join(self.ctx.source_dir, filename) if self.ctx.source_dir else filename
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export per-frame stretches — " + self.analysis_label(), filename, "CSV (*.csv)"
+            self, "Export per-frame stretches — " + self.analysis_label(), default_path, "CSV (*.csv)"
         )
         if not path:
             return

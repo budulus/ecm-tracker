@@ -20,8 +20,15 @@ want it. Recreate the shortcut if you move the application folder later.
 
 ## First-time setup on another computer
 
-Install `uv`, then open a terminal in the application folder and run `uv sync`
-once to create that computer's Python environment and install the dependencies.
+1. If `uv` is not installed, double-click **Install uv.bat**. It downloads and
+   runs the [official uv installer](https://docs.astral.sh/uv/getting-started/installation/),
+   so an internet connection is required. If `uv` is already available, it skips
+   installation. The window stays open so you can read the result or any errors.
+2. Open a new terminal in the application folder after installation (close and
+   reopen any existing terminals to pick up the updated PATH), then run `uv sync`
+   once to create that computer's Python environment and install the dependencies.
+3. Double-click **Start ECM Tracker.bat**.
+
 Share the source application folder without your `.venv`; each computer needs
 its own environment. The launcher uses the local `.venv` and does not install
 dependencies automatically.

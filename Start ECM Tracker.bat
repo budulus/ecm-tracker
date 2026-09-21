@@ -10,6 +10,7 @@ exit /b 0
 
 :missing_environment
 echo ECM Tracker's Python environment is missing.
+echo If uv is not installed, double-click "Install uv.bat" first.
 echo Open a terminal in this application folder and run:
 echo.
 echo   uv sync

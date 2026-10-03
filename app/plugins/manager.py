@@ -207,7 +207,11 @@ class PluginManager:
 
     # ---- launch / lifecycle --------------------------------------------
     def launch(self, plugin_id: str) -> None:
-        """Instantiate (once) and launch a plugin; re-focus its window if already open."""
+        """Instantiate (once) and launch a plugin; re-focus its window if already open.
+
+        A window that was merely closed keeps its instance: ``launch()`` is called again, so
+        plugins that cache their window keep their state. A destroyed window (e.g.
+        ``WA_DeleteOnClose``) releases the old instance and creates a fresh one."""
         rec = self._records.get(plugin_id)
         if rec is None or rec.cls is None:
             return
@@ -220,7 +224,8 @@ class PluginManager:
             except RuntimeError:
                 rec.window = None  # Native widget is gone; context still needs disposal.
                 # WA_DeleteOnClose has already destroyed the native window.
-            self._unload(rec)
+                self._unload(rec)
+        previous = rec.window
         try:
             if rec.instance is None:
                 rec.context = PluginContext(self._window, plugin_id)
@@ -237,6 +242,11 @@ class PluginManager:
             )
             return
         if isinstance(window, QWidget):
+            if previous is not None and window is not previous:
+                try:
+                    previous.deleteLater()  # The plugin built a new window; drop the closed one.
+                except RuntimeError:
+                    pass
             rec.window = window
 
     def shutdown(self) -> None:

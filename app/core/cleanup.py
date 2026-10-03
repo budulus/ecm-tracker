@@ -198,13 +198,16 @@ def thresholds_from_dict(data: dict) -> Thresholds:
     for name in BAND_METRICS:
         d = data.get(name) or {}
         d = d if isinstance(d, dict) else {}
+        # Missing/invalid thresholds fall back to the band's keep-all factory default
+        # (BAND_CAP for upper bounds, 0.0 for the lower-bound eigenvalue filter).
+        default_hi = getattr(thr, name).hi
         try:
-            hi = float(d.get("hi", BAND_CAP))
+            hi = float(d.get("hi", default_hi))
             cap = float(d.get("cap", BAND_CAP))
         except (TypeError, ValueError):
-            hi = cap = BAND_CAP
+            hi, cap = default_hi, BAND_CAP
         if not np.isfinite(hi) or hi < 0:
-            hi = BAND_CAP
+            hi = default_hi
         if not np.isfinite(cap) or cap <= 0:
             cap = BAND_CAP
         setattr(

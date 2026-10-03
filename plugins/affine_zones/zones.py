@@ -162,6 +162,10 @@ class ZoneDrawTool(CanvasInteraction):
     def on_right_press(self, image_pt, event):
         self.window._finish_zone(continue_drawing=True)
 
+    def on_cancel(self):
+        # Another tool, a range change or a new sequence took the canvas: drop the unfinished zone.
+        self.window._on_draw_cancelled(self)
+
 
 # Table columns
 COL_ZONE, COL_COLOR, COL_PTS, COL_L1, COL_L2, COL_V1, COL_V2 = range(7)
@@ -305,6 +309,13 @@ class AffineZonesWindow(QWidget):
         self._update_buttons()
 
     def on_draw_progress(self):
+        self.ctx.request_redraw()
+
+    def _on_draw_cancelled(self, tool):
+        if self._tool is not tool:
+            return
+        self._tool = None
+        self._update_buttons()
         self.ctx.request_redraw()
 
     def _finish_zone(self, *, continue_drawing=False):
@@ -688,6 +699,9 @@ class RansacDialog(QDialog):
         # Follow the zone table: clicking another row re-previews that zone with the current
         # parameters, so the user can tune once and run through all zones without reopening.
         self.owner.table.itemSelectionChanged.connect(self.preview)
+        # finished fires for Esc (reject), the Close button and close(); closeEvent does not run
+        # for Esc, which would leave the preview and signal connections alive while hidden.
+        self.finished.connect(self._on_finished)
 
     def _fit(self):
         z = self.owner.selected_zone_index()
@@ -751,15 +765,18 @@ class RansacDialog(QDialog):
         self.ctx.status(f"Zone {z + 1}: dropped {dropped} outlier(s). Undo in the Cleanup dialog.")
         self.preview()
 
-    def closeEvent(self, event):
-        try:
-            self.ctx.signals.frame_changed.disconnect(self._on_frame_changed)
-            self.ctx.signals.mask_changed.disconnect(self.preview)
-            self.owner.table.itemSelectionChanged.disconnect(self.preview)
-        except (TypeError, RuntimeError):
-            pass
+    def _on_finished(self, _result=None):
+        for signal, slot in (
+            (self.ctx.signals.frame_changed, self._on_frame_changed),
+            (self.ctx.signals.mask_changed, self.preview),
+            (self.owner.table.itemSelectionChanged, self.preview),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
         self.owner.on_ransac_closed()
-        super().closeEvent(event)
+        self.deleteLater()
 
 
 def _load_matplotlib():
@@ -784,6 +801,7 @@ class StretchPlotWindow(QWidget):
         self.ctx = owner.ctx
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Principal stretches over frames")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)  # owner drops its reference on close
         self.resize(720, 480)
 
         FigureCanvasQTAgg, NavigationToolbar2QT, Figure = mpl

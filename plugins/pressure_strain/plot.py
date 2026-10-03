@@ -26,6 +26,7 @@ class PressureStrainPlotWindow(QWidget):
         self.owner = owner
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Pressure–Strain")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)  # owner drops its reference on close
         self.resize(760, 560)
 
         FigureCanvas, Toolbar, Figure = _load_matplotlib()

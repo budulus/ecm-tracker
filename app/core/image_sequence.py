@@ -21,7 +21,10 @@ def _is_supported(path: str) -> bool:
 
 
 def discover(path_or_files: Union[str, Sequence[str]]) -> List[str]:
-    """Return naturally sorted, supported image paths from a directory or a list of files."""
+    """Return naturally sorted, supported image paths from a directory or a list of files.
+
+    Directory scans skip hidden files, e.g. the ``._name.bmp`` AppleDouble companions macOS writes
+    on external drives, which carry an image extension but are not images."""
     if isinstance(path_or_files, (list, tuple)):
         files = [f for f in path_or_files if _is_supported(f)]
     else:
@@ -29,7 +32,7 @@ def discover(path_or_files: Union[str, Sequence[str]]) -> List[str]:
         files = [
             os.path.join(directory, f)
             for f in os.listdir(directory)
-            if _is_supported(f)
+            if _is_supported(f) and not f.startswith(".")
         ]
     files.sort(key=lambda p: natural_sort_key(os.path.basename(p)))
     return files

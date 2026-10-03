@@ -385,12 +385,13 @@ def test_roi_shape_tools():
     assert w.state.roi.is_complete and len(w.state.roi.corners) == CIRCLE_SEGMENTS
     assert w.state.roi.contains(150, 110)  # center inside
 
-    # A degenerate (no-drag) gesture cancels the in-progress definition.
+    # A degenerate (no-drag) gesture cancels the in-progress definition and keeps the previous ROI.
+    previous = w.state.roi
     w._begin_roi_definition("rectangle")
     tool = w.canvas._interaction
     tool.on_press(QPointF(10, 10), None)
     tool.on_release(QPointF(11, 11), None)
-    assert w.state.roi is None and not w.define_roi_action.isChecked()
+    assert w.state.roi is previous and not w.define_roi_action.isChecked()
 
     # N-Gon: left-click arbitrary points (no preset count); right-click closes it.
     w._begin_roi_definition("ngon")

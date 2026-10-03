@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self._restore_pane_width()
 
         self._activating_point_tool = False  # reentrancy guard for Add/Delete mutual exclusivity
+        self._roi_before_definition = None  # complete ROI to restore if a redefinition is cancelled
 
         self._build_menus()
         self._build_toolbar()
@@ -853,6 +854,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_tracking():
             return
         self._cancel_roi_definition(silent=True)
+        self._roi_before_definition = self.state.roi
         self.state.roi = ROI()
         self.define_roi_action.setChecked(True)
         if shape == "ngon":
@@ -876,6 +878,7 @@ class MainWindow(QMainWindow):
     def _finish_roi_definition(self) -> None:
         """Shared completion for every ROI tool: drop the interaction and notify. The tool has
         already populated ``state.roi`` (drag tools build it fresh; the N-Gon tool closes it)."""
+        self._roi_before_definition = None
         self.define_roi_action.setChecked(False)
         self.canvas.clear_interaction()
         self.statusBar().showMessage("ROI complete.", 4000)
@@ -896,8 +899,11 @@ class MainWindow(QMainWindow):
             return
         self.canvas.clear_interaction()
         self.define_roi_action.setChecked(False)
-        if self.state.roi is not None and not self.state.roi.is_complete:
-            self.state.roi = None
+        if self.state.roi is None or not self.state.roi.is_complete:
+            # Nothing new was committed: keep the ROI that existed before this definition began.
+            self.state.roi = self._roi_before_definition
+        self._roi_before_definition = None
+        self.canvas.update()
         if not silent:
             self.canvas.refresh()
             self._update_tool_states()
@@ -906,6 +912,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_tracking():
             return
         self.canvas.clear_interaction()
+        self._roi_before_definition = None
         self.state.roi = None
         self.state.features = None
         self.state.touch()
@@ -921,16 +928,19 @@ class MainWindow(QMainWindow):
         dialog = CornerDetectionDialog(self.state.shi_tomasi_params, self)
         if dialog.exec():
             self.state.shi_tomasi_params = dialog.values()
+        dialog.deleteLater()
 
     def _open_grid_dialog(self) -> None:
         dialog = GridDialog(self.state.grid_params, self)
         if dialog.exec():
             self.state.grid_params = dialog.values()
+        dialog.deleteLater()
 
     def _open_tracker_dialog(self) -> None:
         dialog = TrackerDialog(self.state.lk_params, self)
         if dialog.exec():
             self.state.lk_params = dialog.values()
+        dialog.deleteLater()
 
     def _open_display_dialog(self) -> None:
         snapshot = dict(self.state.display_params)
@@ -944,6 +954,7 @@ class MainWindow(QMainWindow):
             self.state.display_params = dialog.values()
         else:
             self.state.display_params = snapshot
+        dialog.deleteLater()
         self.canvas.update()
 
     # ---- help -----------------------------------------------------------
@@ -980,7 +991,15 @@ class MainWindow(QMainWindow):
     def _detect_grid(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():
             return
-        self.state.features = regular_grid(self.state.roi, **self.state.grid_params)
+        try:
+            h, w = self.state.image_size()
+        except (OSError, ValueError, IndexError, cv2.error) as exc:
+            QMessageBox.critical(self, "Detection failed", str(exc))
+            return
+        grid = regular_grid(self.state.roi, **self.state.grid_params)
+        # An ROI may extend past the image border; tracking only accepts in-image seeds.
+        inside = (grid[:, 0] >= 0) & (grid[:, 1] >= 0) & (grid[:, 0] < w) & (grid[:, 1] < h)
+        self.state.features = grid[inside]
         self._after_detection()
 
     def _after_detection(self) -> None:
@@ -1034,6 +1053,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             dialog.close()
+            dialog.deleteLater()
 
         if self.state.revision != revision:
             self.statusBar().showMessage("Tracking inputs changed; discarded the stale result.", 5000)
@@ -1108,6 +1128,7 @@ class MainWindow(QMainWindow):
         dialog.applyRequested.connect(self._cleanup_apply)
         dialog.undoRequested.connect(self._cleanup_undo)
         dialog.finished.connect(self._cleanup_closed)
+        dialog.finished.connect(dialog.deleteLater)
         self._cleanup_dialog = dialog
         self._cleanup_preview()
         dialog.show()
@@ -1145,6 +1166,7 @@ class MainWindow(QMainWindow):
         self.canvas.refresh()
         self._update_tool_states()
         self.signals.mask_changed.emit()
+        self._cleanup_preview()  # keep an open Cleanup dialog's counts current (no-op otherwise)
 
     def _cleanup_apply(self) -> None:
         self._cleanup_preview()  # Apply current controls, never a cached preview.
@@ -1188,6 +1210,7 @@ class MainWindow(QMainWindow):
         dialog = PointManagerDialog(self)
         dialog.deleteRequested.connect(self._point_manager_delete)
         dialog.finished.connect(self._point_manager_closed)
+        dialog.finished.connect(dialog.deleteLater)
         # Reactive refresh: rebuild on any change to the point set or result mode.
         self.signals.mask_changed.connect(dialog.rebuild)
         self.signals.result_changed.connect(dialog.rebuild)
@@ -1292,7 +1315,7 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(
             f"Exported {shape[1]} points x {shape[0]} frames to "
-            f"{os.path.basename(coords_path)} + sequence.txt",
+            f"{os.path.basename(coords_path)} + {os.path.basename(seq_path)}",
             6000,
         )
 
@@ -1516,6 +1539,12 @@ class MainWindow(QMainWindow):
 
     # ---- tool enablement ------------------------------------------------
     def _update_tool_states(self) -> None:
+        if self.define_roi_action.isChecked() and not self.state.on_reference_frame:
+            # Leaving the reference frame mid-definition: discard the partial ROI too, or the
+            # half-placed N-Gon polyline is orphaned (kept painting, detection silently blocked
+            # until the user Clears). silent=True avoids recursing back into _update_tool_states.
+            # Done first so the enable states below reflect the restored ROI.
+            self._cancel_roi_definition(silent=True)
         has = self.state.has_sequence
         is_pair = isinstance(self.state.sequence, AlignedImagePairSequence)
         self.save_pair_setup_action.setEnabled(is_pair)
@@ -1562,12 +1591,6 @@ class MainWindow(QMainWindow):
         self.next_frame_action.setEnabled(
             has and self.state.current_index < self.state.total_images - 1
         )
-
-        if self.define_roi_action.isChecked() and not on_ref:
-            # Leaving the reference frame mid-definition: discard the partial ROI too, or the
-            # half-placed N-Gon polyline is orphaned (kept painting, detection silently blocked
-            # until the user Clears). silent=True avoids recursing back into _update_tool_states.
-            self._cancel_roi_definition(silent=True)
 
     # ---- status ---------------------------------------------------------
     def _update_status(self) -> None:

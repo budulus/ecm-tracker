@@ -111,7 +111,9 @@ conflicting tools. `end_canvas_interaction()` releases only YOUR capture. Cancel
 discard unfinished geometry. Sequence/range replacement cancels unfinished interactions.
 
 The manager owns the plugin context and returned window. Visible relaunch focuses it;
-closed/deleted-window relaunch releases the old instance and creates a fresh one.
+relaunch after an ordinary close calls launch() again on the same instance (return your
+cached window to keep its state; a different returned window replaces and deletes the
+closed one). Deleted-window relaunch releases the old instance and creates a fresh one.
 Reload/shutdown calls on_unload, disconnects managed subscriptions, removes overlays,
 releases owned capture, and schedules window deletion—even if plugin cleanup raises.
 Direct `ctx.signals.x.connect(...)` remains a legacy API but requires manual disconnection.

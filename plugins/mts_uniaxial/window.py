@@ -229,6 +229,7 @@ class MtsUniaxialWindow(QWidget):
         self.offset_spin.setDecimals(1)
         self.offset_spin.setSingleStep(1.0)
         self.offset_spin.setSuffix(" ms")
+        self.offset_spin.setKeyboardTracking(False)  # apply on Enter/focus-out, not per keystroke
         self.offset_spin.valueChanged.connect(self._on_channel_changed)
         form.addRow("Temporal offset:", self.offset_spin)
         v.addLayout(form)
@@ -322,6 +323,9 @@ class MtsUniaxialWindow(QWidget):
         override = QHBoxLayout()
         override.addWidget(QLabel("Reference frame (override):"))
         self.ref_spin = QSpinBox()
+        # Each applied value re-scopes the core range (discarding tracking); never apply the
+        # intermediate numbers of a multi-digit entry.
+        self.ref_spin.setKeyboardTracking(False)
         self.ref_spin.valueChanged.connect(self._on_ref_override)
         override.addWidget(self.ref_spin)
         override.addStretch(1)

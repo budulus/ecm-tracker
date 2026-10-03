@@ -194,6 +194,8 @@ Ordered image paths for all global frames as an immutable tuple.
 The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
 tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
 these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+For aligned pairs these remain the original source paths; their raw pixels/dimensions
+may differ from the cropped frames returned by the image helpers.
 
   load_sequence(self, paths: List[str], source_dir: Optional[str]=None) -> bool
 Load an explicit, pre-ordered list of image paths as the active sequence.
@@ -229,8 +231,20 @@ This is the only way a plugin can install a full tracking result back into the c
   frame_bgr(self, global_index: int) -> np.ndarray
 Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order).
 
+Aligned pairs return the shared crop, in the same coordinates as tracking results.
+
   frame_gray(self, global_index: int) -> np.ndarray
 Frame at ``global_index`` as an ``(H, W)`` uint8 grayscale array.
+
+  alignment_affine(self, global_index: int) -> np.ndarray
+Detached read-only 2x2 deformation-restoration matrix C for a global frame.
+
+Identity for ordinary sequences, the original pair reference, or rigid-only alignment.
+For a destination warped by L=R U (polar rotation/stretch), C=R inv(U) R.T.
+Restore a residual fit with C_current @ F @ inv(C_reference). This restores scale/shear,
+never alignment translation/rotation. Reported axes live in restored, rotation-aligned
+coordinates; map them through inv(C_current) to overlay them on the aligned pixels.
+All frame/track accessors continue to return aligned coordinates.
 
   frame_rgb(self, global_index: int) -> np.ndarray
 Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **RGB** array (for Qt/matplotlib).
@@ -335,7 +349,10 @@ Declare the package's plugin by assigning ``PLUGIN = YourClass`` in the package
 ``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
 
 Lifecycle: the manager owns your context and returned window. A visible-window relaunch
-re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+re-focuses it. Relaunch after an ordinary close calls launch() again on the same instance
+(return your cached window to keep its state; a different returned window replaces and
+deletes the closed one). Relaunch after the window was deleted disposes the old instance
+and creates a new one.
 Action-only plugins returning None may receive repeated launch calls on the same instance.
 
 Minimal example::
@@ -388,6 +405,8 @@ engineering strains lambda-1. Invalid rows/undefined axes are NaN, not zero.
 ransac_affine: deterministic; returned inliers satisfy the returned model's threshold.
 ROI: plugin-owned polygon helper. Never mutates the host ROI.
 atomic_open/atomic_save_npy: atomic replacement of ONE file, not a multi-file transaction.
+compose_alignment_affines(F,current,reference): current @ F @ inv(reference), using
+the 2x2 restoration maps from ctx.alignment_affine(global_index).
 
 app.plugins.testing
 

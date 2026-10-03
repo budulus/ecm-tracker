@@ -74,6 +74,21 @@ def wipe_files(project_path: str, filenames: List[str]) -> List[str]:
 # --------------------------------------------------------------------------- manifest
 
 
+def _relative_paths(state: MtsProjectState) -> dict:
+    """Root-relative source paths; a path with no relative form (another Windows drive) is omitted
+    and resume falls back to its absolute manifest entry."""
+    paths = {}
+    for key in ("images_dir", "sensor_file", "log_path"):
+        value = getattr(state, key)
+        if not value:
+            continue
+        try:
+            paths[key] = os.path.relpath(value, state.root)
+        except ValueError:
+            pass
+    return paths
+
+
 def _manifest_dict(state: MtsProjectState) -> dict:
     sensor = state.sensor
     image_log = state.image_log
@@ -107,7 +122,7 @@ def _manifest_dict(state: MtsProjectState) -> dict:
         "material_thickness": state.material_thickness,
         "incompressible": state.incompressible,
         "raw_fingerprints": state.raw_fingerprints,
-        "relative_paths": {k: os.path.relpath(getattr(state, k), state.root) for k in ("images_dir", "sensor_file", "log_path") if getattr(state, k)},
+        "relative_paths": _relative_paths(state),
         "export_generation": state.export_generation,
         "reference_parameters": state.reference_parameters,
         "force_basis": state.force_basis,
@@ -230,14 +245,21 @@ def load_project(root: str) -> Optional[MtsProjectState]:
     if not isinstance(manifest, dict) or manifest.get("schema_version") not in (1, SCHEMA_VERSION):
         return None
 
+    relative_paths = manifest.get("relative_paths", {})
+    if not isinstance(relative_paths, dict):
+        return None
+
     def source_path(key):
-        relative = manifest.get("relative_paths", {}).get(key)
-        if relative is not None:
+        relative = relative_paths.get(key)
+        if isinstance(relative, str):
             return os.path.normpath(os.path.join(root, relative))
         old = manifest.get(key)
         old_root = manifest.get("root")
-        if old and old_root:
-            relocated = os.path.normpath(os.path.join(root, os.path.relpath(old, old_root)))
+        if isinstance(old, str) and old and isinstance(old_root, str) and old_root:
+            try:
+                relocated = os.path.normpath(os.path.join(root, os.path.relpath(old, old_root)))
+            except ValueError:  # another Windows drive: only the absolute path is meaningful
+                return old
             if os.path.exists(relocated):
                 return relocated
         return old

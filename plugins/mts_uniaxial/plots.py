@@ -39,6 +39,7 @@ class KinematicsPlotWindow(QWidget):
         self.ctx = owner.ctx
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Kinematics — linear strains")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)  # owner drops its reference on close
         self.resize(860, 460)
 
         FigureCanvas, Toolbar, Figure = _load_matplotlib()
@@ -109,6 +110,7 @@ class StressPlotWindow(QWidget):
         self._ylabel = "P (MPa)" if is_pk else r"$\sigma$ (MPa)"
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("First Piola–Kirchhoff stress" if is_pk else "Cauchy (true) stress")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)  # owner drops its reference on close
         self.resize(640, 480)
 
         FigureCanvas, Toolbar, Figure = _load_matplotlib()

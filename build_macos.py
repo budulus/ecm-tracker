@@ -145,18 +145,22 @@ def main() -> int:
     if BUILD_DIR.exists():
         raise RuntimeError("Build scratch directory unexpectedly exists")
     BUILD_DIR.mkdir()
-    subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
-    subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
-    DIST_DIR.mkdir(exist_ok=True)
+    try:
+        subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
+        subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
+        DIST_DIR.mkdir(exist_ok=True)
 
-    subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)
+        subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)
 
-    app = _stage_app()
-    print(f"  app   -> {app}")
-    print(f"  zip   -> {_make_zip(app, version)}")
-    print(f"  dmg   -> {_make_dmg(app, version)}")
-    print("Done.")
-    return 0
+        app = _stage_app()
+        print(f"  app   -> {app}")
+        print(f"  zip   -> {_make_zip(app, version)}")
+        print(f"  dmg   -> {_make_dmg(app, version)}")
+        print("Done.")
+        return 0
+    finally:
+        # Scratch is uniquely named per build; artifacts are already in dist/.
+        shutil.rmtree(BUILD_DIR, ignore_errors=True)
 
 
 if __name__ == "__main__":

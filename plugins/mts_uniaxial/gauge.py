@@ -107,6 +107,7 @@ class DirectionGaugeWindow(QWidget):
         self.ctx = owner.ctx
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("Direction gauge — principal strain axes")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)  # owner drops its reference on close
         self.resize(560, 600)
 
         self.canvas = _GaugeCanvas()

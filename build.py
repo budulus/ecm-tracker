@@ -157,20 +157,28 @@ def main() -> int:
     if BUILD_DIR.exists():
         raise RuntimeError("Build scratch directory unexpectedly exists")
     BUILD_DIR.mkdir()
-    subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
-    subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
-    DIST_DIR.mkdir(exist_ok=True)
+    keep_scratch = False
+    try:
+        subprocess.run([sys.executable, "scripts/build_sdk.py"], check=True, cwd=ROOT)
+        subprocess.run([sys.executable, "scripts/check.py"], check=True, cwd=ROOT)
+        DIST_DIR.mkdir(exist_ok=True)
 
-    subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)
+        subprocess.run(_nuitka_cmd(version), check=True, cwd=ROOT)
 
-    payload = _stage_payload()
-    print(f"  payload   -> {payload}")
-    print(f"  zip       -> {_make_zip(payload, version)}")
-    installer = _make_installer(payload, version)
-    if installer is not None:
-        print(f"  installer -> {installer}")
-    print("Done.")
-    return 0
+        payload = _stage_payload()
+        print(f"  payload   -> {payload}")
+        print(f"  zip       -> {_make_zip(payload, version)}")
+        installer = _make_installer(payload, version)
+        if installer is not None:
+            print(f"  installer -> {installer}")
+        else:
+            keep_scratch = True  # The printed manual ISCC command needs the staged payload.
+        print("Done.")
+        return 0
+    finally:
+        # Scratch is uniquely named per build; artifacts are already in dist/.
+        if not keep_scratch:
+            shutil.rmtree(BUILD_DIR, ignore_errors=True)
 
 
 if __name__ == "__main__":

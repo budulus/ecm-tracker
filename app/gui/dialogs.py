@@ -32,7 +32,8 @@ def _add_buttons(dialog, form, section_getter, section_name):
             QMessageBox.critical(dialog, "Save failed", str(exc))
             return
         save_btn.setText("Saved ✓")
-        QTimer.singleShot(1500, lambda: save_btn.setText("Save as defaults"))
+        # Context-object form: the timer is dropped if the dialog is deleted first.
+        QTimer.singleShot(1500, save_btn, lambda: save_btn.setText("Save as defaults"))
 
     save_btn.clicked.connect(_save)
     form.addRow(buttons)

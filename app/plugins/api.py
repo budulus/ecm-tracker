@@ -136,7 +136,7 @@ class PluginContext:
         self._window = main_window
         self._plugin_id = plugin_id
         self._overlay_wrappers: dict = {}
-        self._metrics_cache: Optional[Tuple[tuple, Metrics]] = None
+        self._metrics_cache: Optional[Tuple[object, tuple, Metrics]] = None  # (result, ROI, metrics)
         self._interaction_handler = None
         self._subscriptions = []
         self._snapshot_cache = {}
@@ -489,11 +489,14 @@ class PluginContext:
         result = self._state.result
         # Key on both the result and the ROI: the ``left_roi`` metric depends on the ROI, so the
         # cache must refresh when the ROI is set/cleared/replaced, not only when the result changes.
-        key = (id(result), tuple(self.roi_corners))
-        if self._metrics_cache is None or self._metrics_cache[0] != key:
+        # Hold the result itself and compare identity: a bare id() can be reused by a new result
+        # after the old one is freed, which would return the previous result's metrics.
+        roi_key = tuple(self.roi_corners)
+        cached = self._metrics_cache
+        if cached is None or cached[0] is not result or cached[1] != roi_key:
             h, w = self._state.image_size()
-            self._metrics_cache = (key, compute_metrics(result, self._state.roi, (h, w)))
-        return self._metrics_cache[1]
+            self._metrics_cache = (result, roi_key, compute_metrics(result, self._state.roi, (h, w)))
+        return self._metrics_cache[2]
 
     # ---- ROI ------------------------------------------------------------
     @property
@@ -632,7 +635,10 @@ class TrackerPlugin:
     ``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
 
     Lifecycle: the manager owns your context and returned window. A visible-window relaunch
-    re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+    re-focuses it. Relaunch after an ordinary close calls launch() again on the same instance
+    (return your cached window to keep its state; a different returned window replaces and
+    deletes the closed one). Relaunch after the window was deleted disposes the old instance
+    and creates a new one.
     Action-only plugins returning None may receive repeated launch calls on the same instance.
 
     Minimal example::

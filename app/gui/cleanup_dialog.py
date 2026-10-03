@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import numpy as np
@@ -97,6 +98,11 @@ class _BandRow(QWidget):
         return float(self.cap_box.value())
 
     def _set_cap_box(self, value: float) -> None:
+        if not self._integer:
+            # The box keeps a fixed number of decimals. Round the scale UP so a threshold at full
+            # scale still keeps the metric's maximum (rounding down would drop the worst point).
+            scale = 10 ** self.cap_box.decimals()
+            value = math.ceil(float(value) * scale - 1e-9) / scale
         self.cap_box.blockSignals(True)
         self.cap_box.setValue(int(round(value)) if self._integer else float(value))
         self.cap_box.blockSignals(False)
@@ -314,4 +320,5 @@ class CleanupDialog(QDialog):
             return
         self._defaults = self.thresholds()
         self._save_btn.setText("Saved ✓")
-        QTimer.singleShot(1500, lambda: self._save_btn.setText("Save parameters"))
+        # Context-object form: the timer is dropped if the dialog is deleted first.
+        QTimer.singleShot(1500, self._save_btn, lambda: self._save_btn.setText("Save parameters"))

@@ -52,6 +52,12 @@ the whole trajectory. Frame indices must be integers. Image helpers accept globa
 `image_size()` returns (height,width), or None. No sequence raises RuntimeError; an
 out-of-range image raises IndexError.
 
+For an aligned image pair, these image helpers return the shared overlap crops and tracking
+coordinates use that same cropped origin. Displacement excludes the manual alignment shift.
+`frame_paths` still identifies the original source files (which may have different dimensions);
+always use the image helpers for pixels that match tracking coordinates. The saved `.ecmpair.json`
+setup records the source references, shift, crop origin, and sequence identity.
+
 Legacy adapters remain supported: `coords()`, `track_status()`, `point_indices()`,
 `active_mask`, `frame_count`, `point_count`, `n_active`, `current_cut`,
 `global_to_cut`, `cut_to_global`. Conversions are arithmetic, NOT bounds validation.
@@ -105,7 +111,9 @@ conflicting tools. `end_canvas_interaction()` releases only YOUR capture. Cancel
 discard unfinished geometry. Sequence/range replacement cancels unfinished interactions.
 
 The manager owns the plugin context and returned window. Visible relaunch focuses it;
-closed/deleted-window relaunch releases the old instance and creates a fresh one.
+relaunch after an ordinary close calls launch() again on the same instance (return your
+cached window to keep its state; a different returned window replaces and deletes the
+closed one). Deleted-window relaunch releases the old instance and creates a fresh one.
 Reload/shutdown calls on_unload, disconnects managed subscriptions, removes overlays,
 releases owned capture, and schedules window deletion—even if plugin cleanup raises.
 Direct `ctx.signals.x.connect(...)` remains a legacy API but requires manual disconnection.
@@ -117,6 +125,25 @@ New plugins must not use them. These adapters remain in API 1; removing them req
 API revision. Do not use them to change scientific state.
 
 ## Math helpers and conventions
+
+### Image-pair alignment
+
+`ctx.frame_bgr(i)` and tracked coordinates use the cropped, aligned image system. Original
+`ctx.frame_paths` remain source references, not interchangeable pixel arrays. Pair setups save
+all alignment parameters and editor presets; translation-only v1 setups remain supported.
+
+`ctx.alignment_affine(global_index)` returns a detached, read-only 2x2 **restoration** matrix C.
+It is identity for ordinary sequences, the original pair reference, and rigid-only alignment.
+If the destination-to-reference linear warp is L=R U (proper rotation R, symmetric positive
+stretch U), C=R inv(U) R.T. It restores scale/shear without reintroducing alignment&#x27;s rigid
+translation or rotation. A missing sequence raises RuntimeError; an invalid index raises IndexError.
+
+`compose_alignment_affines(F, current, reference)` from `app.plugins.analysis` computes
+`current @ F @ inv(reference)`. Pass C for the actual global current and tracked reference
+frames, not cut indices. Corrected eigenvectors describe restored, rotation-aligned coordinates;
+map them with `inv(C_current)` and normalize to draw directions over the aligned image. Do not
+change point membership, validity, or pixel-space RANSAC thresholds when restoring deformation.
+The Affine Zone Tool applies this correction through its checkbox; other plugins opt in explicitly.
 
 Import helpers from `app.plugins.analysis`, never `app.core`.
 `fit_affine(ref,cur,valid)` returns (eligible_indices,F,b) for cur=ref@F.T+b, or None
@@ -383,6 +410,8 @@ Ordered image paths for all global frames as an immutable tuple.
 The order exactly matches global frame indices and :attr:`n_total_images`.  An empty
 tuple is returned when no sequence is loaded.  Plugins may inspect file metadata through
 these paths; pixel access should continue to use :meth:`frame_bgr` and its variants.
+For aligned pairs these remain the original source paths; their raw pixels/dimensions
+may differ from the cropped frames returned by the image helpers.
 
   load_sequence(self, paths: List[str], source_dir: Optional[str]=None) -&gt; bool
 Load an explicit, pre-ordered list of image paths as the active sequence.
@@ -418,8 +447,20 @@ This is the only way a plugin can install a full tracking result back into the c
   frame_bgr(self, global_index: int) -&gt; np.ndarray
 Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **BGR** array (OpenCV order).
 
+Aligned pairs return the shared crop, in the same coordinates as tracking results.
+
   frame_gray(self, global_index: int) -&gt; np.ndarray
 Frame at ``global_index`` as an ``(H, W)`` uint8 grayscale array.
+
+  alignment_affine(self, global_index: int) -&gt; np.ndarray
+Detached read-only 2x2 deformation-restoration matrix C for a global frame.
+
+Identity for ordinary sequences, the original pair reference, or rigid-only alignment.
+For a destination warped by L=R U (polar rotation/stretch), C=R inv(U) R.T.
+Restore a residual fit with C_current @ F @ inv(C_reference). This restores scale/shear,
+never alignment translation/rotation. Reported axes live in restored, rotation-aligned
+coordinates; map them through inv(C_current) to overlay them on the aligned pixels.
+All frame/track accessors continue to return aligned coordinates.
 
   frame_rgb(self, global_index: int) -&gt; np.ndarray
 Frame at ``global_index`` as an ``(H, W, 3)`` uint8 **RGB** array (for Qt/matplotlib).
@@ -524,7 +565,10 @@ Declare the package&#x27;s plugin by assigning ``PLUGIN = YourClass`` in the pac
 ``__init__.py`` (the manager also auto-detects a lone ``TrackerPlugin`` subclass).
 
 Lifecycle: the manager owns your context and returned window. A visible-window relaunch
-re-focuses it. Relaunch after close/deletion disposes the old instance and creates a new one.
+re-focuses it. Relaunch after an ordinary close calls launch() again on the same instance
+(return your cached window to keep its state; a different returned window replaces and
+deletes the closed one). Relaunch after the window was deleted disposes the old instance
+and creates a new one.
 Action-only plugins returning None may receive repeated launch calls on the same instance.
 
 Minimal example::
@@ -577,6 +621,8 @@ engineering strains lambda-1. Invalid rows/undefined axes are NaN, not zero.
 ransac_affine: deterministic; returned inliers satisfy the returned model&#x27;s threshold.
 ROI: plugin-owned polygon helper. Never mutates the host ROI.
 atomic_open/atomic_save_npy: atomic replacement of ONE file, not a multi-file transaction.
+compose_alignment_affines(F,current,reference): current @ F @ inv(reference), using
+the 2x2 restoration maps from ctx.alignment_affine(global_index).
 
 app.plugins.testing
 

@@ -88,7 +88,7 @@ class TrackerResult:
                 raise ValueError(f"{name} must contain only 0/1")
         for name in ("err_fw", "err_bw", "fb_mean_error", "fb_max_error"):
             if np.isnan(raw_arrays[name].astype(np.float64, copy=False)).any() or (raw_arrays[name] < 0).any():
-                raise ValueError(f"{name} cannot contain NaN")
+                raise ValueError(f"{name} cannot contain NaN or negative values")
 
         arrays = {
             name: np.array(raw_arrays[name], dtype=dtype, copy=True)

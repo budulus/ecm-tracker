@@ -145,7 +145,7 @@ class PressureStrainWindow(QWidget):
             if len(paths) != self.ctx.n_total_images:
                 raise ValueError("The image sequence changed while pressure data was loading")
             pressure = analysis.parse_pressure_csv(path)
-            timestamps = analysis.image_modified_times(paths)
+            timestamps = analysis.image_capture_times(paths)
             aligned = analysis.align_pressure_to_images(pressure, timestamps)
         except ValueError as exc:
             QMessageBox.critical(self, "Pressure load failed", str(exc))
@@ -155,10 +155,16 @@ class PressureStrainWindow(QWidget):
         self._aligned = aligned
         self.path_edit.setText(pressure.source_path)
         self.path_edit.setToolTip(pressure.source_path)
+        covered = np.flatnonzero(aligned.covered)
+        coverage = (
+            "all frames inside the log"
+            if covered.size == aligned.pressure_mbar.size
+            else f"only frames {covered[0]}–{covered[-1]} inside the log"
+        )
         self.pressure_info.setText(
-            f"Assumed endpoint / file-mtime alignment: {pressure.source_rows:,} CSV rows to "
-            f"{aligned.pressure_mbar.size:,} frames · "
-            f"{aligned.pressure_mbar[0]:.4g} to {aligned.pressure_mbar[-1]:.4g} mbar"
+            f"Capture-time alignment: {pressure.source_rows:,} CSV rows to "
+            f"{aligned.pressure_mbar.size:,} frames, {coverage} · "
+            f"logger clock residual ≤ {pressure.clock_residual_s * 1000:.0f} ms"
         )
         self._update_gating()
         self._refresh_plot()
@@ -179,9 +185,13 @@ class PressureStrainWindow(QWidget):
         return self._strain_cache
 
     def current_plot_series(self):
+        series, _reason = self._plot_series_or_reason()
+        return series
+
+    def _plot_series_or_reason(self):
         strains = self._strain_series()
         if self._aligned is None or strains is None:
-            return None
+            return None, "Load pressure data and calculate tracking with at least three active points."
         try:
             return analysis.build_plot_series(
                 self._aligned,
@@ -190,19 +200,15 @@ class PressureStrainWindow(QWidget):
                 self.ctx.last_index,
                 self.strain_combo.currentData(),
                 self.zero_check.isChecked(),
-            )
-        except ValueError:
-            return None
+            ), ""
+        except ValueError as exc:
+            return None, str(exc)
 
     # --------------------------------------------------------------- plotting/export
     def _open_plot(self) -> None:
-        series = self.current_plot_series()
+        series, reason = self._plot_series_or_reason()
         if series is None:
-            QMessageBox.warning(
-                self,
-                "Plot unavailable",
-                "Load pressure data and calculate tracking with at least three active points.",
-            )
+            QMessageBox.warning(self, "Plot unavailable", reason)
             return
         if self._plot_window is None:
             try:
@@ -230,8 +236,9 @@ class PressureStrainWindow(QWidget):
             self._plot_window = None
 
     def _export(self) -> None:
-        series = self.current_plot_series()
+        series, reason = self._plot_series_or_reason()
         if series is None:
+            QMessageBox.warning(self, "Export unavailable", reason)
             return
         start = os.path.dirname(self._pressure.source_path) if self._pressure is not None else ""
         default_path = os.path.join(start, "pressure_strain.csv")

@@ -4,6 +4,7 @@ Run from the repository: .venv/bin/python scripts/capture_help_screenshots.py
 All experiment files and settings stay in a temporary directory. Only the manual's
 PNG assets are written into the repository. No personal plugins are loaded.
 """
+from datetime import datetime
 from pathlib import Path
 import os
 import sys
@@ -150,9 +151,18 @@ def capture(scratch):
     zones.close()
 
     pressure_path = scratch / "pressure.csv"
-    pressure_path.write_text("Elapsed_s,Raw_mbar\n0,0\n0.4,30\n0.8,75\n1.1,100\n", encoding="utf-8")
+    pressure_path.write_text(
+        "Timestamp,Arduino_ms,Raw_mbar\n"
+        "2026-01-01 12:00:00.000,0,0\n2026-01-01 12:00:00.400,400,30\n"
+        "2026-01-01 12:00:00.800,800,75\n2026-01-01 12:00:01.200,1200,100\n",
+        encoding="utf-8",
+    )
     pressure = PressureStrainWindow(PluginContext(host, "pressure_strain"))
-    assert pressure.load_pressure_file(str(pressure_path))
+    # The MTS demo frames carry no capture time in their names; give them 0.1 s spacing.
+    demo_start = datetime(2026, 1, 1, 12, 0, 0).timestamp()
+    with patch("plugins.pressure_strain.analysis.image_capture_times",
+               return_value=demo_start + 0.1 * np.arange(len(paths))):
+        assert pressure.load_pressure_file(str(pressure_path))
     series = pressure.current_plot_series()
     assert series is not None and len(series.strain) == 12
     export_plot_csv(str(scratch / "pressure-strain.csv"), series, paths)

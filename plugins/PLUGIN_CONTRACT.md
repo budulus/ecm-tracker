@@ -213,4 +213,4 @@ This assumes the acquisition channels already use compatible extension/force sig
 No sign is inferred from the data. Unknown declared units and clock resets are rejected;
 missing legacy units/positional column fallback and skipped row numbers are recorded.
 Pressure CSV exports retain the exact plotted values and a first-row provenance_json field
-with the assumed endpoint-mtime mapping, timestamp array, source hash, anchors and reference.
+with the capture-time clock model, logger clock offset/residual, source hash and reference.

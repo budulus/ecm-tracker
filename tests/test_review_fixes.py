@@ -321,11 +321,14 @@ class ReviewFixes(unittest.TestCase):
         (scratch / "run.dist").mkdir(parents=True)
         with patch.object(build, "BUILD_DIR", scratch):
             payload = build._stage_payload()
-        kit = payload / "bundled_plugins"
+        kit = payload / "plugins"  # The one plugin folder: included plugins + SDK kit.
         for name in ("PLUGIN_CONTRACT.md", "plugin-api.html", "_sdk/API_REFERENCE.txt",
-                     "_sdk/host_dependencies.json", "_sdk/uv.lock", "_sdk/example/__init__.py"):
+                     "_sdk/host_dependencies.json", "_sdk/uv.lock", "_sdk/example/__init__.py",
+                     "affine_zones/__init__.py", "mts_uniaxial/__init__.py", "pressure_strain/__init__.py"):
             self.assertTrue((kit / name).is_file(), name)
-        self.assertFalse((payload / "plugins").exists())  # Do not overwrite legacy edited plugins.
+        self.assertFalse((payload / "bundled_plugins").exists())
+        self.assertIn('Name: "{app}\\bundled_plugins"', build._ISS.format(
+            display="d", version="v", publisher="p", outdir="o", appname="a", icon="i", payload="x"))
 
     def test_frozen_discovery_without_source_plugins_package(self):
         import build
@@ -341,7 +344,7 @@ class ReviewFixes(unittest.TestCase):
                 raise ModuleNotFoundError("No source plugins package", name="plugins")
             return original_import(name, *args, **kwargs)
         with patch.dict(sys.modules), patch.object(module, "PROJECT_ROOT", payload), \
-             patch.object(module, "PLUGINS_DIR", payload / "bundled_plugins"), \
+             patch.object(module, "PLUGINS_DIR", payload / "plugins"), \
              patch.object(module.importlib, "import_module", side_effect=fresh_import):
             for name in list(sys.modules):
                 if name == "plugins" or name.startswith("plugins."):

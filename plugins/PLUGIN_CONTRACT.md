@@ -7,7 +7,7 @@ host GUI/model/core internals. This is a trusted Python extension API, not a san
 ## Start here
 
 1. Copy the example folder into **Plugins → Open Plugins Folder**, rename it using
-   letters/digits/underscores, and edit its `__init__.py`.
+   letters/digits/underscores, edit its `__init__.py`, and choose **Reload Plugins**.
 2. Import `TrackerPlugin` from `app.plugins`; expose `PLUGIN = YourClass`.
 3. Declare `API_VERSION = 1`, a nonempty string `NAME`, string `DESCRIPTION`,
    and integer `ORDER` (default 100). A malformed plugin is disabled independently.
@@ -18,9 +18,13 @@ host GUI/model/core internals. This is a trusted Python extension API, not a san
    child windows and release your own files, timers and workers in `on_unload()`.
 7. Test the pure calculation, then run the host smoke test and try reload/shutdown.
 
-User plugins are stored outside the app's installation/signed bundle. User folders override
-bundled folders of the same name after Reload Plugins. Do not edit bundled examples in place.
-Legacy source-checkout `plugins/my_plugin` folders still load.
+All plugins live in one folder, `plugins/` next to the application; plugins included with the
+app and ones you add are treated the same. **Plugins → Manage Plugins…** lists every plugin:
+check or uncheck it to enable or disable it (disabled plugins are not imported and get no
+side-pane button; new plugins start enabled), install one from a `.zip`, or remove one.
+A distributable plugin is a zip of its folder (`my_plugin/__init__.py` inside the archive).
+Updating the app replaces the included plugins' files, so to customize one, copy it under a
+new folder name instead of editing it in place.
 
 ## Data: one coherent snapshot
 
@@ -114,8 +118,9 @@ The manager owns the plugin context and returned window. Visible relaunch focuse
 relaunch after an ordinary close calls launch() again on the same instance (return your
 cached window to keep its state; a different returned window replaces and deletes the
 closed one). Deleted-window relaunch releases the old instance and creates a fresh one.
-Reload/shutdown calls on_unload, disconnects managed subscriptions, removes overlays,
-releases owned capture, and schedules window deletion—even if plugin cleanup raises.
+Reload, disable, reinstall, remove and shutdown call on_unload, disconnect managed
+subscriptions, remove overlays, release owned capture, and schedule window deletion—even if
+plugin cleanup raises.
 Direct `ctx.signals.x.connect(...)` remains a legacy API but requires manual disconnection.
 on_unload must stop/join your own workers and timers; host disposal is not thread cancellation.
 

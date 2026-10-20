@@ -4,8 +4,14 @@ Start with [PLUGIN_CONTRACT.md](PLUGIN_CONTRACT.md). It defines the complete sup
 workflow: data shapes and validity, frame/point identity, mutations, events, Qt ownership,
 math conventions, installation, and tests.
 
-Copy [_sdk/example](_sdk/example/__init__.py) into **Plugins → Open Plugins Folder**.
+This folder is the app's one plugin folder: every subfolder with an `__init__.py` is a plugin
+(folders starting with `_` or `.` are not). Copy [_sdk/example](_sdk/example/__init__.py) here
+under a new name (**Plugins → Open Plugins Folder**), then **Reload Plugins**.
 The example uses only the public SDK; you do not need to read the host source.
+
+**Plugins → Manage Plugins…** lists every plugin: check/uncheck to enable or disable it
+(disabled plugins are not loaded and have no side-pane button), **Install from Zip…** to add
+one, **Remove…** to move one to the trash. To share a plugin, zip its folder.
 
 [Offline API reference](plugin-api.html) is generated from the same contract and Python
 signatures/docstrings. [API_REFERENCE.txt](_sdk/API_REFERENCE.txt) is the plain-text version.
@@ -24,5 +30,5 @@ The smoke test executes trusted plugin code; it is not a sandbox or a physics va
 Use only PySide6 and bundled dependencies. Installing packages into an unrelated Python/uv
 environment does not add them to a frozen host.
 
-User plugins live outside the installation and override bundled names after Reload Plugins.
-Legacy plugin folders remain readable; new releases do not overwrite them.
+Updating the app replaces the files of the plugins it ships with and leaves every other
+plugin folder alone; to customize an included plugin, copy it under a new folder name.

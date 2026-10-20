@@ -72,7 +72,7 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 </ol>
 <div class="route-grid"><a class="route" href="#pairs"><strong>Two images?</strong>Align the pair before tracking.</a><a class="route" href="#mts"><strong>MTS experiment?</strong>Start in MTS Uniaxial.</a><a class="route" href="#pressure"><strong>Pressure logger?</strong>Add pressure after loading images.</a></div>
 <figure><a href="help-assets/workspace.png"><img src="help-assets/workspace.png" width="3200" height="1700" alt="ECM Tracker showing the toolbar, left Frame Range and Plugins pane, and a speckle image with an ROI and tracked points."></a><figcaption><strong>Your workspace.</strong> Tools are grouped across the top; frame controls and plugin launch buttons sit on the left. The status bar identifies the current image and tracked range.</figcaption></figure>
-<p>Drag the divider beside the image to resize or collapse the left pane; drag it back to reveal the controls. Its width is remembered. Launch analysis tools from the pane’s <strong>Plugins</strong> buttons. The top <strong>Plugins</strong> menu manages installation and reloading.</p>
+<p>Drag the divider beside the image to resize or collapse the left pane; drag it back to reveal the controls. Its width is remembered. Launch analysis tools from the pane’s <strong>Plugins</strong> buttons. <strong>Manage plugins…</strong> under them (or the top <strong>Plugins</strong> menu) enables, disables, installs, and removes plugins.</p>
 </section>
 
 <section id="loading">
@@ -322,8 +322,10 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 
 <section id="plugins">
 <h2><span class="num">12</span>Plugin management</h2>
-<p>Use the left pane’s buttons to launch installed plugins. <strong>Plugins → Open Plugins Folder…</strong> opens the writable user-plugin directory. Place a plugin folder there, then select <strong>Reload Plugins</strong>. User folders with the same name override bundled plugins.</p>
-<p>Reload closes plugin windows and discards their in-memory state before rediscovery. A disabled plugin button with a warning has failed to load; hover for the error. The separately shipped <code>plugins/</code> or <code>bundled_plugins/</code> folder contains the developer guide, <code>plugin-api.html</code>, and SDK example for authors.</p>
+<p>All plugins live in one <code>plugins</code> folder next to the application. Plugins included with ECM Tracker and plugins you add are handled the same way. The left pane shows a launch button for every <em>enabled</em> plugin.</p>
+<p>Open <strong>Plugins → Manage Plugins…</strong> (or <strong>Manage plugins…</strong> under the pane’s buttons) to see every plugin in the folder. <strong>Check</strong> a plugin to enable it: it loads and its button appears. <strong>Uncheck</strong> it to disable it: its window closes, its button disappears, and it is not loaded on later starts. The choice is remembered; newly added plugins start enabled. Select a plugin to see its description, folder, and any load error.</p>
+<p><strong>Install from Zip…</strong> adds a plugin from a <code>.zip</code> archive of its folder and enables it; installing a plugin that is already present asks before replacing it. <strong>Remove…</strong> moves the selected plugin’s folder to the Recycle Bin/Trash. You can also copy a plugin folder into <strong>Plugins → Open Plugins Folder…</strong> and choose <strong>Reload Plugins</strong>.</p>
+<p>Reload closes plugin windows and discards their in-memory state before rediscovery; enabling or disabling one plugin leaves the others open. A disabled plugin button with a warning has failed to load; hover for the error, or read it in the Plugin Manager. Updating ECM Tracker replaces the included plugins’ files; copy one under a new folder name before customizing it. The <code>plugins</code> folder also contains the developer guide, <code>plugin-api.html</code>, and the SDK example for authors.</p>
 <p><strong>Help → View Help</strong> (<kbd>F1</kbd>) opens this offline manual in your browser. <strong>Help → About…</strong> shows application information. Use <strong>File → Quit</strong> to exit; macOS may place About/Quit in the application menu.</p>
 </section>
 
@@ -361,7 +363,7 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 <tr><td>Zone / strain result is missing</td><td>Use at least three non-collinear valid points, and enough points for the chosen RANSAC sample size. Check the selected zone and frame. Missing/NaN results are not zero deformation.</td></tr>
 <tr><td>MTS cannot find a reference</td><td>Check channel, offset, crop, search window, and sensor coverage. For preforce, a sample must exceed the threshold. Inspect detection and use override when appropriate.</td></tr>
 <tr><td>Pressure alignment fails</td><td>Check required CSV columns, finite ordered times, and increasing image modification times. A copied set with identical timestamps has no usable timing span.</td></tr>
-<tr><td>A plugin button is disabled</td><td>Read its error tooltip; check installation and reload. A plugin’s internal controls may instead be waiting for images, a reference, tracking, or enough valid points.</td></tr>
+<tr><td>A plugin button is disabled or missing</td><td>A missing button means the plugin is disabled: enable it in <strong>Plugins → Manage Plugins…</strong>. A disabled button has failed to load: read its error tooltip or the Plugin Manager, check installation, and reload. A plugin’s internal controls may instead be waiting for images, a reference, tracking, or enough valid points.</td></tr>
 </tbody></table></div>
 <details class="reference"><summary>Small glossary</summary><div class="detail-body"><dl class="glossary">
 <dt>Seed / track</dt><dd>A seed is a reference-image point. A track is its sequence of measured positions.</dd>

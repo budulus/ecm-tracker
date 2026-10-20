@@ -1,8 +1,9 @@
 """Build a shippable Windows package of ECM Tracker with Nuitka.
 
-The application is COMPILED into a standalone binary; the ``bundled_plugins/`` folder is
-shipped as plain Python *next to* the exe, so clients can read the SDK and write
-or edit their own plugins (which import the compiled ``app`` package at runtime).
+The application is COMPILED into a standalone binary; the ``plugins/`` folder is
+shipped as plain Python *next to* the exe. It is the app's one plugin folder: the
+included plugins, the SDK kit, and every plugin a client installs (Plugins → Install
+Plugin from Zip…) live there and import the compiled ``app`` package at runtime.
 
 Produces, under ``dist/``:
   * ECMTracker-<version>-win64.zip   — unzip and run ECMTracker.exe
@@ -75,7 +76,8 @@ def _nuitka_cmd(version: str) -> list[str]:
     ]
 
 
-# Per-user install (no admin, plugins/ stays user-writable so clients can edit them).
+# Per-user install (no admin, plugins/ stays user-writable so clients can install into it).
+# An upgrade overwrites the included plugins' files and leaves other plugin folders alone.
 # For an all-users install instead, set PrivilegesRequired=admin and
 # DefaultDirName={{autopf}}\\{display}.
 _ISS = """\
@@ -94,6 +96,10 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 
+[InstallDelete]
+; Earlier releases shipped read-only copies of the included plugins here; plugins\\ replaces it.
+Type: filesandordirs; Name: "{{app}}\\bundled_plugins"
+
 [Files]
 Source: "{payload}\\*"; DestDir: "{{app}}"; Flags: recursesubdirs createallsubdirs
 
@@ -107,12 +113,12 @@ Filename: "{{app}}\\{appname}.exe"; Description: "Launch {display}"; Flags: nowa
 
 
 def _stage_payload() -> Path:
-    """Rename Nuitka's run.dist -> build/ECMTracker and drop loose plugins/ inside it."""
+    """Rename Nuitka's run.dist -> build/ECMTracker and drop the loose plugins/ folder inside it."""
     payload = BUILD_DIR / APP_NAME
     if payload.exists():
         shutil.rmtree(payload)
     (BUILD_DIR / "run.dist").rename(payload)
-    shutil.copytree(ROOT / "plugins", payload / "bundled_plugins", ignore=_DONT_COPY)
+    shutil.copytree(ROOT / "plugins", payload / "plugins", ignore=_DONT_COPY)
     return payload
 
 

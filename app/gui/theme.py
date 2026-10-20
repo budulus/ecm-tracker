@@ -156,6 +156,43 @@ QPushButton:disabled { background: #f0f1f3; color: #b3b9c0; border-color: #e3e6e
 
 /* Plugin launch buttons (side-pane card): read as a left-aligned list. */
 QPushButton#pluginButton { text-align: left; padding: 7px 12px; }
+/* "Manage plugins…" under the launch buttons: a quiet link, not another plugin. */
+QPushButton#pluginManageButton {
+    background: transparent;
+    border: none;
+    color: #2563eb;
+    text-align: left;
+    padding: 4px 2px 0 2px;
+}
+QPushButton#pluginManageButton:hover { background: transparent; color: #1d4ed8; text-decoration: underline; }
+
+/* ---- Plugin Manager window -------------------------------------------- */
+QListWidget#pluginList {
+    background: #ffffff;
+    border: 1px solid #d6dade;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
+}
+QListWidget#pluginList::item { padding: 6px 4px; border-radius: 4px; }
+QListWidget#pluginList::item:hover { background: #f0f2f5; }
+QListWidget#pluginList::item:selected { background: #e7efff; color: #1d4ed8; }
+QListWidget#pluginList::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #c4c9cf;
+    border-radius: 4px;
+    background: #ffffff;
+}
+QListWidget#pluginList::indicator:checked { background: #2563eb; border-color: #2563eb; }
+QLabel#pluginTitle { font-size: 16px; font-weight: 600; }
+QLabel#pluginHint { color: #6b727a; font-size: 12px; }
+QPlainTextEdit#pluginError {
+    background: #fff7f7;
+    border: 1px solid #f3c9c9;
+    border-radius: 6px;
+    color: #7f1d1d;
+}
 
 /* ---- Group boxes (cleanup dialog) ------------------------------------ */
 QGroupBox {

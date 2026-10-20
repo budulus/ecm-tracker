@@ -1,4 +1,4 @@
-"""Copy this folder to your user plugins directory and rename it."""
+"""Copy this folder into the plugins folder (Plugins → Open Plugins Folder) and rename it."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 from app.plugins import TrackerPlugin

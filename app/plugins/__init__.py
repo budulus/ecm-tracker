@@ -4,7 +4,7 @@ Public API for plugin authors (everything you need is in :mod:`app.plugins.api`)
 
     from app.plugins import TrackerPlugin, PluginContext, CanvasInteraction
 
-See ``plugins/README.md`` for the author's guide and the bundled example plugins.
+See ``plugins/README.md`` for the author's guide and the example plugins.
 """
 from app.plugins.api import (
     API_VERSION,

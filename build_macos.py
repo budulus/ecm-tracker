@@ -8,7 +8,7 @@ Mirrors build.py (Windows) but emits, under dist/:
   * ECMTracker-<version>.dmg          — drag-to-Applications disk image
 
 As on Windows the app is COMPILED while the plugins/ folder ships as plain Python
-*inside the bundle* next to the binary (Contents/MacOS/bundled_plugins), so the frozen-path
+*inside the bundle* next to the binary (Contents/MacOS/plugins), so the frozen-path
 logic in app/plugins/manager.py (__compiled__.containing_dir) finds the loose plugins
 unchanged — no manager.py change is needed for macOS.
 
@@ -27,6 +27,10 @@ be tested from the Windows machine where it was written):
         sips -z 512 512 app.png --out icon.iconset/icon_512x512.png   # (+ other sizes)
         iconutil -c icns icon.iconset -o assets/app_icon.icns
     Without it the build still works, just with a generic icon.
+  * Plugin installs: Contents/MacOS/plugins is the app's one plugin folder, so Plugins →
+    Install Plugin from Zip… writes inside the bundle. That needs a user-writable install
+    location and modifies a signed bundle; check Gatekeeper's behavior before relying on it
+    for a notarized release (a per-user plugins location would be the fix if it bites).
   * Signing: Nuitka ad-hoc signs by default (required for arm64 apps to launch at all).
     For client distribution without Gatekeeper warnings, set a Developer ID:
         MACOS_SIGN_IDENTITY="Developer ID Application: You (TEAMID)" uv run python build_macos.py
@@ -100,7 +104,7 @@ def _stage_app() -> Path:
         apps[0].rename(target)
     # Plugins sit next to the binary so manager.py's __compiled__.containing_dir logic
     # finds them with no platform branch (same contract as the Windows build).
-    plugins_dest = target / "Contents" / "MacOS" / "bundled_plugins"
+    plugins_dest = target / "Contents" / "MacOS" / "plugins"
     if plugins_dest.exists():
         shutil.rmtree(plugins_dest)
     shutil.copytree(ROOT / "plugins", plugins_dest, ignore=_DONT_COPY)

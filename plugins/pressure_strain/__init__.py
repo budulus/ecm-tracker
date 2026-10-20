@@ -1,4 +1,4 @@
-"""Pressure–strain analysis synchronized to image modification timestamps."""
+"""Pressure–strain analysis synchronized to image capture times from the file names."""
 from app.plugins import TrackerPlugin
 
 

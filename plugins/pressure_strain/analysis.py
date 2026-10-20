@@ -20,8 +20,9 @@ STRAIN_MODES = ("epsilon_1", "epsilon_2", "mean")
 LOGGER_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 # Camera file names that carry the capture time: epoch milliseconds, 13 digits, optionally
 # zero-padded up to 16 (e.g. Image_0001791895394319.bmp); the 17-digit form is local wall-clock
-# time YYYYMMDDHHMMSSmmm.
-_EPOCH_MS_NAME = re.compile(r"^Image_(\d{13,16})\.[A-Za-z0-9]+$")
+# time YYYYMMDDHHMMSSmmm. Other 14-16 digit numbers (epoch microseconds, a YYYYMMDDHHMMSS stamp)
+# are not padded milliseconds and are rejected rather than misread.
+_EPOCH_MS_NAME = re.compile(r"^Image_0{0,3}(\d{13})\.[A-Za-z0-9]+$")
 _LOCAL_TIME_NAME = re.compile(r"^Image_(\d{8})(\d{6})(\d{3})\.[A-Za-z0-9]+$")
 
 
@@ -114,7 +115,7 @@ def parse_pressure_csv(path: str) -> PressureData:
             for row_number, row in enumerate(reader, start=2):
                 try:
                     t_pc = datetime.strptime(row["Timestamp"], LOGGER_TIMESTAMP_FORMAT).timestamp()
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, OverflowError, OSError) as exc:
                     raise ValueError(
                         f"Row {row_number} has a Timestamp not in {LOGGER_TIMESTAMP_FORMAT} format"
                     ) from exc
@@ -178,9 +179,10 @@ def image_capture_times(paths) -> np.ndarray:
         elif local:
             try:
                 stamp = datetime.strptime(local.group(1) + local.group(2), "%Y%m%d%H%M%S")
-            except ValueError as exc:
+                seconds = stamp.timestamp()  # Windows raises OSError outside 1970-3000
+            except (ValueError, OverflowError, OSError) as exc:
                 raise ValueError(f"Frame {index} ({name}) has an invalid date/time in its name") from exc
-            times.append(stamp.timestamp() + int(local.group(3)) / 1000.0)
+            times.append(seconds + int(local.group(3)) / 1000.0)
         else:
             raise ValueError(
                 f"Frame {index} ({name}) has no capture time in its file name. Expected "
@@ -231,7 +233,12 @@ def align_pressure_to_images(
 
 
 def _clock_text(epoch_s: float) -> str:
-    return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M:%S")
+    # Only decorates an error message, so it must never raise one of its own (Windows cannot
+    # convert times outside 1970-3000).
+    try:
+        return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, OverflowError, OSError):
+        return f"{epoch_s:.3f} s since epoch"
 
 
 def compute_principal_strains(coords, status=None) -> StrainSeries:

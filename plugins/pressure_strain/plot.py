@@ -44,9 +44,9 @@ class PressureStrainPlotWindow(QWidget):
 
     def replot(self) -> None:
         self.ax.clear()
-        series = self.owner.current_plot_series()
+        series, reason = self.owner.plot_series_or_reason()
         if series is None:
-            self.note.setText("Pressure and a valid tracking result are required.")
+            self.note.setText(reason)
             self.canvas.draw_idle()
             return
 

@@ -115,7 +115,10 @@ def test_image_capture_times_from_file_names():
     local = analysis.image_capture_times(["Image_20260814140915340.bmp"])
     assert abs(local[0] - (datetime(2026, 8, 14, 14, 9, 15).timestamp() + 0.340)) < 1e-6
 
-    for name in ("img_0.png", "Image_123.bmp", "Image_20261399000000000.bmp"):
+    # Epoch microseconds and a 14-digit YYYYMMDDHHMMSS stamp are not padded epoch ms; reading them
+    # as ms put frames in the year 57000 / 2612 (and crashed the load on Windows).
+    for name in ("img_0.png", "Image_123.bmp", "Image_20261399000000000.bmp",
+                 "Image_1760360561123456.bmp", "Image_20260814140915.bmp"):
         try:
             analysis.image_capture_times([name])
         except ValueError as exc:
@@ -161,6 +164,8 @@ def test_image_time_validation():
         ([2.0, 1.0], "go backwards"),
         ([0.5, 0.5], "positive total span"),
         ([5.0, 6.0], "No image lies inside"),
+        # Beyond what Windows can format as a date; the message must still be a ValueError.
+        ([1e13, 1e13 + 1.0], "No image lies inside"),
     ):
         try:
             analysis.align_pressure_to_images(pressure, np.asarray(stamps))
@@ -275,6 +280,14 @@ def test_plugin_window_load_plot_and_sequence_invalidation():
     plugin_window._open_plot()
     assert plugin_window._plot_window is not None and plugin_window._plot_window.isVisible()
     plugin_window._plot_window.replot()
+
+    # A log that starts after the reference frame: the open plot must name that as the reason.
+    partial_path = os.path.join(os.path.dirname(pressure_path), "partial.csv")
+    _write_pressure(partial_path, _logger_rows(start_ms / 1000.0 + 0.9, [0, 1000, 2000, 3000],
+                                               [100.0, 110.0, 130.0, 160.0]))
+    assert plugin_window.load_pressure_file(partial_path)
+    assert plugin_window.current_plot_series() is None
+    assert "outside the pressure log" in plugin_window._plot_window.note.text()
 
     new_dir = tempfile.mkdtemp(prefix="pressure_ui_new_images_")
     _name_frames_by_capture_time(make_sequence(new_dir, n_frames=3), 1_800_000_000_000, 1000)

@@ -185,10 +185,11 @@ class PressureStrainWindow(QWidget):
         return self._strain_cache
 
     def current_plot_series(self):
-        series, _reason = self._plot_series_or_reason()
+        series, _reason = self.plot_series_or_reason()
         return series
 
-    def _plot_series_or_reason(self):
+    def plot_series_or_reason(self):
+        """Return ``(series, "")``, or ``(None, reason)`` explaining why nothing can be plotted."""
         strains = self._strain_series()
         if self._aligned is None or strains is None:
             return None, "Load pressure data and calculate tracking with at least three active points."
@@ -206,7 +207,7 @@ class PressureStrainWindow(QWidget):
 
     # --------------------------------------------------------------- plotting/export
     def _open_plot(self) -> None:
-        series, reason = self._plot_series_or_reason()
+        series, reason = self.plot_series_or_reason()
         if series is None:
             QMessageBox.warning(self, "Plot unavailable", reason)
             return
@@ -236,7 +237,7 @@ class PressureStrainWindow(QWidget):
             self._plot_window = None
 
     def _export(self) -> None:
-        series, reason = self._plot_series_or_reason()
+        series, reason = self.plot_series_or_reason()
         if series is None:
             QMessageBox.warning(self, "Export unavailable", reason)
             return

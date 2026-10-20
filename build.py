@@ -60,6 +60,7 @@ def _nuitka_cmd(version: str) -> list[str]:
         f"--windows-icon-from-ico={ICON}",
         "--include-package=app",                    # whole app package ...
         "--include-package-data=app",               # ... plus its runtime-loaded SVG icons
+        "--include-package=ecm_tracker",            # public scripting API: scripts `import ecm_tracker`
         "--include-package=scipy",                  # plugin-only: core never imports it
         "--include-package=matplotlib",             # plugin-only: core never imports it (data auto-bundled)
         "--include-package-data=cv2",               # ship opencv data defensively
@@ -119,6 +120,8 @@ def _stage_payload() -> Path:
         shutil.rmtree(payload)
     (BUILD_DIR / "run.dist").rename(payload)
     shutil.copytree(ROOT / "plugins", payload / "plugins", ignore=_DONT_COPY)
+    # Example scripts for the Script Editor's File -> Open Example menu (plain Python, like plugins).
+    shutil.copytree(ROOT / "examples" / "scripts", payload / "examples" / "scripts", ignore=_DONT_COPY)
     return payload
 
 

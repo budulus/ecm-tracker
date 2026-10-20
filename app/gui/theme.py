@@ -238,6 +238,37 @@ QMenu::separator { height: 1px; background: #e3e7ec; margin: 4px 8px; }
 
 QStatusBar { background: #ffffff; border-top: 1px solid #d6dade; color: #6b727a; }
 QStatusBar QLabel { color: #6b727a; }
+QLabel#recordingIndicator { color: #dc2626; font-weight: 700; padding: 0 8px; }
+
+/* ---- Scripting: Python console, Script Editor ------------------------ */
+QPlainTextEdit#scriptConsole, QPlainTextEdit#codeEditor, QPlainTextEdit#scriptOutput {
+    font-family: "Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
+    font-size: 13px;
+    background: #ffffff;
+    border: 1px solid #d6dade;
+    selection-background-color: #cfe0ff;
+    selection-color: #111827;
+}
+QPlainTextEdit#scriptOutput { background: #fbfbfc; }
+QDockWidget { font-weight: 600; }
+QDockWidget::title {
+    background: #ffffff;
+    padding: 5px 8px;
+    border-top: 1px solid #d6dade;
+    border-bottom: 1px solid #e3e7ec;
+}
+QTabWidget#scriptTabs::pane { border: none; }
+QTabWidget#scriptTabs QTabBar::tab {
+    background: #eef1f6;
+    color: #3a3f44;
+    padding: 5px 12px;
+    border: 1px solid #d6dade;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}
+QTabWidget#scriptTabs QTabBar::tab:selected { background: #ffffff; color: #111827; }
 """
 
 

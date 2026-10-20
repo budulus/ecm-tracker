@@ -1,7 +1,23 @@
+import math
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
+
+CIRCLE_SEGMENTS = 64  # vertices of the polygon that approximates a circular ROI
+
+
+def rectangle_corners(x0: float, y0: float, x1: float, y1: float) -> List[Tuple[float, float]]:
+    """Corners of the axis-aligned rectangle spanned by two opposite corners (drag order)."""
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def circle_corners(
+    cx: float, cy: float, radius: float, segments: int = CIRCLE_SEGMENTS
+) -> List[Tuple[float, float]]:
+    """A ``segments``-gon approximating the circle of ``radius`` around ``(cx, cy)``."""
+    angles = np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False)
+    return [(cx + radius * math.cos(a), cy + radius * math.sin(a)) for a in angles]
 
 
 class ROI:

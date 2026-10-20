@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 import cv2
 import numpy as np
@@ -23,26 +24,54 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core import settings, tracker_io
+from app.core import settings
 from app.gui.icon_loader import ACCENT, load_icon
-from app.core.cleanup import build_mask, compute_metrics, thresholds_from_dict
-from app.core.export import export, export_csv
-from app.core.feature_detection import regular_grid, shi_tomasi
-from app.core.image_sequence import ImageSequence, discover
-from app.core.image_pair import AlignedImagePairSequence, load_pair_setup, save_pair_setup
+from app.core.cleanup import build_mask, filters_from_thresholds, thresholds_from_dict
+from app.core.image_sequence import discover
+from app.core.image_pair import AlignedImagePairSequence
+from app.core.pair_transform import PairAlignment
 from app.core.roi import ROI
-from app.core.tracking import track
 from app.gui.canvas_view import CanvasView
-from app.gui.point_tools import AddPointsTool, DeletePointsTool
+from app.gui.point_tools import AddPointsTool, DeletePointsTool, snap
 from app.gui.pair_alignment import ImagePairDialog, PairAlignmentDialog
 from app.gui.point_manager import PointManagerDialog, PointSelectInteraction
 from app.gui.roi_tools import CircleTool, NGonTool, RectangleTool
 from app.gui.cleanup_dialog import CleanupDialog
 from app.gui.dialogs import CornerDetectionDialog, DisplayDialog, GridDialog, TrackerDialog
-from app.models.project_state import ProjectState, validate_grid, validate_lk, validate_shi_tomasi
-from app.models.tracker_result import TrackerResult
+from app.gui.scripting.host import ScriptingHost
+from app.models.project_state import ProjectState
 from app.plugins.api import PluginSignals
 from app.plugins.manager import PluginManager
+from app.scripting.session import (
+    DISPLAY,
+    FRAME,
+    MASK,
+    PAIR,
+    PARAMS,
+    RANGE,
+    RESULT,
+    ROI_KIND,
+    SEEDS,
+    SEQUENCE,
+    OperationCancelled,
+    Session,
+    StaleResultError,
+)
+
+# Plugin signals emitted after a session change, in this order (``frame_changed`` comes last).
+_KIND_SIGNALS = (
+    (RANGE, "range_changed"),
+    (SEEDS, "seeds_changed"),
+    (ROI_KIND, "roi_changed"),
+    (RESULT, "result_changed"),
+    (MASK, "mask_changed"),
+)
+
+
+def _alignment_kwargs(alignment: PairAlignment) -> dict:
+    """The non-default fields of ``alignment``: the keywords that rebuild it in a script."""
+    default = PairAlignment().metadata()
+    return {k: v for k, v in alignment.metadata().items() if v != default[k] or k == "translation"}
 
 
 class LabeledSlider(QWidget):
@@ -110,9 +139,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ECM Tracker")
         self.resize(1400, 850)
 
-        self._export_cache = None
-        self._loading_sequence = False
         self.state = ProjectState()
+        # Every state change goes through the scripting kernel, so toolbar actions, plugins and
+        # Python scripts share one code path (and the macro recorder sees all of them). The two
+        # listeners tear down editors bound to old state and refresh the UI afterwards.
+        self.session = Session(self.state)
+        self.session.progress_handler = self._progress_dialog
+        self.session.add_listener(self._on_session_changed, before=self._on_session_changing)
         self.canvas = CanvasView(self.state)
         self.signals = PluginSignals()  # state-change hub broadcast to plugins
         self._status_label = QLabel()
@@ -166,6 +199,14 @@ class MainWindow(QMainWindow):
 
         self._activating_point_tool = False  # reentrancy guard for Add/Delete mutual exclusivity
         self._roi_before_definition = None  # complete ROI to restore if a redefinition is cancelled
+
+        self.scripting = ScriptingHost(self)  # console dock, Script Editor, macro recorder
+        self._recording_label = QLabel("● REC")
+        self._recording_label.setObjectName("recordingIndicator")
+        self._recording_label.setToolTip("A macro is being recorded")
+        self._recording_label.hide()
+        self.statusBar().insertPermanentWidget(0, self._recording_label)  # stays visible over messages
+        self.scripting.recording_changed.connect(self._recording_label.setVisible)
 
         self._build_menus()
         self._build_toolbar()
@@ -248,6 +289,16 @@ class MainWindow(QMainWindow):
 
         # Populated by the PluginManager after construction.
         self._plugins_menu = self.menuBar().addMenu("&Plugins")
+
+        scripting = self.scripting
+        script_menu = self.menuBar().addMenu("&Scripting")
+        script_menu.addAction(scripting.console_action)
+        script_menu.addAction(scripting.editor_action)
+        script_menu.addSeparator()
+        script_menu.addAction(scripting.record_action)
+        script_menu.addSeparator()
+        script_menu.addAction(scripting.run_file_action)
+        script_menu.addAction(scripting.stop_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         view_help = help_menu.addAction("View &Help")
@@ -439,6 +490,18 @@ class MainWindow(QMainWindow):
                 ],
             )
         )
+        toolbar.addSeparator()
+        toolbar.addWidget(
+            self._toolbar_group(
+                "SCRIPT",
+                [
+                    self.scripting.console_action,
+                    self.scripting.editor_action,
+                    self.scripting.record_action,
+                ],
+            )
+        )
+        self._toolbar = toolbar
 
     def _toolbar_group(self, title: str, actions, primary=None, menus=None) -> QWidget:
         """A captioned cluster of QToolButtons hosting the given actions.
@@ -481,8 +544,12 @@ class MainWindow(QMainWindow):
     def _open_directory(self) -> None:
         start = self.state.source_dir or ""
         directory = QFileDialog.getExistingDirectory(self, "Open Image Directory", start)
-        if directory:
-            self._load_paths(discover(directory), directory)
+        if not directory:
+            return
+        if not discover(directory):
+            QMessageBox.warning(self, "No images", "No supported images were found.")
+            return
+        self._run_load(self.session.open_directory, directory)
 
     def _open_files(self) -> None:
         start = self.state.source_dir or ""
@@ -492,8 +559,24 @@ class MainWindow(QMainWindow):
             start,
             "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
         )
-        if files:
-            self._load_paths(discover(files), os.path.dirname(files[0]))
+        if not files:
+            return
+        if not discover(files):
+            QMessageBox.warning(self, "No images", "No supported images were found.")
+            return
+        self._run_load(self.session.open_files, files)
+
+    def _run_load(self, command, *args, **kwargs) -> bool:
+        """Run a session loading command with the GUI's error reporting; True on success."""
+        try:
+            command(*args, **kwargs)
+        except OperationCancelled:
+            self.statusBar().showMessage("Image loading cancelled.", 4000)
+            return False
+        except (IOError, ValueError, cv2.error) as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return False
+        return True
 
     def load_sequence_from_paths(self, paths, source_dir) -> bool:
         """Public entry to load an explicit, pre-ordered image-path list.
@@ -507,35 +590,11 @@ class MainWindow(QMainWindow):
         if not paths:
             QMessageBox.warning(self, "No images", "No supported images were found.")
             return False
-        return self._load_sequence_candidate(ImageSequence(paths), source_dir)
+        return self._run_load(self.session.load_sequence, list(paths), source_dir)
 
     def _validate_sequence(self, sequence) -> bool:
-        if self._loading_sequence:
-            raise RuntimeError("An image sequence is already being validated.")
-        try:
-            dialog = QProgressDialog("Validating images...", "Cancel", 0, len(sequence), self)
-            dialog.setWindowModality(Qt.WindowModality.WindowModal)
-            dialog.setMinimumDuration(500)
-
-            def progress(done, _total):
-                dialog.setValue(done)
-                QApplication.processEvents()
-                return dialog.wasCanceled()
-
-            self._loading_sequence = True
-            try:
-                valid = sequence.validate_all(progress)
-            finally:
-                self._loading_sequence = False
-                dialog.close()
-                dialog.deleteLater()
-            if not valid:
-                self.statusBar().showMessage("Image loading cancelled.", 4000)
-                return False
-        except (IOError, ValueError, cv2.error) as exc:
-            QMessageBox.critical(self, "Load failed", str(exc))
-            return False
-        return True
+        """Decode/fingerprint a candidate sequence with GUI error reporting (no state change)."""
+        return self._run_load(self.session.validate_sequence, sequence)
 
     def _load_sequence_candidate(self, sequence, source_dir, *, setup_path=None) -> bool:
         if not self._validate_sequence(sequence):
@@ -546,16 +605,76 @@ class MainWindow(QMainWindow):
     def _commit_sequence(self, sequence, source_dir, *, setup_path=None) -> None:
         # Commit only after every frame has decoded and passed the common-shape check. A failed
         # candidate therefore leaves the existing project completely untouched.
-        self._teardown_session_ui()
-        self.state.load_sequence(sequence, source_dir)
-        self.state.pair_setup_path = setup_path
-        self._configure_sliders()
-        self.canvas.reset_view()
-        self.canvas.refresh()
+        self.session.adopt_sequence(sequence, source_dir, setup_path=setup_path)
+
+    @contextmanager
+    def _progress_dialog(self, label: str, total: int, delay_ms: int):
+        """Session progress handler: a cancellable, window-modal progress dialog. A script's
+        Stop request cancels the operation too."""
+        dialog = QProgressDialog(label, "Cancel", 0, total, self)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(delay_ms)
+        if delay_ms == 0:
+            dialog.setValue(0)
+
+        def progress(done, _total):
+            dialog.setValue(done)
+            QApplication.processEvents()
+            return dialog.wasCanceled() or self.scripting.stop_requested
+
+        try:
+            yield progress
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+    # ---- session change notifications -----------------------------------
+    def _on_session_changing(self, kinds) -> None:
+        """Before a session change: release UI bound to the state that is about to change."""
+        if kinds & {SEQUENCE, RANGE}:
+            self._teardown_session_ui()
+            return
+        if kinds - {FRAME, PARAMS, DISPLAY, PAIR}:
+            self._cancel_roi_definition(silent=True)
+        if RESULT in kinds:
+            if self._cleanup_dialog is not None:
+                self._cleanup_dialog.close()  # bound to the old result's metrics
+            self._preview_keep = None
+            self.canvas.set_preview_mask(None)
+
+    def _on_session_changed(self, kinds) -> None:
+        """After a session command: refresh widgets, then notify plugins."""
+        if SEQUENCE in kinds:
+            self._configure_sliders()
+            self.canvas.reset_view()
+            self._update_window_title()
+        elif kinds & {RANGE, FRAME}:
+            self._configure_sliders()
+        if kinds & {SEQUENCE, FRAME}:
+            self.canvas.refresh()  # a different image is shown
+        else:
+            self.canvas.update()  # overlays only
         self._update_status()
         self._update_tool_states()
-        self._update_window_title()
-        self.signals.sequence_changed.emit()
+        if SEQUENCE in kinds:
+            self.signals.sequence_changed.emit()
+        else:
+            for kind, name in _KIND_SIGNALS:
+                if kind in kinds:
+                    getattr(self.signals, name).emit()
+            if FRAME in kinds:
+                self.signals.frame_changed.emit(self.state.current_index)
+        if MASK in kinds:
+            self._cleanup_preview()  # keep an open Cleanup dialog's counts current
+
+    def set_scripts_running(self, running: bool) -> None:
+        """Lock the window's controls while console/editor code runs (it pumps events)."""
+        if running:
+            self._deactivate_point_tools()
+        for widget in (self.menuBar(), self._toolbar, self.side_pane, self.canvas):
+            widget.setEnabled(not running)
+        for shortcut in (self._roi_escape, *self._roi_shape_shortcuts):
+            shortcut.setEnabled(not running)
 
     def _open_image_pair(self) -> None:
         chooser = ImagePairDialog(self.state.source_dir or "", self)
@@ -588,8 +707,7 @@ class MainWindow(QMainWindow):
                 return
             if editing and alignment.same_geometry(sequence.alignment):
                 if alignment != sequence.alignment:
-                    self.state.sequence = sequence.with_editor_settings(alignment)
-                    self._update_status()
+                    self.session.set_pair_alignment(**_alignment_kwargs(alignment))
                 return
             candidate = sequence.with_alignment(alignment)
             if not self._validate_sequence(candidate):
@@ -622,6 +740,11 @@ class MainWindow(QMainWindow):
             return
         setup_path = self.state.pair_setup_path if editing else None
         self._commit_sequence(candidate, os.path.dirname(sequence.paths[0]), setup_path=setup_path)
+        if editing:
+            self.session.record_command("session", "set_pair_alignment", **_alignment_kwargs(alignment))
+        else:
+            self.session.record_command("session", "open_image_pair", *candidate.paths,
+                                        **_alignment_kwargs(alignment))
         self.statusBar().showMessage("Aligned pair loaded. Use File → Save Pair Setup to save this alignment.", 6000)
 
     def _open_pair_setup(self) -> None:
@@ -632,9 +755,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            sequence = load_pair_setup(path)
-            self._load_sequence_candidate(sequence, os.path.dirname(sequence.paths[0]),
-                                          setup_path=os.path.abspath(path))
+            self.session.open_pair_setup(path)
         except (OSError, ValueError, cv2.error) as exc:
             QMessageBox.critical(self, "Open pair setup failed", str(exc))
 
@@ -648,7 +769,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.state.pair_setup_path = save_pair_setup(path, self.state.sequence)
+            self.session.save_pair_setup(path)
         except (OSError, ValueError, cv2.error) as exc:
             QMessageBox.critical(self, "Save pair setup failed", str(exc))
             return
@@ -672,6 +793,14 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([width, total - width])
 
     def closeEvent(self, event) -> None:
+        if self.scripting.busy:
+            self.scripting.request_stop()
+            event.ignore()
+            return
+        if not self.scripting.confirm_quit():
+            event.ignore()
+            return
+        self.scripting.shutdown()
         sizes = self.splitter.sizes()
         if sizes:
             try:
@@ -683,7 +812,6 @@ class MainWindow(QMainWindow):
 
     def _teardown_session_ui(self) -> None:
         """Release old-state UI before committing a replacement."""
-        self._export_cache = None
         self._cancel_roi_definition(silent=True)
         self._deactivate_point_tools()
         self.canvas.clear_interaction()
@@ -713,17 +841,15 @@ class MainWindow(QMainWindow):
     # ---- slider handlers ------------------------------------------------
     def _on_current_changed(self, value: int) -> None:
         previous = self.state.current_index
-        self.state.set_current(value)
         try:
-            self.canvas.refresh()
+            self.session.set_current_frame(value)
         except (OSError, ValueError, IndexError, cv2.error) as exc:
+            # The canvas could not decode the frame; it still shows `previous`.
             self.state.set_current(previous)
             self.current_slider.setValue(previous)
+            self._update_status()
+            self._update_tool_states()
             QMessageBox.critical(self, "Frame load failed", str(exc))
-            return
-        self._update_status()
-        self._update_tool_states()
-        self.signals.frame_changed.emit(self.state.current_index)
 
     def _on_reference_changed(self, value: int) -> None:
         self.set_frame_range(value, self.state.last_index)
@@ -739,28 +865,7 @@ class MainWindow(QMainWindow):
             raise ValueError("Frame indices must be integers")
         reference = max(0, min(int(reference), self.state.total_images - 1))
         last = max(reference, min(int(last), self.state.total_images - 1))
-        s = self.state
-        if (reference, last) == (s.reference_index, s.last_index):
-            return
-        ref_changed = reference != s.reference_index
-        had_result = s.result is not None
-        self._teardown_session_ui()
-        s.reference_index, s.last_index = reference, last
-        s.result = s.active_mask = None
-        s.undo_stack = []
-        if ref_changed:
-            s.roi = s.features = None
-        s.touch()
-        self._configure_sliders()
-        self.canvas.refresh()
-        self._update_status()
-        self._update_tool_states()
-        self.signals.range_changed.emit()
-        if ref_changed:
-            self.signals.roi_changed.emit()
-            self.signals.seeds_changed.emit()
-        if had_result:
-            self.signals.result_changed.emit()
+        self.session.set_frame_range(reference, last)  # no-op if unchanged
 
     def _go_to_frame(self, global_index: int) -> None:
         """Move Current to ``global_index`` (clamped), driving the same refresh
@@ -769,7 +874,7 @@ class MainWindow(QMainWindow):
             return
         target = max(0, min(global_index, self.state.total_images - 1))
         self.current_slider.setValue(target)  # sync widget (setValue blocks signals)
-        self._on_current_changed(target)      # state + canvas + status + tools + signal
+        self._on_current_changed(target)      # session -> canvas + status + tools + signal
 
     def _set_reference_frame(self, global_index: int) -> None:
         self.set_frame_range(min(global_index, self.state.last_index), self.state.last_index)
@@ -870,22 +975,31 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self._update_tool_states()
 
-    def _commit_interactive_roi(self, corners) -> None:
-        """Finalize an ROI built by a drag tool (Rectangle / Circle)."""
-        self.state.roi = ROI(corners)
-        self._finish_roi_definition()
+    def _commit_interactive_roi(self, shape: str, args) -> None:
+        """Finalize an ROI built by a drag tool: ``shape`` is "rectangle" (x0, y0, x1, y1) or
+        "circle" (cx, cy, radius), in image coordinates."""
+        command = self.session.set_roi_rectangle if shape == "rectangle" else self.session.set_roi_circle
+        self._finish_roi_definition(command, *(snap(v) for v in args))
 
-    def _finish_roi_definition(self) -> None:
-        """Shared completion for every ROI tool: drop the interaction and notify. The tool has
-        already populated ``state.roi`` (drag tools build it fresh; the N-Gon tool closes it)."""
+    def _finish_roi_definition(self, command=None, *args) -> None:
+        """Shared completion for every ROI tool: drop the interaction, then commit the shape
+        through the session (one recorded command). Without ``command`` (the N-Gon tool), the
+        closed polygon in ``state.roi`` is committed."""
+        if command is None:
+            command, args = self.session.set_roi, ([(snap(x), snap(y)) for x, y in self.state.roi.corners],)
+        previous = self._roi_before_definition
         self._roi_before_definition = None
         self.define_roi_action.setChecked(False)
         self.canvas.clear_interaction()
+        try:
+            command(*args)
+        except ValueError as exc:
+            self.state.roi = previous
+            self.canvas.update()
+            self._update_tool_states()
+            QMessageBox.warning(self, "Invalid ROI", str(exc))
+            return
         self.statusBar().showMessage("ROI complete.", 4000)
-        self.state.touch()
-        self.signals.roi_changed.emit()
-        self.canvas.refresh()
-        self._update_tool_states()
 
     def _cancel_roi_definition(self, silent: bool = False) -> None:
         """Abort an in-progress ROI definition (Esc, pan tool, or starting a new shape).
@@ -913,15 +1027,9 @@ class MainWindow(QMainWindow):
             return
         self.canvas.clear_interaction()
         self._roi_before_definition = None
-        self.state.roi = None
-        self.state.features = None
-        self.state.touch()
-        self.signals.seeds_changed.emit()
         if self.define_roi_action.isChecked():
             self.define_roi_action.setChecked(False)
-        self.canvas.refresh()
-        self._update_tool_states()
-        self.signals.roi_changed.emit()
+        self.session.clear_roi()
 
     # ---- feature detection ---------------------------------------------
     def _open_corner_dialog(self) -> None:
@@ -978,37 +1086,21 @@ class MainWindow(QMainWindow):
     def _detect_shi_tomasi(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():
             return
-        try:
-            gray = self.state.sequence.load_gray(self.state.reference_index)
-        except (OSError, ValueError, IndexError, cv2.error) as exc:
-            QMessageBox.critical(self, "Detection failed", str(exc))
-            return
-        h, w = gray.shape[:2]
-        mask = self.state.roi.mask(h, w)
-        self.state.features = shi_tomasi(gray, mask, self.state.shi_tomasi_params)
-        self._after_detection()
+        # Pass every parameter explicitly so a recorded macro replays without saved preferences.
+        self._run_detection(self.session.detect_corners, self.state.shi_tomasi_params)
 
     def _detect_grid(self) -> None:
         if not self._roi_ready() or not self._confirm_discard_tracking():
             return
+        self._run_detection(self.session.detect_grid, self.state.grid_params)
+
+    def _run_detection(self, command, params) -> None:
         try:
-            h, w = self.state.image_size()
+            n = command(**params)
         except (OSError, ValueError, IndexError, cv2.error) as exc:
             QMessageBox.critical(self, "Detection failed", str(exc))
             return
-        grid = regular_grid(self.state.roi, **self.state.grid_params)
-        # An ROI may extend past the image border; tracking only accepts in-image seeds.
-        inside = (grid[:, 0] >= 0) & (grid[:, 1] >= 0) & (grid[:, 0] < w) & (grid[:, 1] < h)
-        self.state.features = grid[inside]
-        self._after_detection()
-
-    def _after_detection(self) -> None:
-        self.state.touch()
-        self.signals.seeds_changed.emit()
-        n = 0 if self.state.features is None else len(self.state.features)
         self.statusBar().showMessage(f"Detected {n} feature points.", 4000)
-        self.canvas.refresh()
-        self._update_tool_states()
 
     def _roi_ready(self) -> bool:
         return (
@@ -1022,62 +1114,22 @@ class MainWindow(QMainWindow):
         feats = self.state.features
         if feats is None or len(feats) == 0:
             return
-        revision = self.state.revision
-        sequence = self.state.sequence
-        reference, last = self.state.reference_index, self.state.last_index
-        feats = feats.copy()
-        params = dict(self.state.lk_params)
-        n = last - reference + 1
-        total = max(1, 2 * (n - 1))
-        dialog = QProgressDialog("Tracking...", "Cancel", 0, total, self)
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.setMinimumDuration(0)
-        dialog.setValue(0)
-
-        def progress(done, _total):
-            dialog.setValue(done)
-            QApplication.processEvents()
-            return dialog.wasCanceled()
-
+        # The session discards a result whose inputs changed during tracking, and its RESULT
+        # change closes a Cleanup dialog / undo history bound to the previous result.
         try:
-            result = track(
-                sequence,
-                reference,
-                last,
-                feats,
-                params,
-                progress,
-            )
+            result = self.session.track(**self.state.lk_params)
+        except StaleResultError:
+            self.statusBar().showMessage("Tracking inputs changed; discarded the stale result.", 5000)
+            return
+        except OperationCancelled:
+            self.statusBar().showMessage("Tracking cancelled.", 4000)
+            return
         except (OSError, ValueError, IndexError, cv2.error) as exc:
             QMessageBox.critical(self, "Tracking failed", str(exc))
             return
-        finally:
-            dialog.close()
-            dialog.deleteLater()
-
-        if self.state.revision != revision:
-            self.statusBar().showMessage("Tracking inputs changed; discarded the stale result.", 5000)
-            return
-        if result is None:
-            self.statusBar().showMessage("Tracking cancelled.", 4000)
-            return
-        # Discard any derived state tied to a previous result before installing the new one: an
-        # open Cleanup dialog is bound to the old metrics and a leftover undo stack holds old-mask
-        # snapshots, either of which would otherwise be applied against the new result.
-        if self._cleanup_dialog is not None:
-            self._cleanup_dialog.close()
-        self.state.undo_stack = []
-        self.canvas.set_preview_mask(None)
-        self._preview_keep = None
-        self.state.touch()
-        self.state.result = result
-        self.state.active_mask = np.ones(result.n_points, dtype=bool)
         self.statusBar().showMessage(
             f"Tracked {result.n_points} points over {result.n_frames} frames.", 4000
         )
-        self.canvas.refresh()
-        self._update_tool_states()
-        self.signals.result_changed.emit()
 
     def _on_clear_tracking_clicked(self) -> None:
         self._confirm_discard_tracking()
@@ -1099,17 +1151,7 @@ class MainWindow(QMainWindow):
         return False
 
     def _clear_tracking(self) -> None:
-        self._export_cache = None
-        if self._cleanup_dialog is not None:
-            self._cleanup_dialog.close()
-        self.state.touch()
-        self.state.result = None
-        self.state.active_mask = None
-        self.state.undo_stack = []
-        self.canvas.set_preview_mask(None)
-        self.canvas.refresh()
-        self._update_tool_states()
-        self.signals.result_changed.emit()
+        self.session.clear_tracking()
 
     # ---- cleanup --------------------------------------------------------
     def _open_cleanup(self) -> None:
@@ -1119,8 +1161,7 @@ class MainWindow(QMainWindow):
             self._cleanup_dialog.raise_()
             self._cleanup_dialog.activateWindow()
             return
-        h, w = self.state.image_size()
-        self._cleanup_metrics = compute_metrics(self.state.result, self.state.roi, (h, w))
+        self._cleanup_metrics = self.session.metrics()
         saved = settings.get_section("cleanup")
         defaults = thresholds_from_dict(saved) if saved else None
         dialog = CleanupDialog(self._cleanup_metrics, defaults, self)
@@ -1149,41 +1190,19 @@ class MainWindow(QMainWindow):
         Shared by the Cleanup dialog and the plugin API (``PluginContext.apply_keep_mask``):
         snapshots the current mask onto the undo stack, ANDs in ``keep`` (so points only ever
         leave the active set), refreshes, and emits ``mask_changed``. No-op without a result."""
-        if self.state.active_mask is None:
-            return
-        keep = np.asarray(keep, dtype=bool)
-        if keep.shape != self.state.active_mask.shape:
-            raise ValueError(
-                f"keep mask shape {keep.shape} does not match active mask "
-                f"shape {self.state.active_mask.shape}"
-            )
-        updated = self.state.active_mask & keep
-        if np.array_equal(updated, self.state.active_mask):
-            return
-        self.state.undo_stack.append(self.state.active_mask.copy())
-        self.state.touch()
-        self.state.active_mask = updated
-        self.canvas.refresh()
-        self._update_tool_states()
-        self.signals.mask_changed.emit()
-        self._cleanup_preview()  # keep an open Cleanup dialog's counts current (no-op otherwise)
+        self.session.apply_keep_mask(keep)
 
     def _cleanup_apply(self) -> None:
         self._cleanup_preview()  # Apply current controls, never a cached preview.
-        if self._preview_keep is None:
+        if self._preview_keep is None or self._cleanup_dialog is None:
             return
-        self.apply_keep_mask(self._preview_keep)
-        self._cleanup_preview()
+        # Recorded as e.g. session.cleanup(fb_mean=0.5, drop_left_image=True).
+        self.session.cleanup(**filters_from_thresholds(self._cleanup_dialog.thresholds()))
 
     def _cleanup_undo(self) -> None:
         if not self.state.undo_stack:
             return
-        self.state.touch()
-        self.state.active_mask = self.state.undo_stack.pop()
-        self.canvas.refresh()
-        self._update_tool_states()
-        self.signals.mask_changed.emit()
-        self._cleanup_preview()
+        self.session.undo_cleanup()
 
     def _cleanup_closed(self, _result=None) -> None:
         self._cleanup_dialog = None
@@ -1230,19 +1249,9 @@ class MainWindow(QMainWindow):
         if not indices:
             return
         if self.state.result is not None:
-            keep = np.ones(self.state.result.n_points, dtype=bool)
-            keep[indices] = False
-            self.apply_keep_mask(keep)  # emits mask_changed -> dialog.rebuild
-        else:
-            feats = self.state.features
-            if feats is None:
-                return
-            feats = np.delete(feats, indices, axis=0)
-            self.state.features = feats if len(feats) else None  # match detection's empty convention
-            self.canvas.update()
-            self._update_tool_states()
-            self.state.touch()
-            self.signals.seeds_changed.emit()
+            self.session.remove_points(indices)  # emits mask_changed -> dialog.rebuild
+        elif self.state.features is not None:
+            self.session.remove_seeds(indices)  # emits seeds_changed -> dialog.rebuild
 
     def _point_manager_closed(self, _result=None) -> None:
         dialog = self._point_manager
@@ -1266,8 +1275,8 @@ class MainWindow(QMainWindow):
 
     # ---- export ---------------------------------------------------------
     def _export_target(self, default_name: str, caption: str, file_filter: str):
-        """Shared export precondition + save dialog. Returns ``(out_dir, filename)``, or ``None``
-        if there is nothing to export or the user cancelled."""
+        """Shared export precondition + save dialog. Returns the chosen path, or ``None`` if
+        there is nothing to export or the user cancelled."""
         if self.state.result is None or self.state.active_mask is None:
             return None
         export_mask = self._exportable_mask()
@@ -1280,36 +1289,18 @@ class MainWindow(QMainWindow):
             return None
         default_path = os.path.join(self.state.source_dir or "", default_name)
         path, _ = QFileDialog.getSaveFileName(self, caption, default_path, file_filter)
-        if not path:
-            return None
-        return os.path.dirname(path), os.path.basename(path)
+        return path or None
 
     def _exportable_mask(self):
         """Active points that remained valid for every frame in the tracked range."""
-        result = self.state.result
-        active = self.state.active_mask
-        if result is None or active is None:
-            return None
-        if self._export_cache is None or self._export_cache[0] is not result:
-            self._export_cache = (result, np.all(result.status_fw == 1, axis=0))
-        return active & self._export_cache[1]
+        return self.session.exportable_mask()
 
     def _export(self) -> None:
-        target = self._export_target("coords.npy", "Export coordinates", "NumPy array (*.npy)")
-        if target is None:
+        path = self._export_target("coords.npy", "Export coordinates", "NumPy array (*.npy)")
+        if path is None:
             return
-        out_dir, filename = target
-        result = self.state.result
-        export_mask = self._exportable_mask()
         try:
-            coords_path, seq_path, shape = export(
-                result.coords_fw,
-                export_mask,
-                result.reference_index,
-                result.last_index,
-                out_dir,
-                filename,
-            )
+            coords_path, seq_path, shape = self.session.export_npy(path)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
@@ -1320,26 +1311,11 @@ class MainWindow(QMainWindow):
         )
 
     def _export_csv(self) -> None:
-        target = self._export_target(
-            "coords.csv", "Export coordinates as CSV", "CSV file (*.csv)"
-        )
-        if target is None:
+        path = self._export_target("coords.csv", "Export coordinates as CSV", "CSV file (*.csv)")
+        if path is None:
             return
-        out_dir, filename = target
-        result = self.state.result
-        export_mask = self._exportable_mask()
-        frame_names = [
-            os.path.basename(self.state.sequence.paths[g])
-            for g in range(result.reference_index, result.last_index + 1)
-        ]
         try:
-            csv_path, shape = export_csv(
-                result.coords_fw,
-                export_mask,
-                frame_names,
-                out_dir,
-                filename,
-            )
+            csv_path, shape = self.session.export_csv(path)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
@@ -1350,48 +1326,13 @@ class MainWindow(QMainWindow):
         )
 
     # ---- save / load trackers ------------------------------------------
-    def save_trackers_to(self, path) -> None:
+    def save_trackers_to(self, path) -> str:
         """Write the current seeds + (optional) tracking result to ``path`` (a ``.npz``).
 
         The dialog-free save path shared by ``File -> Save Trackers`` and the plugin API
         (``PluginContext.save_trackers``). Raises ``ValueError`` if there are no reference
-        points; lets ``OSError`` from the write propagate."""
-        s = self.state
-        if s.features is None or len(s.features) == 0:
-            raise ValueError("No reference points to save.")
-        result = s.result
-        result_arrays = (
-            {
-                "coords_fw": result.coords_fw,
-                "status_fw": result.status_fw,
-                "err_fw": result.err_fw,
-                "coords_bw": result.coords_bw,
-                "status_bw": result.status_bw,
-                "err_bw": result.err_bw,
-                "fb_mean_error": result.fb_mean_error,
-                "fb_max_error": result.fb_max_error,
-            }
-            if result is not None
-            else None
-        )
-        tracker_io.save_trackers(
-            path,
-            total_images=s.total_images,
-            reference_index=s.reference_index,
-            last_index=s.last_index,
-            current_index=s.current_index,
-            features=s.features,
-            roi_corners=(s.roi.corners if s.roi is not None and s.roi.is_complete else None),
-            active_mask=s.active_mask if result is not None else None,
-            result_arrays=result_arrays,
-            win_size=(result.win_size if result is not None else s.lk_params.get("win_size", 0)),
-            lk_params=s.lk_params,
-            shi_tomasi_params=s.shi_tomasi_params,
-            grid_params=s.grid_params,
-            sequence_fingerprint=s.sequence.fingerprint,
-            error_kind=result.error_kind if result is not None else "unknown",
-            tracking_params=dict(result.tracking_params) if result is not None else {},
-        )
+        points; lets ``OSError`` from the write propagate. Returns the written path."""
+        return self.session.save_trackers(path)
 
     def load_trackers_from(self, path, *, expected_range=None):
         """Load a tracker ``.npz`` and overlay it onto the open sequence; return the bundle.
@@ -1401,22 +1342,15 @@ class MainWindow(QMainWindow):
         file can't be read, or its frame count doesn't match the open sequence."""
         if not self.state.has_sequence:
             raise ValueError("Open an image sequence before loading trackers.")
-        bundle = tracker_io.load_trackers(path)  # raises ValueError on a bad/foreign file
-        if bundle["total_images"] != self.state.total_images:
-            raise ValueError(
-                f"This tracker file is for a {bundle['total_images']}-frame sequence, but the "
-                f"open sequence has {self.state.total_images} frames."
-            )
-        expected = bundle.get("sequence_fingerprint")
-        actual = self.state.sequence.fingerprint
-        if expected is not None and actual is not None and expected != actual:
-            raise ValueError(
-                "This tracker file belongs to a different image sequence. The frame count "
-                "matches, but the ordered image-content fingerprint does not."
-            )
-        if expected_range is not None and tuple(expected_range) != (bundle["reference_index"], bundle["last_index"]):
-            raise ValueError("Saved tracker range does not match the expected project reference.")
-        self._apply_loaded_trackers(bundle)
+        bundle = self.session.load_trackers(path, expected_range=expected_range)
+        s = self.state
+        if bundle["has_result"]:
+            msg = f"Loaded {s.result.n_points} points, tracked over {s.result.n_frames} frames."
+        else:
+            msg = f"Loaded {len(s.features)} reference points."
+        if bundle.get("sequence_fingerprint") is None:
+            msg += " Legacy v1 file: sequence identity could not be verified."
+        self.statusBar().showMessage(msg, 6000)
         return bundle
 
     def _save_trackers(self) -> None:
@@ -1467,75 +1401,6 @@ class MainWindow(QMainWindow):
             self.load_trackers_from(path)
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
-
-    def _apply_loaded_trackers(self, bundle) -> None:
-        """Install a loaded tracker bundle onto the open sequence (overlay model).
-
-        Mirrors the teardown in ``_run_tracking``/``_clear_tracking``, then restores state and
-        drives the same refresh path as a fresh load. Safe because ``LabeledSlider.setValue``
-        (used by ``_configure_sliders``) blocks signals, so restoring a non-zero reference index
-        does not re-enter ``_on_reference_changed`` and wipe the ROI we just restored.
-        """
-        s = self.state
-        candidate = (TrackerResult(reference_index=bundle["reference_index"],
-                                   last_index=bundle["last_index"], win_size=bundle["win_size"],
-                                   error_kind=bundle.get("error_kind", "unknown"),
-                                   tracking_params=bundle.get("tracking_params", {}),
-                                   **bundle["result_arrays"]) if bundle["has_result"] else None)
-        self._teardown_session_ui()
-        s.touch()
-        # Tear down UI bound to any previous result (cached metrics / stale selections).
-        if self._cleanup_dialog is not None:
-            self._cleanup_dialog.close()
-        if self._point_manager is not None:
-            self._point_manager.close()
-        s.undo_stack = []
-        self._preview_keep = None
-        self.canvas.set_preview_mask(None)
-
-        # tracker_io has already validated the complete frame-range invariant.
-        s.reference_index = bundle["reference_index"]
-        s.last_index = bundle["last_index"]
-        s.set_current(bundle["current_index"])
-
-        # ROI (toggle off, mirroring _finish_roi_definition).
-        s.roi = ROI(bundle["roi_corners"]) if bundle["roi_corners"] is not None else None
-        self.define_roi_action.setChecked(False)
-
-        # Seed points + (optional) tracking result + active mask.
-        s.features = bundle["features"]
-        if bundle["has_result"]:
-            s.result = candidate
-            s.active_mask = bundle["active_mask"]
-        else:
-            s.result = None
-            s.active_mask = None
-
-        # Parameters that produced this session (merged over built-ins, like ProjectState).
-        s.lk_params = validate_lk(bundle["lk_params"])
-        s.shi_tomasi_params = validate_shi_tomasi(bundle["shi_tomasi_params"])
-        s.grid_params = validate_grid(bundle["grid_params"])
-
-        self._configure_sliders()  # safe: LabeledSlider.setValue blocks signals
-        self.canvas.refresh()
-        self._update_status()
-        self._update_tool_states()
-
-        # Refresh reactive consumers (plugins, point manager) atomically after the full swap.
-        self.signals.range_changed.emit()
-        self.signals.seeds_changed.emit()
-        self.signals.roi_changed.emit()
-        self.signals.result_changed.emit()
-        self.signals.mask_changed.emit()
-        self.signals.frame_changed.emit(s.current_index)
-
-        if bundle["has_result"]:
-            msg = f"Loaded {s.result.n_points} points, tracked over {s.result.n_frames} frames."
-        else:
-            msg = f"Loaded {len(s.features)} reference points."
-        if bundle.get("sequence_fingerprint") is None:
-            msg += " Legacy v1 file: sequence identity could not be verified."
-        self.statusBar().showMessage(msg, 6000)
 
     # ---- tool enablement ------------------------------------------------
     def _update_tool_states(self) -> None:

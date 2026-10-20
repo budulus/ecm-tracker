@@ -41,8 +41,9 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 <a href="#pressure"><span>11</span>Pressure–Strain</a>
 <p class="toc-group">Keep at hand</p>
 <a href="#plugins"><span>12</span>Plugin management</a>
-<a href="#shortcuts"><span>13</span>Shortcuts &amp; gestures</a>
-<a href="#troubleshooting"><span>14</span>Troubleshooting &amp; terms</a>
+<a href="#scripting"><span>13</span>Scripting &amp; macros</a>
+<a href="#shortcuts"><span>14</span>Shortcuts &amp; gestures</a>
+<a href="#troubleshooting"><span>15</span>Troubleshooting &amp; terms</a>
 </nav>
 <p class="sidebar-note">New to the app? Start with the five steps.<br><br>Looking up a setting? Expand the reference panels, then use your browser’s Find command.</p>
 </aside>
@@ -57,7 +58,7 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 <noscript><p class="small">Reference panels work without JavaScript. Open the panels you need before finding text or printing.</p></noscript>
 </header>
 <details class="mobile-toc"><summary>Jump to a section</summary><nav aria-label="Compact contents">
-<a href="#workflow">01 · Quick start</a><a href="#loading">02 · Images &amp; frames</a><a href="#pairs">03 · Image pairs</a><a href="#roi">04 · Regions &amp; points</a><a href="#track">05 · Tracking</a><a href="#cleanup">06 · Cleanup</a><a href="#display">07 · Display</a><a href="#export">08 · Save &amp; export</a><a href="#affine">09 · Affine zones</a><a href="#mts">10 · MTS Uniaxial</a><a href="#pressure">11 · Pressure–Strain</a><a href="#plugins">12 · Plugins</a><a href="#shortcuts">13 · Shortcuts</a><a href="#troubleshooting">14 · Troubleshooting</a>
+<a href="#workflow">01 · Quick start</a><a href="#loading">02 · Images &amp; frames</a><a href="#pairs">03 · Image pairs</a><a href="#roi">04 · Regions &amp; points</a><a href="#track">05 · Tracking</a><a href="#cleanup">06 · Cleanup</a><a href="#display">07 · Display</a><a href="#export">08 · Save &amp; export</a><a href="#affine">09 · Affine zones</a><a href="#mts">10 · MTS Uniaxial</a><a href="#pressure">11 · Pressure–Strain</a><a href="#plugins">12 · Plugins</a><a href="#scripting">13 · Scripting</a><a href="#shortcuts">14 · Shortcuts</a><a href="#troubleshooting">15 · Troubleshooting</a>
 </nav></details>
 
 <section id="workflow">
@@ -329,8 +330,26 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 <p><strong>Help → View Help</strong> (<kbd>F1</kbd>) opens this offline manual in your browser. <strong>Help → About…</strong> shows application information. Use <strong>File → Quit</strong> to exit; macOS may place About/Quit in the application menu.</p>
 </section>
 
+<section id="scripting">
+<h2><span class="num">13</span>Scripting &amp; macros</h2>
+<p>Everything the toolbar and menus do is also a Python command on one object, <code>session</code>. Use it interactively in the <strong>Python Console</strong>, write and save scripts in the <strong>Script Editor</strong>, record your clicks as a macro, or run the same scripts without any window.</p>
+<ul>
+<li><strong>Python Console</strong> (<strong>Scripting → Console</strong>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) docks below the image. Type <code>session</code> for a summary or <code>help(session.track)</code> for one command. <kbd>Tab</kbd> completes, <kbd>↑</kbd>/<kbd>↓</kbd> browse history, <kbd>Ctrl</kbd>+<kbd>C</kbd> interrupts. Commands update the image and tools exactly like the matching buttons.</li>
+<li><strong>Script Editor</strong> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>) edits <code>.py</code> files in tabs. <kbd>F5</kbd> runs the script, <kbd>F9</kbd> the selection or current line, <strong>Stop</strong> (<kbd>Shift</kbd>+<kbd>F5</kbd>) interrupts it. Output appears below; a failing line is highlighted. Scripts share the console’s variables. <strong>File → Open Example</strong> lists ready-made workflows, and <strong>Help → Session API Reference</strong> lists every command.</li>
+<li><strong>Record</strong> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) writes each action you take as a line of Python in a live macro tab; the status bar shows <strong>● REC</strong>. Stop recording to edit, run, or save the macro. Recorded calls carry every parameter, so a macro replays identically on another computer. Image navigation, zoom, and display settings are not recorded.</li>
+</ul>
+<pre><code>session.open_directory(r"C:\data\experiment")
+session.set_roi_rectangle(60, 50, 240, 180)
+session.detect_corners(maxCorners=300)
+session.track(win_size=31)
+session.cleanup(fb_mean=0.5, drop_left_image=True)
+session.export_npy(r"C:\data\experiment\coords.npy")</code></pre>
+<p><strong>Without the GUI.</strong> <code>tracker --run macro.py [arguments]</code> runs a script headless; <code>tracker --script macro.py</code> opens the app and runs it there. From your own Python program, <code>import ecm_tracker</code> and create <code>ecm_tracker.Session()</code>; a recorded macro also runs as a plain program because it starts with <code>session = get_session()</code>. While a script runs, the main window’s controls are locked; long steps show their usual progress dialog and can be cancelled.</p>
+<p class="small">Frame indices in scripts are global positions in the loaded sequence. <code>session.coords()</code> rows start at the reference frame. GUI-only helpers such as <code>app.launch_plugin("mts_uniaxial")</code> are available as <code>app</code> inside the application.</p>
+</section>
+
 <section id="shortcuts">
-<h2><span class="num">13</span>Shortcuts &amp; gestures</h2>
+<h2><span class="num">14</span>Shortcuts &amp; gestures</h2>
 <p>Use <kbd>⌘</kbd> on macOS wherever <kbd>Ctrl</kbd> appears below. Navigation keys act on the focused control; click the image first for canvas shortcuts.</p>
 <div class="table-wrap"><table><thead><tr><th scope="col">Shortcut</th><th scope="col">Action / context</th></tr></thead><tbody>
 <tr><td><kbd>Ctrl</kbd> + <kbd>O</kbd></td><td>Open directory.</td></tr>
@@ -344,6 +363,8 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 <tr><td><kbd>Space</kbd> + drag</td><td>Temporary pan on the main or alignment canvas.</td></tr>
 <tr><td><kbd>Ctrl</kbd>-click / <kbd>Shift</kbd>-click</td><td>Toggle selection / extend a row range in Point Manager, including selection through the image.</td></tr>
 <tr><td>Arrow / <kbd>Shift</kbd> + arrow</td><td>Move destination 1 / 10 px on the alignment canvas.</td></tr>
+<tr><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> / <kbd>E</kbd> / <kbd>R</kbd></td><td>Python console / Script Editor / start or stop macro recording.</td></tr>
+<tr><td><kbd>F5</kbd> / <kbd>F9</kbd> / <kbd>Shift</kbd> + <kbd>F5</kbd></td><td>Script Editor: run script / run selection or line / stop.</td></tr>
 <tr><td><kbd>F1</kbd></td><td>Open help.</td></tr>
 </tbody></table></div>
 <p><strong>Mouse reminders:</strong> wheel to zoom; middle/right-drag to pan in the main view; right-drag or Space+drag in alignment. Right-click closes an ROI polygon; in Affine Zone Tool it closes the zone and continues drawing. Use Finish Zone to stop.</p>
@@ -351,7 +372,7 @@ figure{margin:25px 0}figure a{display:block;line-height:0;border:1px solid var(-
 </section>
 
 <section id="troubleshooting">
-<h2><span class="num">14</span>Troubleshooting &amp; terms</h2>
+<h2><span class="num">15</span>Troubleshooting &amp; terms</h2>
 <div class="table-wrap"><table><thead><tr><th scope="col">Symptom</th><th scope="col">What to check</th></tr></thead><tbody>
 <tr><td>Define, Corners, or Grid is unavailable</td><td>Load images. Define requires the reference image; Corners and Grid require a completed ROI and always detect on Reference. Add can seed manually without an ROI.</td></tr>
 <tr><td>Run or Export is unavailable</td><td>Run needs seeds. Export needs at least one active point valid throughout the forward pass. Undo excessive filtering or improve and rerun tracking.</td></tr>

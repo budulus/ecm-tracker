@@ -101,7 +101,9 @@ class ProjectState:
     Invariant enforced by the setters: 0 <= reference_index <= last_index < total_images.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, use_saved_defaults: bool = True) -> None:
+        """``use_saved_defaults=False`` ignores the per-user parameter defaults in settings.json
+        and starts from the built-in ones, so headless scripts behave the same on every machine."""
         self.revision = 0
         self.sequence: Optional[ImageSequence] = None
         self.source_dir: Optional[str] = None
@@ -112,10 +114,13 @@ class ProjectState:
         self.roi: Optional[ROI] = None
 
         # Built-in defaults merged with any persisted user defaults.
-        self.shi_tomasi_params: dict = validate_shi_tomasi(settings.get_section("shi_tomasi"))
-        self.grid_params: dict = validate_grid(settings.get_section("grid"))
-        self.lk_params: dict = validate_lk(settings.get_section("lk"))
-        self.display_params: dict = validate_display(settings.get_section("display"))
+        def saved(section):
+            return settings.get_section(section) if use_saved_defaults else None
+
+        self.shi_tomasi_params: dict = validate_shi_tomasi(saved("shi_tomasi"))
+        self.grid_params: dict = validate_grid(saved("grid"))
+        self.lk_params: dict = validate_lk(saved("lk"))
+        self.display_params: dict = validate_display(saved("display"))
         self.features: Optional[np.ndarray] = None  # (N, 2) reference-frame seed points
         self.result = None  # TrackerResult, set after tracking
         self.active_mask: Optional[np.ndarray] = None  # (P,) bool, aligned to result points

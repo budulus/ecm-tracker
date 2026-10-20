@@ -9,12 +9,10 @@ cheap repaint that reuses the built-in ROI overlay), then commits on release.
 
 import math
 
-import numpy as np
-
-from app.core.roi import ROI
+from app.core.roi import CIRCLE_SEGMENTS, ROI, circle_corners, rectangle_corners
 
 MIN_SIZE = 3.0  # image px below which a drag is treated as an accidental click (cancelled)
-CIRCLE_SEGMENTS = 64
+__all__ = ["CIRCLE_SEGMENTS", "CircleTool", "NGonTool", "RectangleTool"]
 
 
 class _DragTool:
@@ -38,13 +36,15 @@ class _DragTool:
     def on_release(self, image_pt, event) -> None:
         if self._start is None:
             return
-        corners = self._corners(image_pt.x(), image_pt.y())
+        x, y = image_pt.x(), image_pt.y()
+        corners = self._corners(x, y)
+        args = self._shape_args(x, y)
         self._start = None
         if not corners:  # degenerate (click without a real drag): abort cleanly
             self.window._cancel_roi_definition()
             return
         self._done = True
-        self.window._commit_interactive_roi(corners)
+        self.window._commit_interactive_roi(self.SHAPE, args)
 
     def on_cancel(self) -> None:
         self._start = None
@@ -57,27 +57,41 @@ class _DragTool:
         """Return the polygon corners for the current drag, or None if too small."""
         raise NotImplementedError
 
+    def _shape_args(self, x, y):
+        """The session command arguments describing the dragged shape."""
+        raise NotImplementedError
+
 
 class RectangleTool(_DragTool):
     """Drag from one corner to the opposite to build an axis-aligned rectangle."""
+
+    SHAPE = "rectangle"
 
     def _corners(self, x, y):
         x0, y0 = self._start
         if abs(x - x0) < MIN_SIZE or abs(y - y0) < MIN_SIZE:
             return None
-        return [(x0, y0), (x, y0), (x, y), (x0, y)]
+        return rectangle_corners(x0, y0, x, y)
+
+    def _shape_args(self, x, y):
+        return (*self._start, x, y)
 
 
 class CircleTool(_DragTool):
     """Press at the center and drag out the radius; stored as a polygon approximation."""
+
+    SHAPE = "circle"
 
     def _corners(self, x, y):
         cx, cy = self._start
         r = math.hypot(x - cx, y - cy)
         if r < MIN_SIZE:
             return None
-        angles = np.linspace(0.0, 2.0 * np.pi, CIRCLE_SEGMENTS, endpoint=False)
-        return [(cx + r * math.cos(a), cy + r * math.sin(a)) for a in angles]
+        return circle_corners(cx, cy, r)
+
+    def _shape_args(self, x, y):
+        cx, cy = self._start
+        return cx, cy, math.hypot(x - cx, y - cy)
 
 
 class NGonTool:

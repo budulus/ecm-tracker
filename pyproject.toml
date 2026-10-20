@@ -19,7 +19,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app", "app.*"]
+include = ["app", "app.*", "ecm_tracker"]
 namespaces = false
 
 [tool.setuptools.package-data]

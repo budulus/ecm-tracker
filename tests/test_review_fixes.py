@@ -133,7 +133,7 @@ class ReviewFixes(unittest.TestCase):
         def track_with_change(*args):
             host.set_frame_range(1, 2)
             return result()
-        with patch("app.gui.main_window.track", side_effect=track_with_change):
+        with patch("app.scripting.session.track", side_effect=track_with_change):
             host._run_tracking()
         self.assertIsNone(host.state.result)
         self.assertEqual(host.state.reference_index, 1)

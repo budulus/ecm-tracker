@@ -515,6 +515,9 @@ class PluginManager:
                 except RuntimeError:
                     pass
             rec.window = window
+        session = getattr(self._window, "session", None)
+        if session is not None:  # a macro being recorded replays this as app.launch_plugin(...)
+            session.record_command("app", "launch_plugin", plugin_id)
 
     def shutdown(self) -> None:
         """Release every plugin resource and the manager window when the host closes."""

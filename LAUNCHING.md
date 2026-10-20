@@ -32,3 +32,14 @@ want it. Recreate the shortcut if you move the application folder later.
 Share the source application folder without your `.venv`; each computer needs
 its own environment. The launcher uses the local `.venv` and does not install
 dependencies automatically.
+
+## Running Python scripts and macros
+
+Inside the application, use **Scripting → Console** or **Scripting → Editor** (see
+`SCRIPTING.md`). To run a saved script or recorded macro without opening a window,
+open a terminal in the application folder and run:
+
+    uv run tracker --run path\to\macro.py
+
+`uv run tracker --script path\to\macro.py` opens the application and runs the script
+in it.

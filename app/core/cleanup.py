@@ -180,6 +180,42 @@ def build_mask(metrics: Metrics, thr: Thresholds) -> np.ndarray:
     return keep
 
 
+BOOL_FILTERS = ("drop_left_image", "drop_left_roi")
+
+
+def thresholds_from_filters(**filters) -> Thresholds:
+    """Thresholds from the compact scripting form: ``band_name=limit`` enables that band at
+    ``limit`` (``None`` leaves it disabled) and ``drop_left_image`` / ``drop_left_roi`` toggle
+    the boolean filters. Every other filter stays disabled, so the result is independent of any
+    persisted dialog defaults."""
+    thr = Thresholds()
+    for name, value in filters.items():
+        if name in BOOL_FILTERS:
+            if not isinstance(value, (bool, np.bool_)):
+                raise ValueError(f"Cleanup filter {name!r} must be True or False, got {value!r}")
+            setattr(thr, name, bool(value))
+        elif name in BAND_METRICS:
+            if value is None:
+                continue
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.number)):
+                raise ValueError(f"Cleanup filter {name!r} needs a numeric limit, got {value!r}")
+            limit = float(value)
+            if not np.isfinite(limit) or limit < 0:
+                raise ValueError(f"Cleanup filter {name!r} needs a finite limit >= 0, got {value!r}")
+            setattr(thr, name, BandFilter(enabled=True, hi=limit))
+        else:
+            valid = ", ".join((*BAND_METRICS, *BOOL_FILTERS))
+            raise TypeError(f"Unknown cleanup filter {name!r}. Valid filters: {valid}")
+    return thr
+
+
+def filters_from_thresholds(thr: Thresholds) -> dict:
+    """Inverse of :func:`thresholds_from_filters`: only the enabled filters, in canonical order."""
+    filters = {name: getattr(thr, name).hi for name in BAND_METRICS if getattr(thr, name).enabled}
+    filters.update({name: True for name in BOOL_FILTERS if getattr(thr, name)})
+    return filters
+
+
 def thresholds_to_dict(thr: Thresholds) -> dict:
     out = {
         name: {"enabled": b.enabled, "hi": b.hi, "cap": b.cap}

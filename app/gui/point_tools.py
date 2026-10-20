@@ -5,16 +5,23 @@ the canvas delivers left-button presses as ``on_press(image_pt, event)`` in imag
 tools are driven by their toolbar QAction's checked state (the single source of truth) — see
 ``MainWindow._on_point_tool_toggled``. A single click is self-contained, so ``on_cancel`` is a no-op.
 
-- ``AddPointsTool``    appends a seed point to ``state.features`` (reference frame, before tracking).
+- ``AddPointsTool``    appends a seed point (``session.add_seed``; reference frame, before tracking).
 - ``DeletePointsTool`` removes the point nearest the click: a seed point before tracking, or — once a
   result exists — an individual tracked point, dropped via the undoable ``apply_keep_mask`` path.
 """
-import numpy as np
 from PySide6.QtCore import QPointF
 
 # Extra screen-space slack (px) added to the marker radius when hit-testing a delete click, so a
 # click just outside the drawn marker still lands on it.
 DELETE_SLACK_PX = 4.0
+# Mouse-defined geometry (seeds, ROI corners) is rounded to this many decimals of an image pixel
+# before it is committed, so a recorded macro reads cleanly and replays the exact same values.
+COORD_DECIMALS = 2
+
+
+def snap(value: float) -> float:
+    """Round an interactively picked image coordinate (see COORD_DECIMALS)."""
+    return round(float(value), COORD_DECIMALS)
 
 
 def nearest_point(canvas, marker_size, image_pt: QPointF, coords, candidates) -> int:
@@ -41,19 +48,11 @@ class AddPointsTool:
         self.window = window
 
     def on_press(self, image_pt: QPointF, event) -> None:
-        state = self.window.state
-        size = state.image_size()
-        if size is None or not (0 <= image_pt.x() < size[1] and 0 <= image_pt.y() < size[0]):
+        size = self.window.state.image_size()
+        x, y = snap(image_pt.x()), snap(image_pt.y())
+        if size is None or not (0 <= x < size[1] and 0 <= y < size[0]):
             return
-        pt = np.array([[image_pt.x(), image_pt.y()]], dtype=np.float32)
-        if state.features is None or len(state.features) == 0:
-            state.features = pt
-        else:
-            state.features = np.vstack([state.features, pt]).astype(np.float32)
-        state.touch()
-        self.window.signals.seeds_changed.emit()
-        self.window.canvas.update()        # overlay-only change: cheaper than a full refresh()
-        self.window._update_tool_states()  # the first point enables Run Tracking
+        self.window.session.add_seed(x, y)  # refresh + seeds_changed via the session listener
 
     def on_cancel(self) -> None:
         pass
@@ -90,12 +89,7 @@ class DeletePointsTool:
         i = self._nearest(image_pt, feats, range(len(feats)))
         if i < 0:
             return
-        feats = np.delete(feats, i, axis=0)
-        state.features = feats if len(feats) else None  # match detection's empty convention
-        state.touch()
-        self.window.signals.seeds_changed.emit()
-        self.window.canvas.update()
-        self.window._update_tool_states()
+        self.window.session.remove_seeds([i])
 
     def _delete_tracked(self, image_pt: QPointF) -> None:
         state = self.window.state
@@ -109,6 +103,4 @@ class DeletePointsTool:
         i = self._nearest(image_pt, coords, candidates)
         if i < 0:
             return
-        keep = np.ones(result.n_points, dtype=bool)
-        keep[i] = False
-        self.window.apply_keep_mask(keep)  # snapshots undo, ANDs the mask, refreshes, emits
+        self.window.session.remove_points([i])  # undoable; refreshes and emits mask_changed

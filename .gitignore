@@ -36,3 +36,6 @@ Thumbs.db
 # Local assistant instructions
 /CLAUDE.md
 /.claude/
+
+# Local audit notes
+/AUDIT.md
